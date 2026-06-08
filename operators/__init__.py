@@ -12,3 +12,7 @@ from . import op_switch_context
 from . import op_load_publish
 
 from . import op_asset_list
+
+from . import op_scene_check
+
+from . import op_popup

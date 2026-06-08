@@ -3,3 +3,4 @@ from . import project
 from . import asset
 from . import usd_composer
 from . import thumbnails
+from . import scene_checker
