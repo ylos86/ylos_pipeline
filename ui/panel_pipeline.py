@@ -1,50 +1,62 @@
 # -*- coding: utf-8 -*-
 # Ylos Pipeline - ui/panel_pipeline.py
-# N-panel layout: Project, Asset context, Scene settings.
+# Redesigned N-panel: compact project header, step buttons grid,
+# asset context box, WIP + Publish sections.
 
 import bpy
 import os
-from ..core.asset import (
-    list_wip_versions,
-    list_publish_versions,
-    get_latest_wip_version,
-    get_latest_publish_version,
-)
+from ..core.asset import get_latest_wip_version, get_latest_publish_version
 from ..core.project import SCENE_PRESETS
 
+# Steps per context type with abbreviated labels
+_ASSET_STEPS = [
+    ("modeling",  "Mod"),
+    ("uvs",       "UVs"),
+    ("rigging",   "Rig"),
+    ("lookdev",   "LDv"),
+    ("fx",        "FX"),
+]
+_SHOT_STEPS = [
+    ("layout",    "Lay"),
+    ("animation", "Anim"),
+    ("lighting",  "Lgt"),
+    ("fx",        "FX"),
+    ("render",    "Rndr"),
+    ("composite", "Comp"),
+]
+_SET_STEPS = [
+    ("modeling",  "Mod"),
+    ("lookdev",   "LDv"),
+    ("lighting",  "Lgt"),
+]
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
+_STEP_MAP = {"ASSET": _ASSET_STEPS, "SHOT": _SHOT_STEPS, "SET": _SET_STEPS}
 
-def _has_project(scene) -> bool:
+
+def _has_project(scene):
     return bool(scene.ylos_project_path and scene.ylos_project_name)
 
 
-def _wip_folder(scene) -> str:
+def _wip_folder(scene):
     if not _has_project(scene) or not scene.ylos_current_asset:
         return ""
     ctx = scene.ylos_context_type.lower()
-    base = {
-        "asset": os.path.join(scene.ylos_project_path, "assets"),
-        "shot":  os.path.join(scene.ylos_project_path, "shots"),
-        "set":   os.path.join(scene.ylos_project_path, "sets"),
-    }.get(ctx, "")
-    return os.path.join(base, scene.ylos_current_asset,
-                        scene.ylos_current_step, "wip")
+    base = {"asset": "assets", "shot": "shots", "set": "sets"}.get(ctx, "assets")
+    return os.path.join(
+        scene.ylos_project_path, base,
+        scene.ylos_current_asset, scene.ylos_current_step, "wip"
+    )
 
 
-def _pub_folder(scene) -> str:
+def _pub_folder(scene):
     if not _has_project(scene) or not scene.ylos_current_asset:
         return ""
     ctx = scene.ylos_context_type.lower()
-    base = {
-        "asset": os.path.join(scene.ylos_project_path, "assets"),
-        "shot":  os.path.join(scene.ylos_project_path, "shots"),
-        "set":   os.path.join(scene.ylos_project_path, "sets"),
-    }.get(ctx, "")
-    return os.path.join(base, scene.ylos_current_asset,
-                        scene.ylos_current_step, "publish")
+    base = {"asset": "assets", "shot": "shots", "set": "sets"}.get(ctx, "assets")
+    return os.path.join(
+        scene.ylos_project_path, base,
+        scene.ylos_current_asset, scene.ylos_current_step, "publish"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -61,38 +73,29 @@ class YLOS_PT_PipelinePanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
+        scene  = context.scene
 
         if not _has_project(scene):
-            # No project loaded
             col = layout.column(align=True)
             col.scale_y = 1.4
-            col.operator("ylos.new_project", icon="ADD")
-            col.operator("ylos.open_context", icon="FILE_FOLDER",
-                         text="Load Project")
+            col.operator("ylos.new_project", icon="ADD", text="New Project")
+            col.operator("ylos.open_context", icon="FILE_FOLDER", text="Load Project")
             return
 
-        # Project info box
-        box = layout.box()
-        row = box.row()
+        # Project header
+        row = layout.row(align=False)
         row.label(text=scene.ylos_project_name, icon="FUND")
         row.label(text=scene.ylos_prod_type)
 
-        # Open project root folder
-        op = box.operator("ylos.open_folder", text="Open Project Folder",
-                          icon="FOLDER_REDIRECT")
+        row2 = layout.row(align=True)
+        op = row2.operator("ylos.open_folder", text="", icon="FOLDER_REDIRECT")
         op.folder_path = scene.ylos_project_path
-
-        layout.separator()
-
-        # Entity actions
-        col = layout.column(align=True)
-        col.operator("ylos.new_asset",    icon="ADD",       text="New Asset / Shot / Set")
-        col.operator("ylos.switch_asset", icon="ARROW_LEFTRIGHT", text="Switch Asset")
+        row2.operator("ylos.new_asset", icon="ADD", text="New")
+        row2.operator("ylos.switch_asset", icon="ASSET_MANAGER", text="Browse")
 
 
 # ---------------------------------------------------------------------------
-# Panel: Asset context
+# Panel: Asset Context
 # ---------------------------------------------------------------------------
 
 class YLOS_PT_AssetPanel(bpy.types.Panel):
@@ -109,105 +112,125 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
+        scene  = context.scene
 
-        layout.use_property_split = True
-        layout.use_property_decorate = False
-
-        col = layout.column(align=True)
-        col.prop(scene, "ylos_context_type")
+        # Context type + asset type selectors
+        row = layout.row(align=True)
+        row.prop(scene, "ylos_context_type", text="")
         if scene.ylos_context_type == "ASSET":
-            col.prop(scene, "ylos_asset_type")
+            row.prop(scene, "ylos_asset_type", text="")
 
-        layout.separator()
+        layout.separator(factor=0.5)
 
         if not scene.ylos_current_asset:
-            layout.label(text="Create or switch to an asset to continue", icon="INFO")
+            layout.label(text="No active asset", icon="INFO")
             return
 
-        # Current context display
-        box = layout.box()
-        col = box.column(align=True)
-        col.label(text="Active Context", icon="CHECKMARK")
-
-        row = col.row(align=True)
-        row.label(text=f"Asset:  {scene.ylos_current_asset}", icon="OBJECT_DATA")
-        op = row.operator("ylos.switch_asset_confirm", text="", icon="ARROW_LEFTRIGHT")
-        op.new_asset = scene.ylos_current_asset
-
-        row2 = col.row(align=True)
-        row2.label(
-            text=f"Step:   {scene.ylos_current_step}",
-            icon="SEQUENCE",
-        )
-        row2.operator("ylos.switch_step_confirm", text="", icon="ARROW_LEFTRIGHT")
-
-        # Dirty file warning
+        # Unsaved changes warning
         if bpy.data.is_dirty:
             warn = layout.box()
-            warn.label(text="Unsaved changes in current file", icon="ERROR")
+            warn.label(text="Unsaved changes", icon="ERROR")
 
-        layout.separator()
+        # Asset identity box
+        box = layout.box()
+        col = box.column(align=True)
+
+        # Asset name row
+        name_row = col.row(align=False)
+        name_row.label(text=scene.ylos_current_asset, icon="OBJECT_DATA")
+        op = name_row.operator(
+            "ylos.switch_asset_confirm",
+            text="Switch",
+            icon="ARROW_LEFTRIGHT",
+        )
+        op.new_asset = scene.ylos_current_asset
+
+        col.separator(factor=0.3)
+
+        # Step buttons grid
+        col.label(text="Step:", icon="SEQUENCE")
+        steps = _STEP_MAP.get(scene.ylos_context_type, _ASSET_STEPS)
+        step_row = col.row(align=True)
+        step_row.scale_y = 1.1
+
+        for step_id, step_abbrev in steps:
+            is_active = (scene.ylos_current_step == step_id)
+            op = step_row.operator(
+                "ylos.switch_step_confirm",
+                text=step_abbrev,
+                depress=is_active,
+            )
+            op.new_step = step_id
+
+        layout.separator(factor=0.5)
 
         # WIP section
-        box = layout.box()
-        col = box.column(align=True)
-        col.label(text="WIP", icon="FILE_BLEND")
+        wip_box = layout.box()
+        wip_col = wip_box.column(align=True)
 
-        ctx_type = scene.ylos_context_type.lower()
         latest_wip = get_latest_wip_version(
-            scene.ylos_project_path, scene.ylos_current_asset,
-            scene.ylos_current_step, ctx_type
+            scene.ylos_project_path,
+            scene.ylos_current_asset,
+            scene.ylos_current_step,
+            scene.ylos_context_type.lower(),
         )
 
+        wip_header = wip_col.row()
+        wip_header.label(text="WIP", icon="FILE_BLEND")
         if latest_wip:
-            col.label(text=f"Latest: v{latest_wip:03d}")
+            wip_header.label(text=f"v{latest_wip:03d}")
         else:
-            col.label(text="No WIP saved yet")
+            wip_header.label(text="—")
 
-        # Open actions
-        row = col.row(align=True)
-        row.scale_y = 1.3
-        row.operator("ylos.open_latest_wip", icon="FILE_FOLDER", text="Open Latest")
-        row.operator("ylos.open_wip",        icon="TRIA_DOWN",   text="Pick Version")
+        wip_col.separator(factor=0.3)
 
-        col.separator()
+        # Open buttons
+        open_row = wip_col.row(align=True)
+        open_row.operator("ylos.open_latest_wip", text="Open Latest", icon="IMPORT")
+        open_row.operator("ylos.open_wip", text="", icon="TRIA_DOWN")
+
+        wip_col.separator(factor=0.3)
 
         # Save
-        row = col.row(align=True)
-        row.scale_y = 1.3
-        row.operator("ylos.save_wip", icon="FILE_TICK", text="Save WIP")
+        save_row = wip_col.row(align=True)
+        save_row.scale_y = 1.2
+        save_row.operator("ylos.save_wip", text="Save WIP", icon="FILE_TICK")
 
-        # Open WIP folder shortcut
-        op = col.operator("ylos.open_folder", text="Open WIP Folder",
-                          icon="FOLDER_REDIRECT")
-        op.folder_path = _wip_folder(scene)
+        op_wip = wip_col.operator(
+            "ylos.open_folder", text="Open WIP Folder", icon="FOLDER_REDIRECT"
+        )
+        op_wip.folder_path = _wip_folder(scene)
 
-        layout.separator()
+        layout.separator(factor=0.5)
 
         # Publish section
-        box = layout.box()
-        col = box.column(align=True)
-        col.label(text="Publish", icon="EXPORT")
+        pub_box = layout.box()
+        pub_col = pub_box.column(align=True)
 
         latest_pub = get_latest_publish_version(
-            scene.ylos_project_path, scene.ylos_current_asset,
-            scene.ylos_current_step, ctx_type
+            scene.ylos_project_path,
+            scene.ylos_current_asset,
+            scene.ylos_current_step,
+            scene.ylos_context_type.lower(),
         )
 
+        pub_header = pub_col.row()
+        pub_header.label(text="Publish", icon="EXPORT")
         if latest_pub:
-            col.label(text=f"Latest publish: v{latest_pub:03d}")
+            pub_header.label(text=f"v{latest_pub:03d}")
         else:
-            col.label(text="No publish yet")
+            pub_header.label(text="—")
 
-        row = col.row(align=True)
-        row.scale_y = 1.3
-        row.operator("ylos.publish", icon="EXPORT", text="Publish Step")
+        pub_col.separator(factor=0.3)
 
-        # Open publish folder shortcut
-        op = col.operator("ylos.open_folder", text="Open Publish Folder",
-                          icon="FOLDER_REDIRECT")
-        op.folder_path = _pub_folder(scene)
+        pub_row = pub_col.row(align=True)
+        pub_row.scale_y = 1.2
+        pub_row.operator("ylos.publish", text="Publish Step", icon="EXPORT")
+
+        op_pub = pub_col.operator(
+            "ylos.open_folder", text="Open Publish Folder", icon="FOLDER_REDIRECT"
+        )
+        op_pub.folder_path = _pub_folder(scene)
 
 
 # ---------------------------------------------------------------------------
@@ -228,14 +251,11 @@ class YLOS_PT_SceneSettingsPanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
+        scene  = context.scene
         render = scene.render
 
         layout.use_property_split = True
         layout.use_property_decorate = False
-
-        # Preset info from current prod type
-        preset = SCENE_PRESETS.get(scene.ylos_prod_type, {})
 
         box = layout.box()
         col = box.column(align=True)
@@ -244,12 +264,3 @@ class YLOS_PT_SceneSettingsPanel(bpy.types.Panel):
         col.label(text=f"Renderer: {render.engine}")
         col.label(text=f"Resolution: {render.resolution_x} x {render.resolution_y}")
         col.label(text=f"Color: {scene.view_settings.view_transform}")
-
-        layout.separator()
-
-        # Re-apply preset button (useful after manually tweaking settings)
-        layout.operator(
-            "ylos.new_project",
-            text="Re-apply Scene Preset",
-            icon="FILE_REFRESH",
-        )

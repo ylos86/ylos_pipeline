@@ -6,6 +6,7 @@
 import os
 import re
 from pathlib import Path
+from datetime import datetime
 from .project import (
     ASSET_STEPS,
     SHOT_STEPS,
@@ -185,10 +186,13 @@ def list_wip_versions(project_path: str, entity_name: str, step: str,
     for f in sorted(wip_dir.iterdir()):
         m = VERSION_PATTERN.search(f.name)
         if m:
+            mtime = f.stat().st_mtime
+            date_str = datetime.fromtimestamp(mtime).strftime("%b %d, %H:%M")
             results.append({
-                "version": int(m.group(1)),
+                "version":  int(m.group(1)),
                 "filename": f.name,
-                "path": str(f),
+                "path":     str(f),
+                "date":     date_str,
             })
 
     return sorted(results, key=lambda x: x["version"])

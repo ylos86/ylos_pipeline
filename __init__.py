@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # Ylos Pipeline - Blender Production Pipeline Addon
-# Compatible: Blender 4.2 LTS
+# Compatible: Blender 4.2 LTS and 5.x
 
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 1, 6),
+    "version": (0, 1, 7),
     "blender": (4, 2, 0),
     "location": "View3D > N-Panel > Ylos",
-    "description": "Production pipeline manager - project creation, asset management, USD publish",
+    "description": "Production pipeline manager - USD publish, versioned WIP, thumbnail browser",
     "category": "Pipeline",
 }
 
@@ -32,6 +32,7 @@ _classes = (
     op_publish.YLOS_OT_Publish,
     op_open_context.YLOS_OT_OpenContext,
     op_open_context.YLOS_OT_OpenFolder,
+    op_open_wip.YLOS_OT_OpenWipVersion,
     op_open_wip.YLOS_OT_OpenWip,
     op_open_wip.YLOS_OT_OpenLatestWip,
     op_open_wip.YLOS_OT_SwitchAsset,
@@ -47,6 +48,9 @@ def register():
     from .core import project as proj_module
     proj_module.register_properties()
 
+    from .core.thumbnails import init_previews
+    init_previews()
+
     for cls in _classes:
         bpy.utils.register_class(cls)
 
@@ -57,6 +61,9 @@ def unregister():
 
     from .core import project as proj_module
     proj_module.unregister_properties()
+
+    from .core.thumbnails import clear_previews
+    clear_previews()
 
 
 if __name__ == "__main__":
