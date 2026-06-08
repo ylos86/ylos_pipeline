@@ -49,8 +49,8 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
     # Step toggles - one BoolVectorProperty per context type
     asset_steps: BoolVectorProperty(
         name="Asset Steps",
-        size=5,
-        default=(True, True, True, True, True),
+        size=4,
+        default=(True, True, True, True),
     )
 
     shot_steps: BoolVectorProperty(

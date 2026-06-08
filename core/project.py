@@ -81,7 +81,6 @@ PROJECT_FOLDERS = [
 # Asset production steps (each gets its own wip/ publish/ folders)
 ASSET_STEPS = [
     "modeling",
-    "uvs",
     "rigging",
     "lookdev",
     "fx",
@@ -362,7 +361,6 @@ def register_properties():
         description="Current production step for this session",
         items=[
             ("modeling", "Modeling", ""),
-            ("uvs", "UVs", ""),
             ("rigging", "Rigging", ""),
             ("lookdev", "LookDev", ""),
             ("fx", "FX", ""),

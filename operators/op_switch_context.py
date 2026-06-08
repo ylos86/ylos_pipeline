@@ -72,7 +72,6 @@ class YLOS_OT_SwitchStep(bpy.types.Operator):
         name="Step",
         items=[
             ("modeling",   "Modeling",   ""),
-            ("uvs",        "UVs",        ""),
             ("rigging",    "Rigging",    ""),
             ("lookdev",    "LookDev",    ""),
             ("fx",         "FX",         ""),

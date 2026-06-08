@@ -50,7 +50,6 @@ class YLOS_OT_Publish(bpy.types.Operator):
         description="Production step to publish",
         items=[
             ("modeling",   "Modeling",   ""),
-            ("uvs",        "UVs",        ""),
             ("rigging",    "Rigging",    ""),
             ("lookdev",    "LookDev",    ""),
             ("fx",         "FX",         ""),

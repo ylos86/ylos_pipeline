@@ -11,7 +11,6 @@ from ..core.project import SCENE_PRESETS
 # Steps per context type with abbreviated labels
 _ASSET_STEPS = [
     ("modeling",  "Mod"),
-    ("uvs",       "UVs"),
     ("rigging",   "Rig"),
     ("lookdev",   "LDv"),
     ("fx",        "FX"),

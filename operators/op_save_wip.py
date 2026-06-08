@@ -29,7 +29,6 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         name="Step",
         items=[
             ("modeling",  "Modeling",  ""),
-            ("uvs",       "UVs",       ""),
             ("rigging",   "Rigging",   ""),
             ("lookdev",   "LookDev",   ""),
             ("fx",        "FX",        ""),
