@@ -5,7 +5,7 @@
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 1, 5),
+    "version": (0, 1, 6),
     "blender": (4, 2, 0),
     "location": "View3D > N-Panel > Ylos",
     "description": "Production pipeline manager - project creation, asset management, USD publish",
@@ -22,6 +22,7 @@ from .operators import (
     op_publish,
     op_open_context,
     op_open_wip,
+    op_switch_context,
 )
 
 _classes = (
@@ -34,6 +35,8 @@ _classes = (
     op_open_wip.YLOS_OT_OpenWip,
     op_open_wip.YLOS_OT_OpenLatestWip,
     op_open_wip.YLOS_OT_SwitchAsset,
+    op_switch_context.YLOS_OT_SwitchAsset,
+    op_switch_context.YLOS_OT_SwitchStep,
     panel_pipeline.YLOS_PT_PipelinePanel,
     panel_pipeline.YLOS_PT_AssetPanel,
     panel_pipeline.YLOS_PT_SceneSettingsPanel,

@@ -116,17 +116,38 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
 
         col = layout.column(align=True)
         col.prop(scene, "ylos_context_type")
-        # Asset sub-type only relevant when context is ASSET
         if scene.ylos_context_type == "ASSET":
             col.prop(scene, "ylos_asset_type")
-        col.prop(scene, "ylos_current_asset")
-        col.prop(scene, "ylos_current_step")
 
         layout.separator()
 
         if not scene.ylos_current_asset:
-            layout.label(text="Set an asset name to continue", icon="INFO")
+            layout.label(text="Create or switch to an asset to continue", icon="INFO")
             return
+
+        # Current context display
+        box = layout.box()
+        col = box.column(align=True)
+        col.label(text="Active Context", icon="CHECKMARK")
+
+        row = col.row(align=True)
+        row.label(text=f"Asset:  {scene.ylos_current_asset}", icon="OBJECT_DATA")
+        op = row.operator("ylos.switch_asset_confirm", text="", icon="ARROW_LEFTRIGHT")
+        op.new_asset = scene.ylos_current_asset
+
+        row2 = col.row(align=True)
+        row2.label(
+            text=f"Step:   {scene.ylos_current_step}",
+            icon="SEQUENCE",
+        )
+        row2.operator("ylos.switch_step_confirm", text="", icon="ARROW_LEFTRIGHT")
+
+        # Dirty file warning
+        if bpy.data.is_dirty:
+            warn = layout.box()
+            warn.label(text="Unsaved changes in current file", icon="ERROR")
+
+        layout.separator()
 
         # WIP section
         box = layout.box()
