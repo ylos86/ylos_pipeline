@@ -308,3 +308,95 @@ def _get_entity_root(project_path: str, entity_name: str,
     elif entity_type == "set":
         return get_set_root(project_path, entity_name)
     raise ValueError(f"Unknown entity type: {entity_type}")
+
+
+# ---------------------------------------------------------------------------
+# Project-level entity listing (used by asset list panel)
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+_entity_cache: dict = {}
+_CACHE_TTL = 4.0   # seconds before re-reading from disk
+
+
+def list_project_entities(project_path: str,
+                          entity_type: str = "asset") -> list[dict]:
+    """
+    List all entities (assets/shots/sets) in the project.
+    Returns list of dicts: {name, type_label, type_icon, path}
+    Caches results for _CACHE_TTL seconds to avoid hammering the filesystem.
+    """
+    cache_key = f"{project_path}:{entity_type}"
+    cached = _entity_cache.get(cache_key)
+    if cached and (_time.time() - cached["ts"]) < _CACHE_TTL:
+        return cached["data"]
+
+    folder_map = {"asset": "assets", "shot": "shots", "set": "sets"}
+    base = Path(project_path) / folder_map.get(entity_type, "assets")
+
+    if not base.is_dir():
+        return []
+
+    results = []
+    try:
+        for d in sorted(base.iterdir()):
+            if not d.is_dir():
+                continue
+            manifest_path = d / "manifest.json"
+            asset_type = "PROP"
+            if manifest_path.exists():
+                try:
+                    import json
+                    with open(manifest_path) as f:
+                        mf = json.load(f)
+                    asset_type = mf.get("type", "PROP").upper()
+                except Exception:
+                    pass
+
+            type_map = {
+                "PROP":        ("Prop",        "MESH_CUBE"),
+                "CHARACTER":   ("Character",   "ARMATURE_DATA"),
+                "ENVIRONMENT": ("Environment", "WORLD"),
+                "SHOT":        ("Shot",        "SEQUENCE"),
+                "SET":         ("Set",         "PACKAGE"),
+            }
+            label, icon = type_map.get(asset_type, ("Asset", "OBJECT_DATA"))
+
+            results.append({
+                "name":       d.name,
+                "type":       asset_type,
+                "type_label": label,
+                "type_icon":  icon,
+                "path":       str(d),
+            })
+    except Exception:
+        pass
+
+    _entity_cache[cache_key] = {"ts": _time.time(), "data": results}
+    return results
+
+
+def invalidate_entity_cache(project_path: str = None):
+    """Call after creating a new asset to force a list refresh."""
+    global _entity_cache
+    if project_path:
+        for key in list(_entity_cache.keys()):
+            if key.startswith(project_path):
+                del _entity_cache[key]
+    else:
+        _entity_cache.clear()
+
+
+def get_asset_step_status(project_path: str, asset_name: str,
+                          entity_type: str = "asset") -> dict:
+    """
+    Returns {step_id: bool} — True if at least one publish exists for that step.
+    """
+    from .project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
+    step_map = {"asset": ASSET_STEPS, "shot": SHOT_STEPS, "set": SET_STEPS}
+    steps = step_map.get(entity_type, ASSET_STEPS)
+    return {
+        step: get_latest_publish_version(project_path, asset_name, step, entity_type) > 0
+        for step in steps
+    }

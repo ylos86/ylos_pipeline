@@ -5,7 +5,7 @@
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 1, 9),
+    "version": (0, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > N-Panel > Ylos",
     "description": "Production pipeline manager - USD publish, versioned WIP, thumbnail browser",
@@ -15,6 +15,7 @@ bl_info = {
 import bpy
 from . import core
 from .ui import panel_pipeline
+from .ui import panel_asset_list
 from .operators import (
     op_new_project,
     op_new_asset,
@@ -24,6 +25,7 @@ from .operators import (
     op_open_wip,
     op_switch_context,
     op_load_publish,
+    op_asset_list,
 )
 
 _classes = (
@@ -42,6 +44,9 @@ _classes = (
     op_load_publish.YLOS_OT_LoadPublishFile,
     op_load_publish.YLOS_OT_LoadLatestPublish,
     op_load_publish.YLOS_OT_LoadPublish,
+    op_asset_list.YLOS_OT_AssetBrowser,
+    op_asset_list.YLOS_OT_RefreshAssetList,
+    panel_asset_list.YLOS_PT_AssetListPanel,
     panel_pipeline.YLOS_PT_PipelinePanel,
     panel_pipeline.YLOS_PT_AssetPanel,
     panel_pipeline.YLOS_PT_SceneSettingsPanel,

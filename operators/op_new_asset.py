@@ -4,7 +4,7 @@
 
 import bpy
 from bpy.props import StringProperty, EnumProperty, BoolVectorProperty
-from ..core.asset import create_asset, create_shot, create_set
+from ..core.asset import create_asset, create_shot, create_set, invalidate_entity_cache
 from ..core.asset import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 
 
@@ -131,5 +131,6 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         if self.context_type == "ASSET":
             scene.ylos_asset_type = self.asset_type
 
+        invalidate_entity_cache(scene.ylos_project_path)
         self.report({"INFO"}, result["message"])
         return {"FINISHED"}

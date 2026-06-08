@@ -103,7 +103,7 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Ylos"
-    bl_order = 1
+    bl_order = 2
 
     @classmethod
     def poll(cls, context):
@@ -253,7 +253,7 @@ class YLOS_PT_SceneSettingsPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Ylos"
-    bl_order = 2
+    bl_order = 3
 
     @classmethod
     def poll(cls, context):
