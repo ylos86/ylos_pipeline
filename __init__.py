@@ -5,7 +5,7 @@
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 1, 4),
+    "version": (0, 1, 5),
     "blender": (4, 2, 0),
     "location": "View3D > N-Panel > Ylos",
     "description": "Production pipeline manager - project creation, asset management, USD publish",
