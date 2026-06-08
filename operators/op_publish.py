@@ -15,37 +15,14 @@ from ..core.usd_composer import compose_asset_root, compose_set_root
 
 def _usd_export(filepath):
     """
-    Call bpy.ops.wm.usd_export with the safest possible param set.
-    Tries a curated list of params first, falls back to filepath-only.
-    Always catches Exception (not just TypeError) since Blender raises
-    RuntimeError for unrecognised keyword arguments.
+    Call bpy.ops.wm.usd_export with filepath only.
+    No extra kwargs — guaranteed compatible with all Blender versions.
     """
-    # Params known to exist across Blender 4.2 and 5.x
-    # Deliberately minimal — no generate_preview_surface, no export_textures,
-    # no visible_objects_only, no overwrite_textures (all removed in 4.x/5.x)
-    minimal_kwargs = {
-        "filepath":          filepath,
-        "export_materials":  True,
-        "export_uvmaps":     True,
-        "export_normals":    True,
-        "export_animation":  False,
-    }
-
-    # Attempt 1 — minimal curated kwargs
-    try:
-        bpy.ops.wm.usd_export(**minimal_kwargs)
-        return True, ""
-    except Exception as e:
-        err1 = str(e)
-
-    # Attempt 2 — filepath only, Blender uses its defaults
     try:
         bpy.ops.wm.usd_export(filepath=filepath)
         return True, ""
     except Exception as e:
-        err2 = str(e)
-
-    return False, f"Attempt1: {err1} | Attempt2: {err2}"
+        return False, str(e)
 
 
 class YLOS_OT_Publish(bpy.types.Operator):

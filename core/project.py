@@ -331,7 +331,7 @@ def register_properties():
         name="Project Path",
         description="Absolute path to the Ylos project root",
         default="",
-        subtype="DIR_PATH",
+        subtype="NONE",
     )
 
     bpy.types.Scene.ylos_project_name = bpy.props.StringProperty(

@@ -27,7 +27,7 @@ class YLOS_OT_NewProject(bpy.types.Operator):
         name="Root Path",
         description="Parent folder where the project will be created",
         default="",
-        subtype="DIR_PATH",
+        subtype="NONE",
     )
 
     prod_type: EnumProperty(
