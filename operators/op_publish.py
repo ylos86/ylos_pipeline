@@ -107,14 +107,16 @@ class YLOS_OT_Publish(bpy.types.Operator):
         box.label(text=os.path.basename(pub_path))
 
         existing = [
-            v["version"] for v in list_publish_versions(
+            (v["version"], v.get("variant","Default"))
+            for v in list_publish_versions(
                 scene.ylos_project_path,
                 scene.ylos_current_asset,
                 self.step,
                 scene.ylos_context_type.lower(),
             )
         ]
-        if self.version in existing:
+        vname = self.variant_name or "Default"
+        if (self.version, vname) in existing:
             box.label(text="WARNING: will overwrite existing publish", icon="ERROR")
 
     def execute(self, context):
@@ -142,6 +144,14 @@ class YLOS_OT_Publish(bpy.types.Operator):
 
         scene.ylos_current_step = self.step
         self.report({"INFO"}, f"Published: {os.path.basename(pub_path)}")
+
+        # Load the USD into the current scene if requested
+        if self.load_after:
+            try:
+                bpy.ops.wm.usd_import(filepath=pub_path)
+                self.report({"INFO"}, f"Loaded: {os.path.basename(pub_path)}")
+            except Exception as e:
+                self.report({"WARNING"}, f"Publish OK — USD import failed: {e}")
 
         if self.update_root:
             if ctx_type == "asset":

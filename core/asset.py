@@ -167,7 +167,8 @@ def _write_asset_manifest(root: Path, name: str, steps: list, entity_type: str =
 # Version detection
 # ---------------------------------------------------------------------------
 
-VERSION_PATTERN = re.compile(r"_v(\d{3})\.")
+VERSION_PATTERN         = re.compile(r"_v(\d{3})\.")
+VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(usd[az]?)$")
 
 
 def list_wip_versions(project_path: str, entity_name: str, step: str,
@@ -210,15 +211,16 @@ def list_publish_versions(project_path: str, entity_name: str, step: str,
     results = []
     for f in sorted(pub_dir.iterdir()):
         if f.suffix in (".usd", ".usda", ".usdc", ".usdz"):
-            m = VERSION_PATTERN.search(f.name)
+            m = VERSION_VARIANT_PATTERN.search(f.name)
             if m:
                 results.append({
-                    "version": int(m.group(1)),
+                    "version":  int(m.group(1)),
+                    "variant":  m.group(2) or "Default",
                     "filename": f.name,
-                    "path": str(f),
+                    "path":     str(f),
                 })
 
-    return sorted(results, key=lambda x: x["version"])
+    return sorted(results, key=lambda x: (x["version"], x["variant"]))
 
 
 def get_latest_publish_path(project_path: str, entity_name: str, step: str,
@@ -239,11 +241,14 @@ def build_wip_filename(entity_name: str, step: str, version: int) -> str:
 
 
 def build_publish_filename(entity_name: str, step: str, version: int,
-                           ext: str = "usd") -> str:
+                           ext: str = "usd", variant: str = "") -> str:
     """
     Construct a publish USD filename.
-    e.g. HeroCharacter_modeling_v001.usd
+    Default:  HeroCharacter_lookdev_v001.usd
+    Variant:  HeroCharacter_lookdev_v001__Dirty.usd
     """
+    if variant and variant.lower() not in ("", "default"):
+        return f"{entity_name}_{step}_v{version:03d}__{variant}.{ext}"
     return f"{entity_name}_{step}_v{version:03d}.{ext}"
 
 
@@ -260,10 +265,11 @@ def resolve_wip_save_path(project_path: str, entity_name: str, step: str,
 
 def resolve_publish_path(project_path: str, entity_name: str, step: str,
                          version: int, ext: str = "usd",
-                         entity_type: str = "asset") -> str:
+                         entity_type: str = "asset",
+                         variant: str = "") -> str:
     """Full absolute path for a USD publish file."""
     root = _get_entity_root(project_path, entity_name, entity_type)
-    filename = build_publish_filename(entity_name, step, version, ext)
+    filename = build_publish_filename(entity_name, step, version, ext, variant)
     return str(root / step / "publish" / filename)
 
 

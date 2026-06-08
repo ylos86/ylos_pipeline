@@ -69,6 +69,66 @@ def write_usda_root(filepath: str, sublayers: list[str],
 
 
 # ---------------------------------------------------------------------------
+# USDA variantSet writer
+# ---------------------------------------------------------------------------
+
+def write_usda_with_variants(filepath: str, sublayers: list[str],
+                              variant_blocks: dict, asset_name: str) -> None:
+    """
+    Write asset_root.usd with both sublayers and variantSet blocks.
+
+    sublayers:      list of USD paths (default/single-variant steps)
+    variant_blocks: {step: {variant_name: abs_path}}
+    """
+    root_dir = Path(filepath).parent
+
+    def rel(p):
+        try:
+            return str(Path(p).relative_to(root_dir)).replace("\\", "/")
+        except ValueError:
+            return str(Path(p)).replace("\\", "/")
+
+    lines = ['#usda 1.0\n(\n']
+    lines.append(f'    defaultPrim = "{asset_name}"\n')
+    lines.append('    upAxis = "Y"\n')
+    lines.append('    metersPerUnit = 1\n')
+
+    if sublayers:
+        lines.append('    subLayers = [\n')
+        for p in reversed(sublayers):
+            lines.append(f'        @{rel(p)}@,\n')
+        lines.append('    ]\n')
+
+    lines.append(')\n\n')
+
+    # Root prim
+    lines.append(f'def Xform "{asset_name}"\n{{\n')
+
+    # One variantSet per step that has variants
+    for step, variants in variant_blocks.items():
+        set_name = f"{step}Variant"
+        default_v = "Default" if "Default" in variants else list(variants.keys())[0]
+        lines.append(f'    string variants.{set_name} = "{default_v}"\n')
+        lines.append(f'    prepend variantSets = "{set_name}"\n')
+
+    if variant_blocks:
+        lines.append('\n')
+        for step, variants in variant_blocks.items():
+            set_name = f"{step}Variant"
+            lines.append(f'    variantSet "{set_name}" = {{\n')
+            for vname, vpath in variants.items():
+                lines.append(f'        "{vname}" (\n')
+                lines.append(f'            prepend references = @{rel(vpath)}@\n')
+                lines.append(f'        ) {{}}\n')
+            lines.append('    }\n')
+
+    lines.append('}\n')
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+# ---------------------------------------------------------------------------
 # Asset root composer
 # ---------------------------------------------------------------------------
 
@@ -76,33 +136,38 @@ def compose_asset_root(project_path: str, asset_name: str,
                        steps_override: list[str] = None) -> dict:
     """
     Build or rebuild asset_root.usd from the latest publish of each step.
-    Only includes steps that have at least one publish.
+    If multiple variants exist for a step, writes a USD variantSet block.
 
-    Layer order (strongest opinion on top = listed first in sublayers arg):
-        lookdev > rigging > uvs > modeling
-
-    Args:
-        project_path:   Absolute project root.
-        asset_name:     Asset name.
-        steps_override: Custom step order. Defaults to ASSET_STEPS reversed
-                        (lookdev first = strongest opinion).
-
-    Returns:
-        dict with "success", "root_path", "layers_used", "message".
+    Layer order (strongest opinion on top):
+        lookdev > rigging > modeling
     """
-    asset_root = get_asset_root(project_path, asset_name)
-    root_usd = asset_root / "asset_root.usd"
+    from .asset import list_publish_versions
 
-    # Steps in composition order: strongest opinion first
+    asset_root = get_asset_root(project_path, asset_name)
+    root_usd   = asset_root / "asset_root.usd"
+
     steps = steps_override if steps_override else list(reversed(ASSET_STEPS))
 
-    layers_used = []
-    for step in steps:
-        pub_path = get_latest_publish_path(project_path, asset_name, step, "asset")
-        if pub_path:
-            layers_used.append(pub_path)
+    layers_used    = []
+    variant_blocks = {}   # step -> {variant_name: rel_path}
 
-    if not layers_used:
+    for step in steps:
+        versions = list_publish_versions(project_path, asset_name, step, "asset")
+        if not versions:
+            continue
+
+        # Group by version (use latest version only)
+        latest_ver = versions[-1]["version"]
+        latest = [v for v in versions if v["version"] == latest_ver]
+
+        if len(latest) == 1 and latest[0]["variant"] == "Default":
+            # Single default publish — add as sublayer
+            layers_used.append(latest[0]["path"])
+        else:
+            # Multiple variants — record for variantSet block
+            variant_blocks[step] = {v["variant"]: v["path"] for v in latest}
+
+    if not layers_used and not variant_blocks:
         return {
             "success": False,
             "root_path": str(root_usd),
@@ -111,7 +176,7 @@ def compose_asset_root(project_path: str, asset_name: str,
         }
 
     try:
-        write_usda_root(str(root_usd), layers_used)
+        write_usda_with_variants(str(root_usd), layers_used, variant_blocks, asset_name)
     except Exception as e:
         return {
             "success": False,
@@ -120,11 +185,12 @@ def compose_asset_root(project_path: str, asset_name: str,
             "message": str(e),
         }
 
+    total = len(layers_used) + sum(len(v) for v in variant_blocks.values())
     return {
         "success": True,
         "root_path": str(root_usd),
         "layers_used": layers_used,
-        "message": f"asset_root.usd updated with {len(layers_used)} layer(s).",
+        "message": f"asset_root.usd updated ({total} publish(es), {len(variant_blocks)} variantSet(s)).",
     }
 
 

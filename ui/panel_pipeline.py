@@ -226,6 +226,17 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
         pub_row.scale_y = 1.2
         pub_row.operator("ylos.publish", text="Publish Step", icon="EXPORT")
 
+        pub_col.separator(factor=0.3)
+
+        # Load published USD into scene
+        load_row = pub_col.row(align=True)
+        load_row.operator(
+            "ylos.load_latest_publish", text="Load Latest", icon="IMPORT"
+        )
+        load_row.operator(
+            "ylos.load_publish", text="", icon="TRIA_DOWN"
+        )
+
         op_pub = pub_col.operator(
             "ylos.open_folder", text="Open Publish Folder", icon="FOLDER_REDIRECT"
         )
