@@ -39,6 +39,24 @@ class YLOS_OT_Publish(bpy.types.Operator):
         default=True,
     )
 
+    step: bpy.props.EnumProperty(
+        name="Step",
+        description="Production step to publish",
+        items=[
+            ("modeling",   "Modeling",   ""),
+            ("uvs",        "UVs",        ""),
+            ("rigging",    "Rigging",    ""),
+            ("lookdev",    "LookDev",    ""),
+            ("fx",         "FX",         ""),
+            ("layout",     "Layout",     ""),
+            ("animation",  "Animation",  ""),
+            ("lighting",   "Lighting",   ""),
+            ("render",     "Render",     ""),
+            ("composite",  "Composite",  ""),
+        ],
+        default="modeling",
+    )
+
     def invoke(self, context, event):
         scene = context.scene
 
@@ -46,11 +64,13 @@ class YLOS_OT_Publish(bpy.types.Operator):
             self.report({"ERROR"}, "No active project or asset.")
             return {"CANCELLED"}
 
-        # Suggest latest publish + 1
+        # Sync step from scene
+        self.step = scene.ylos_current_step
+
         latest = get_latest_publish_version(
             scene.ylos_project_path,
             scene.ylos_current_asset,
-            scene.ylos_current_step,
+            self.step,
             scene.ylos_context_type.lower(),
         )
         self.version = latest + 1
@@ -64,9 +84,9 @@ class YLOS_OT_Publish(bpy.types.Operator):
         layout.use_property_decorate = False
 
         layout.label(text=f"Asset : {scene.ylos_current_asset}", icon="OBJECT_DATA")
-        layout.label(text=f"Step  : {scene.ylos_current_step}", icon="SEQUENCE")
         layout.separator()
 
+        layout.prop(self, "step")
         layout.prop(self, "version")
         layout.prop(self, "export_materials")
         layout.prop(self, "update_root")
@@ -107,31 +127,44 @@ class YLOS_OT_Publish(bpy.types.Operator):
             self.report({"ERROR"}, "No active project or asset.")
             return {"CANCELLED"}
 
+        step = self.step
+
         pub_path = resolve_publish_path(
             project_path, asset_name, step, self.version, "usd", ctx_type
         )
 
         # USD export via Blender native exporter
-        # Blender 4.2 LTS - safe USD export parameter set.
-        # export_textures / overwrite_textures were removed in 4.x.
-        # Textures are handled separately via the textures folder next to the USD.
+        # Build a safe kwargs dict by checking which params exist
+        # in the operator's RNA at runtime — version-agnostic.
+        usd_op  = bpy.ops.wm.usd_export
+        rna     = usd_op.get_rna_type()
+        valid   = {p.identifier for p in rna.properties}
+
+        kwargs = {"filepath": pub_path}
+
+        candidates = {
+            "export_materials":       self.export_materials,
+            "export_uvmaps":          True,
+            "export_normals":         True,
+            "use_instancing":         True,
+            "export_animation":       False,
+            "root_prim_path":         "/ROOT",
+            "generate_preview_surface": True,
+            "selected_objects_only":  False,
+        }
+
+        for key, val in candidates.items():
+            if key in valid:
+                kwargs[key] = val
+
         try:
-            bpy.ops.wm.usd_export(
-                filepath=pub_path,
-                export_materials=self.export_materials,
-                export_uvmaps=True,
-                export_normals=True,
-                use_instancing=True,
-                export_animation=False,
-                root_prim_path="/ROOT",
-                generate_preview_surface=True,
-                selected_objects_only=False,
-                visible_objects_only=True,
-            )
+            usd_op(**kwargs)
         except Exception as e:
             self.report({"ERROR"}, f"USD export failed: {e}")
             return {"CANCELLED"}
 
+        # Sync scene step to match what was published
+        scene.ylos_current_step = self.step
         self.report({"INFO"}, f"Published: {os.path.basename(pub_path)}")
 
         # Recompose root USD
