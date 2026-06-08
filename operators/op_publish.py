@@ -11,15 +11,66 @@ from ..core.asset import (
     list_publish_versions,
 )
 from ..core.usd_composer import compose_asset_root, compose_set_root
+from ..core.scene_checker import get_asset_objects_for_publish
 
 
-def _usd_export(filepath):
-    """filepath-only USD export — guaranteed compatible with all Blender versions."""
+def _usd_export(filepath: str, context,
+                asset_name: str = "", step: str = "") -> tuple[bool, str, str]:
+    """
+    Export USD for the current asset.
+    Selects only the asset's objects (collection or name-based),
+    exports with selected_objects_only=True, then restores selection.
+
+    Returns (success, error_message, method_used).
+    """
+    scene    = context.scene
+    objects  = []
+    method   = "full scene"
+
+    if asset_name:
+        objects, method = get_asset_objects_for_publish(scene, asset_name, step)
+
+    if not objects:
+        # No asset objects found — warn but still export full scene
+        method = "full scene (no asset objects found)"
+
+    # Save current selection state
+    prev_selected = [o for o in scene.objects if o.select_get()]
+    prev_active   = context.view_layer.objects.active
+
     try:
-        bpy.ops.wm.usd_export(filepath=filepath)
-        return True, ""
-    except Exception as e:
-        return False, str(e)
+        # Deselect all, then select only asset objects
+        for o in scene.objects:
+            o.select_set(False)
+
+        if objects:
+            for o in objects:
+                o.select_set(True)
+            context.view_layer.objects.active = objects[0]
+
+        # USD export
+        try:
+            if objects:
+                bpy.ops.wm.usd_export(filepath=filepath,
+                                      selected_objects_only=True)
+            else:
+                bpy.ops.wm.usd_export(filepath=filepath)
+            return True, "", method
+        except Exception:
+            # Fallback — filepath only
+            try:
+                bpy.ops.wm.usd_export(filepath=filepath)
+                return True, "", method + " (fallback)"
+            except Exception as e:
+                return False, str(e), method
+
+    finally:
+        # Restore original selection
+        for o in scene.objects:
+            o.select_set(False)
+        for o in prev_selected:
+            o.select_set(True)
+        context.view_layer.objects.active = prev_active
 
 
 class YLOS_OT_Publish(bpy.types.Operator):
@@ -145,13 +196,13 @@ class YLOS_OT_Publish(bpy.types.Operator):
 
         os.makedirs(os.path.dirname(pub_path), exist_ok=True)
 
-        ok, err = _usd_export(pub_path)
+        ok, err, method = _usd_export(pub_path, context, asset_name, step)
         if not ok:
             self.report({"ERROR"}, f"USD export failed: {err}")
             return {"CANCELLED"}
 
         scene.ylos_current_step = self.step
-        self.report({"INFO"}, f"Published: {os.path.basename(pub_path)}")
+        self.report({"INFO"}, f"Published: {os.path.basename(pub_path)} [{method}]")
 
         if self.load_after:
             try:

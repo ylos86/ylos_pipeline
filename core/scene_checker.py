@@ -186,6 +186,8 @@ def run_scene_check(context) -> dict:
                        and o.type in PREFIXES]
 
     # --- Current step checks ---
+    asset_name = scene.ylos_current_asset if hasattr(scene, "ylos_current_asset") else ""
+
     for obj in visible_objects:
         issue = check_object_prefix(obj)
         if issue:
@@ -199,6 +201,10 @@ def run_scene_check(context) -> dict:
             issue = check_scale(obj)
             if issue:
                 current_issues.append(issue)
+
+    # Collection membership check
+    if asset_name:
+        current_issues.extend(check_collection_membership(scene, asset_name))
 
     # --- Next step readiness ---
     if next_step == "rigging":
@@ -287,3 +293,81 @@ def auto_fix(fix_id: str, context) -> str:
         return f"Could not fix UV on '{obj_name}'"
 
     return f"No auto-fix for: {fix_id}"
+
+
+# ---------------------------------------------------------------------------
+# Asset collection helpers
+# ---------------------------------------------------------------------------
+
+def get_asset_objects_for_publish(scene, asset_name: str,
+                                   step: str) -> tuple[list, str]:
+    """
+    Find the objects to export for this asset/step.
+
+    Priority:
+      1. Collection named exactly {asset_name}
+      2. Objects named with step-relevant prefix + asset_name pattern
+
+    Returns (objects, method_description).
+    """
+    # Method 1 — named collection
+    coll = bpy.data.collections.get(asset_name)
+    if coll:
+        objects = [
+            o for o in coll.all_objects
+            if o.type in ("MESH", "ARMATURE", "CURVE", "EMPTY", "LATTICE")
+            and not o.hide_get()
+        ]
+        if objects:
+            return objects, f"collection '{asset_name}'"
+
+    # Method 2 — name-based prefix search
+    prefixes_by_step = {
+        "modeling": ("GEO_",),
+        "rigging":  ("GEO_", "RIG_"),
+        "lookdev":  ("GEO_",),
+        "fx":       ("GEO_", "FX_"),
+    }
+    prefixes = prefixes_by_step.get(step, ("GEO_",))
+    asset_lower = asset_name.lower()
+
+    objects = [
+        o for o in scene.objects
+        if not o.hide_get()
+        and any(
+            o.name.lower().startswith(p.lower() + asset_lower)
+            for p in prefixes
+        )
+    ]
+
+    if objects:
+        return objects, f"name prefix ({', '.join(prefixes)})"
+
+    return [], "none"
+
+
+def check_collection_membership(scene, asset_name: str) -> list[dict]:
+    """
+    Check that GEO_{asset_name}* objects are inside the asset collection.
+    """
+    issues = []
+    coll = bpy.data.collections.get(asset_name)
+
+    for obj in scene.objects:
+        if not obj.name.lower().startswith("geo_" + asset_name.lower()):
+            continue
+        if coll is None:
+            issues.append(_issue(
+                "WARNING", obj.name,
+                f"No collection '{asset_name}' — create it and move asset objects inside",
+                "",
+            ))
+            break   # one warning per missing collection is enough
+        elif obj.name not in coll.all_objects:
+            issues.append(_issue(
+                "WARNING", obj.name,
+                f"Not in collection '{asset_name}' — move here for clean publish",
+                "",
+            ))
+
+    return issues

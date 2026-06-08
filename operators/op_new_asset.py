@@ -132,5 +132,13 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
             scene.ylos_asset_type = self.asset_type
 
         invalidate_entity_cache(scene.ylos_project_path)
-        self.report({"INFO"}, result["message"])
+
+        # Create a Blender collection for this asset if it doesn't exist yet
+        if self.context_type == "ASSET" and self.entity_name not in bpy.data.collections:
+            coll = bpy.data.collections.new(self.entity_name)
+            context.scene.collection.children.link(coll)
+            self.report({"INFO"}, f"{result['message']} — collection '{self.entity_name}' created")
+        else:
+            self.report({"INFO"}, result["message"])
+
         return {"FINISHED"}
