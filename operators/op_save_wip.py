@@ -104,6 +104,10 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
             project_path, asset_name, self.step, self.version, ctx_type
         )
 
+        # Ensure the wip directory exists (step may not have been in
+        # the original asset creation list)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
         try:
             # copy=False : saves to WIP path AND updates current file path
             # so Blender title bar reflects the actual filename
