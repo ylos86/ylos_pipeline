@@ -5,7 +5,7 @@
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 2, 5),
+    "version": (0, 2, 6),
     "blender": (4, 2, 0),
     "location": "3D Viewport Header > Ylos button",
     "description": "Production pipeline - USD publish, WIP versioning, scene naming checker",

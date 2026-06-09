@@ -199,6 +199,9 @@ Pure-logic checks worth keeping green:
   restart Blender before reinstalling. Disable/re-enable is not enough.
 - Blender's USD export raises `RuntimeError` (not `TypeError`) for unknown
   kwargs -- catch broadly and degrade, never assume the kwarg exists.
+- For picking a folder, do NOT use an inline `subtype="DIR_PATH"` field (macOS
+  appends a stray `@`). Use `fileselect_add` (native browser, folder mode) as in
+  `op_open_context`, and sanitize the returned path with `_sanitize_path`.
 
 ---
 

@@ -5,6 +5,24 @@ Format: [Semantic Versioning](https://semver.org) -- `MAJOR.MINOR.PATCH`
 
 ---
 
+## [0.2.6] -- 2026-06-09
+
+### Fixed
+- **Load Project lost folder browsing.** The 0.2.4 fix for the macOS trailing-`@`
+  bug switched the path field to `subtype="NONE"`, which removed the browse
+  button and forced users to paste a path by hand. Load Project now opens
+  Blender's native file browser (`fileselect_add`) so you can navigate to the
+  project folder. The native browser does not suffer the `@` corruption, and
+  pasted/typed paths are still sanitized.
+
+### Added
+- **Tolerant project resolution.** When loading, you can select the project
+  folder itself, any sub-folder inside it (resolved by walking up), or the
+  parent folder when it contains exactly one project (resolved by walking down
+  one level). Ambiguous parents are rejected with a clear message.
+
+---
+
 ## [0.2.5] -- 2026-06-09
 
 ### Changed
