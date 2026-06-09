@@ -127,8 +127,9 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
 
         # Unsaved changes warning
         if bpy.data.is_dirty:
-            warn = layout.box()
-            warn.label(text="Unsaved changes", icon="ERROR")
+            warn = layout.box().row()
+            warn.alert = True
+            warn.label(text="Unsaved changes", icon="FILE_HIDDEN")
 
         # Asset identity box
         box = layout.box()
@@ -174,12 +175,11 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
             scene.ylos_context_type.lower(),
         )
 
-        wip_header = wip_col.row()
+        wip_header = wip_col.row(align=True)
         wip_header.label(text="WIP", icon="FILE_BLEND")
-        if latest_wip:
-            wip_header.label(text=f"v{latest_wip:03d}")
-        else:
-            wip_header.label(text="-")
+        wip_ver = wip_header.row()
+        wip_ver.alignment = "RIGHT"
+        wip_ver.label(text=f"v{latest_wip:03d}" if latest_wip else "none yet")
 
         wip_col.separator(factor=0.3)
 
@@ -213,12 +213,11 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
             scene.ylos_context_type.lower(),
         )
 
-        pub_header = pub_col.row()
+        pub_header = pub_col.row(align=True)
         pub_header.label(text="Publish", icon="EXPORT")
-        if latest_pub:
-            pub_header.label(text=f"v{latest_pub:03d}")
-        else:
-            pub_header.label(text="-")
+        pub_ver = pub_header.row()
+        pub_ver.alignment = "RIGHT"
+        pub_ver.label(text=f"v{latest_pub:03d}" if latest_pub else "none yet")
 
         pub_col.separator(factor=0.3)
 

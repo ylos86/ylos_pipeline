@@ -5,6 +5,25 @@ Format: [Semantic Versioning](https://semver.org) -- `MAJOR.MINOR.PATCH`
 
 ---
 
+## [0.2.5] -- 2026-06-09
+
+### Changed
+- **UI readability pass on the header popup.**
+  - Persistent state header shows project + production type, then the active
+    asset and the current step spelled out in full (not just the abbreviation).
+  - Errors now render in red via `alert`, with semantic icons (red X for
+    errors, warning triangle for warnings, check for clean).
+  - Scene-check issues are laid out on two lines (object + Fix on top, indented
+    message below) so long messages no longer truncate inside the popup.
+  - Primary actions (Save WIP, Publish Step, Scan, Fix All) are enlarged and
+    visually separated from secondary picker buttons.
+  - Empty states guide the next action instead of just stating "none".
+  - Popup widened to 400px for breathing room.
+- N-panel polish: version labels right-aligned with clearer "none yet"
+  placeholders; unsaved-changes warning now uses the same red alert style.
+
+---
+
 ## [0.2.4] -- 2026-06-09
 
 ### Fixed
