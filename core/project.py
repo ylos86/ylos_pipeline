@@ -104,6 +104,27 @@ SET_STEPS = [
 ]
 
 
+# Valid steps per context type (used to guard publish/save against
+# steps that have no folder for the active entity type).
+STEPS_BY_CONTEXT = {
+    "asset": ASSET_STEPS,
+    "shot":  SHOT_STEPS,
+    "set":   SET_STEPS,
+}
+
+
+def is_step_valid_for_context(step: str, context_type: str) -> bool:
+    """
+    Return True if `step` is a real production step for the given context type.
+
+    The scene `ylos_current_step` enum lists every step across asset/shot/set
+    for UI convenience, so it is possible to select e.g. 'composite' while the
+    active context is an asset. That step has no folder for an asset, so callers
+    must validate before resolving a save/publish path.
+    """
+    return step in STEPS_BY_CONTEXT.get(context_type.lower(), ASSET_STEPS)
+
+
 # ---------------------------------------------------------------------------
 # Project creation
 # ---------------------------------------------------------------------------

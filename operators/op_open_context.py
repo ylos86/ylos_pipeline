@@ -22,7 +22,7 @@ class YLOS_OT_OpenContext(bpy.types.Operator):
         name="Project Path",
         description="Path to the YLOS_ProjectName folder",
         default="",
-        subtype="DIR_PATH",
+        subtype="NONE",   # DIR_PATH corrupts macOS paths (trailing '@')
     )
 
     def invoke(self, context, event):

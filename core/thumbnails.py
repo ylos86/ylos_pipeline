@@ -5,11 +5,11 @@
 
 import os
 import bpy
-import bpy.utils.previews
+from bpy.utils import previews
 from pathlib import Path
 from datetime import datetime
 
-# Global preview collection — one instance for the lifetime of the addon
+# Global preview collection - one instance for the lifetime of the addon
 _pcoll = None
 
 
@@ -82,14 +82,14 @@ def init_previews():
     """Create the global preview collection. Call once on addon register."""
     global _pcoll
     if _pcoll is None:
-        _pcoll = bpy.utils.previews.new()
+        _pcoll = previews.new()
 
 
 def clear_previews():
     """Remove the global preview collection. Call on addon unregister."""
     global _pcoll
     if _pcoll is not None:
-        bpy.utils.previews.remove(_pcoll)
+        previews.remove(_pcoll)
         _pcoll = None
 
 

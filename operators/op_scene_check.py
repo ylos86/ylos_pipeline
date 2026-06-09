@@ -6,7 +6,7 @@ import bpy
 from bpy.props import StringProperty
 from ..core.scene_checker import run_scene_check, auto_fix
 
-# Module-level cache — populated by YLOS_OT_RunSceneCheck
+# Module-level cache - populated by YLOS_OT_RunSceneCheck
 _results: dict = {}
 
 

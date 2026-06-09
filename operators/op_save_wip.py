@@ -100,14 +100,14 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         # Ensure directory exists
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-        # 1 — Save the .blend file
+        # 1 - Save the .blend file
         try:
             bpy.ops.wm.save_as_mainfile(filepath=save_path, copy=False)
         except Exception as e:
             self.report({"ERROR"}, f"Save failed: {e}")
             return {"CANCELLED"}
 
-        # 2 — Generate thumbnail (non-blocking: failure is reported but not fatal)
+        # 2 - Generate thumbnail (non-blocking: failure is reported but not fatal)
         thumb = generate_thumbnail(save_path, context)
         if thumb:
             reload_thumb_icon(save_path)
@@ -115,7 +115,7 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         else:
             self.report({"INFO"}, f"Saved: {os.path.basename(save_path)} (no thumbnail)")
 
-        # 3 — Sync scene state
+        # 3 - Sync scene state
         scene.ylos_current_step = self.step
         scene.name = f"SCENE_{asset_name}_{self.step}"
 

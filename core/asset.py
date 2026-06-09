@@ -167,15 +167,18 @@ def _write_asset_manifest(root: Path, name: str, steps: list, entity_type: str =
 # Version detection
 # ---------------------------------------------------------------------------
 
-VERSION_PATTERN         = re.compile(r"_v(\d{3})\.")
+# WIP files are versioned .blend only. Anchored on the .blend extension so
+# Blender auto-backups (.blend1, .blend2) and thumbnails (_thumb.png) never
+# get picked up as versions.
+VERSION_PATTERN         = re.compile(r"_v(\d{3})\.blend$")
 VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(usd[az]?)$")
 
 
 def list_wip_versions(project_path: str, entity_name: str, step: str,
                       entity_type: str = "asset") -> list[dict]:
     """
-    Return all existing WIP files for a given entity+step, sorted by version.
-    Each entry: {"version": int, "filename": str, "path": str}
+    Return all existing WIP .blend files for a given entity+step, sorted by version.
+    Each entry: {"version": int, "filename": str, "path": str, "date": str}
     """
     root = _get_entity_root(project_path, entity_name, entity_type)
     wip_dir = root / step / "wip"
@@ -185,6 +188,8 @@ def list_wip_versions(project_path: str, entity_name: str, step: str,
 
     results = []
     for f in sorted(wip_dir.iterdir()):
+        if f.suffix.lower() != ".blend":
+            continue
         m = VERSION_PATTERN.search(f.name)
         if m:
             mtime = f.stat().st_mtime
@@ -391,7 +396,7 @@ def invalidate_entity_cache(project_path: str = None):
 def get_asset_step_status(project_path: str, asset_name: str,
                           entity_type: str = "asset") -> dict:
     """
-    Returns {step_id: bool} — True if at least one publish exists for that step.
+    Returns {step_id: bool} - True if at least one publish exists for that step.
     """
     from .project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
     step_map = {"asset": ASSET_STEPS, "shot": SHOT_STEPS, "set": SET_STEPS}

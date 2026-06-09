@@ -5,10 +5,10 @@
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 2, 3),
+    "version": (0, 2, 4),
     "blender": (4, 2, 0),
     "location": "3D Viewport Header > Ylos button",
-    "description": "Production pipeline — USD publish, WIP versioning, scene naming checker",
+    "description": "Production pipeline - USD publish, WIP versioning, scene naming checker",
     "category": "Pipeline",
 }
 
@@ -31,7 +31,6 @@ _classes = (
     op_open_wip.YLOS_OT_OpenWipVersion,
     op_open_wip.YLOS_OT_OpenWip,
     op_open_wip.YLOS_OT_OpenLatestWip,
-    op_open_wip.YLOS_OT_SwitchAsset,
     op_switch_context.YLOS_OT_SwitchAsset,
     op_switch_context.YLOS_OT_SwitchStep,
     op_load_publish.YLOS_OT_LoadPublishFile,
@@ -63,7 +62,7 @@ def _draw_header_button(self, context):
     # Show active context info next to the button
     if scene.ylos_project_name and scene.ylos_current_asset:
         row.label(
-            text=f"{scene.ylos_current_asset}  ·  {scene.ylos_current_step}"
+            text=f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}"
         )
 
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Ylos Pipeline - core/scene_checker.py
 # Scene naming checker + next-step readiness scanner.
-# Returns structured issue lists — no bpy.ops calls here, pure logic.
+# Returns structured issue lists - no bpy.ops calls here, pure logic.
 
 import bpy
 import re
@@ -68,10 +68,10 @@ def check_object_prefix(obj) -> dict | None:
         base = re.split(r"\.\d+$", obj.name)[0]
         if base in DEFAULT_BLENDER_NAMES:
             return _issue("ERROR", obj.name,
-                          f"Default Blender name — rename to {prefix}<name>",
+                          f"Default Blender name - rename to {prefix}<name>",
                           f"fix_prefix:{obj.name}")
         return _issue("WARNING", obj.name,
-                      f"Missing prefix — should start with {prefix}",
+                      f"Missing prefix - should start with {prefix}",
                       f"fix_prefix:{obj.name}")
     return None
 
@@ -82,7 +82,7 @@ def check_datablock_name(obj) -> dict | None:
         return None
     if obj.data and obj.data.name != obj.name:
         return _issue("WARNING", obj.name,
-                      f"Datablock name mismatch: '{obj.data.name}' ≠ '{obj.name}'",
+                      f"Datablock name mismatch: '{obj.data.name}' vs '{obj.name}'",
                       f"fix_datablock:{obj.name}")
     return None
 
@@ -95,7 +95,8 @@ def check_scale(obj) -> dict | None:
     if abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4 or abs(sz - 1.0) > 1e-4:
         return _issue("WARNING", obj.name,
                       f"Scale not applied: ({sx:.2f}, {sy:.2f}, {sz:.2f})",
-                      "")   # manual — changes geometry
+                      "")   # manual - changes geometry
+    return None
 
 
 def check_materials(obj) -> list[dict]:
@@ -124,12 +125,12 @@ def check_uv_maps(obj) -> list[dict]:
     uvs = obj.data.uv_layers
     if not uvs:
         return [_issue("ERROR", obj.name,
-                       "No UV map — required for LookDev and USD export", "")]
+                       "No UV map - required for LookDev and USD export", "")]
     issues = []
     for uv in uvs:
         if uv.name in UV_DEFAULT_NAMES:
             issues.append(_issue("WARNING", obj.name,
-                                 f"UV map has default name '{uv.name}' — rename to e.g. UV0",
+                                 f"UV map has default name '{uv.name}' - rename to e.g. UV0",
                                  f"fix_uv:{obj.name}:{uv.name}"))
     return issues
 
@@ -140,7 +141,7 @@ def check_vertex_groups(obj) -> dict | None:
         return None
     if not obj.vertex_groups:
         return _issue("WARNING", obj.name,
-                      "No vertex groups — needed if mesh will be skinned", "")
+                      "No vertex groups - needed if mesh will be skinned", "")
     return None
 
 
@@ -149,7 +150,7 @@ def check_armature_exists(scene) -> dict | None:
     rigs = [o for o in scene.objects if o.type == "ARMATURE"]
     if not rigs:
         return _issue("WARNING", "",
-                      "No armature in scene — add RIG_<name> for rigging step", "")
+                      "No armature in scene - add RIG_<name> for rigging step", "")
     named = [o for o in rigs if o.name.startswith("RIG_")]
     if not named:
         return _issue("WARNING", "",
@@ -299,6 +300,23 @@ def auto_fix(fix_id: str, context) -> str:
 # Asset collection helpers
 # ---------------------------------------------------------------------------
 
+def _name_matches_asset(obj_name: str, prefix: str, asset_name: str) -> bool:
+    """
+    True if obj_name follows the convention PREFIX_AssetName(_...) for this asset.
+
+    Requires the asset name to be a whole field: 'GEO_Hero' or 'GEO_Hero_A' match
+    asset 'Hero', but 'GEO_HeroSword' does NOT (avoids false positives where one
+    asset name is a prefix of another).
+    """
+    expected = (prefix + asset_name).lower()
+    low = obj_name.lower()
+    if not low.startswith(expected):
+        return False
+    rest = low[len(expected):]
+    # Accept exact match or a field separator right after the asset name.
+    return rest == "" or rest.startswith("_") or rest.startswith(".")
+
+
 def get_asset_objects_for_publish(scene, asset_name: str,
                                    step: str) -> tuple[list, str]:
     """
@@ -306,11 +324,11 @@ def get_asset_objects_for_publish(scene, asset_name: str,
 
     Priority:
       1. Collection named exactly {asset_name}
-      2. Objects named with step-relevant prefix + asset_name pattern
+      2. Objects named with a step-relevant prefix + asset_name (whole field)
 
     Returns (objects, method_description).
     """
-    # Method 1 — named collection
+    # Method 1 - named collection
     coll = bpy.data.collections.get(asset_name)
     if coll:
         objects = [
@@ -321,7 +339,7 @@ def get_asset_objects_for_publish(scene, asset_name: str,
         if objects:
             return objects, f"collection '{asset_name}'"
 
-    # Method 2 — name-based prefix search
+    # Method 2 - name-based prefix search (whole-field match)
     prefixes_by_step = {
         "modeling": ("GEO_",),
         "rigging":  ("GEO_", "RIG_"),
@@ -329,15 +347,11 @@ def get_asset_objects_for_publish(scene, asset_name: str,
         "fx":       ("GEO_", "FX_"),
     }
     prefixes = prefixes_by_step.get(step, ("GEO_",))
-    asset_lower = asset_name.lower()
 
     objects = [
         o for o in scene.objects
         if not o.hide_get()
-        and any(
-            o.name.lower().startswith(p.lower() + asset_lower)
-            for p in prefixes
-        )
+        and any(_name_matches_asset(o.name, p, asset_name) for p in prefixes)
     ]
 
     if objects:
@@ -348,25 +362,30 @@ def get_asset_objects_for_publish(scene, asset_name: str,
 
 def check_collection_membership(scene, asset_name: str) -> list[dict]:
     """
-    Check that GEO_{asset_name}* objects are inside the asset collection.
+    Check that GEO_{asset_name}* objects live inside the asset collection.
     """
     issues = []
     coll = bpy.data.collections.get(asset_name)
+    # Set of object names actually inside the collection (fixes the
+    # 'name in all_objects' bug: all_objects holds objects, not names).
+    coll_object_names = (
+        {o.name for o in coll.all_objects} if coll is not None else set()
+    )
 
     for obj in scene.objects:
-        if not obj.name.lower().startswith("geo_" + asset_name.lower()):
+        if not _name_matches_asset(obj.name, "GEO_", asset_name):
             continue
         if coll is None:
             issues.append(_issue(
                 "WARNING", obj.name,
-                f"No collection '{asset_name}' — create it and move asset objects inside",
+                f"No collection '{asset_name}' - create it and move asset objects inside",
                 "",
             ))
             break   # one warning per missing collection is enough
-        elif obj.name not in coll.all_objects:
+        elif obj.name not in coll_object_names:
             issues.append(_issue(
                 "WARNING", obj.name,
-                f"Not in collection '{asset_name}' — move here for clean publish",
+                f"Not in collection '{asset_name}' - move here for a clean publish",
                 "",
             ))
 

@@ -8,10 +8,22 @@ from ..core.asset import create_asset, create_shot, create_set, invalidate_entit
 from ..core.asset import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 
 
-# Steps exposed as toggles so the user can deselect what they don't need
-_ASSET_STEP_LABELS = ["Modeling", "UVs", "Rigging", "LookDev", "FX"]
-_SHOT_STEP_LABELS  = ["Layout", "Animation", "Lighting", "FX", "Render", "Composite"]
-_SET_STEP_LABELS   = ["Modeling", "LookDev", "Lighting"]
+# Steps exposed as toggles so the user can deselect what they don't need.
+# Order MUST match ASSET_STEPS / SHOT_STEPS / SET_STEPS in core.project,
+# and the size of the matching BoolVectorProperty below.
+_ASSET_STEP_LABELS = ["Modeling", "Rigging", "LookDev", "FX"]          # 4
+_SHOT_STEP_LABELS  = ["Layout", "Animation", "Lighting", "FX",
+                      "Render", "Composite"]                          # 6
+_SET_STEP_LABELS   = ["Modeling", "LookDev", "Lighting"]              # 3
+
+# Fail fast at import time if the UI labels drift out of sync with the
+# canonical step lists (this exact desync was a real bug once).
+assert len(_ASSET_STEP_LABELS) == len(ASSET_STEPS), \
+    "Ylos: _ASSET_STEP_LABELS out of sync with ASSET_STEPS"
+assert len(_SHOT_STEP_LABELS) == len(SHOT_STEPS), \
+    "Ylos: _SHOT_STEP_LABELS out of sync with SHOT_STEPS"
+assert len(_SET_STEP_LABELS) == len(SET_STEPS), \
+    "Ylos: _SET_STEP_LABELS out of sync with SET_STEPS"
 
 
 class YLOS_OT_NewAsset(bpy.types.Operator):
@@ -137,7 +149,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         if self.context_type == "ASSET" and self.entity_name not in bpy.data.collections:
             coll = bpy.data.collections.new(self.entity_name)
             context.scene.collection.children.link(coll)
-            self.report({"INFO"}, f"{result['message']} — collection '{self.entity_name}' created")
+            self.report({"INFO"}, f"{result['message']} - collection '{self.entity_name}' created")
         else:
             self.report({"INFO"}, result["message"])
 

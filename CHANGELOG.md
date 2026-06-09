@@ -1,11 +1,52 @@
 # Changelog
 
 All notable changes to Ylos Pipeline are documented here.
-Format: [Semantic Versioning](https://semver.org) — `MAJOR.MINOR.PATCH`
+Format: [Semantic Versioning](https://semver.org) -- `MAJOR.MINOR.PATCH`
 
 ---
 
-## [0.1.0] — 2026-06-08
+## [0.2.4] -- 2026-06-09
+
+### Fixed
+- **Publish no longer silently exports the full scene.** When an asset was
+  targeted but no objects resolved, the old fallback re-ran `usd_export` with
+  only `filepath`, exporting the entire scene under the asset's publish name.
+  The scoped export now aborts with a clear error instead, with an opt-in
+  `Allow Full-Scene Export` toggle for the deliberate case.
+- **Collection membership check inverted.** `obj.name not in coll.all_objects`
+  compared a string against a collection of objects (always True), so the
+  "not in collection" warning fired permanently. Now compares against the set
+  of object names.
+- **Duplicate `YLOS_OT_SwitchAsset` class** removed. Two same-named operator
+  classes lived in `op_open_wip` and `op_switch_context`. The redundant browser
+  variant is gone; the "Browse" button now opens the searchable asset popup.
+- **Asset step toggles were misaligned.** `_ASSET_STEP_LABELS` still listed the
+  removed "UVs" step (5 labels) against a 4-slot `BoolVectorProperty`, shifting
+  every toggle. Labels resynced; a load-time assertion guards future drift.
+- **WIP version detection picked up backups.** The version regex matched any
+  `_vNNN.` token, so Blender `.blend1`/`.blend2` autosaves and thumbnails could
+  register as versions. Now anchored to `.blend` with an extension filter.
+- **`subtype="DIR_PATH"` reintroduced** on the Load Project path field (the
+  macOS trailing-`@` corruption bug). Reverted to `subtype="NONE"`.
+- **Object-to-asset name matching** required only a prefix match, so
+  `GEO_HeroSword` matched asset `Hero`. Now requires a whole-field match.
+
+### Changed
+- **USDA composition unified and validated.** `defaultPrim` is now always
+  `ROOT` (entity prim at `/ROOT/{Name}`) across asset and set roots; the dead
+  `USDA_HEADER` constant was removed. The variantSet syntax was rewritten to
+  canonical USDA and validated against `usd-core` (opens cleanly, variants list
+  and switch correctly, references resolve). Added `read_root_variants()` so the
+  variant blocks we write can be read back.
+- **Step validation at publish.** `ylos_current_step` still lists every step for
+  UI convenience, but publishing now refuses a step that has no folder for the
+  active context (e.g. `composite` on an asset).
+- All Python sources are now strictly ASCII (Windows compatibility); UI glyphs
+  replaced with text or Blender icons.
+
+---
+
+## [0.1.0] -- 2026-06-08
 
 ### Added
 - **Project creation** — full folder structure on disk from a single dialog

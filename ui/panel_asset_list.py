@@ -78,7 +78,7 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
             row = layout.row(align=True)
             row.scale_y = 1.15
 
-            # Type icon + name — clicking switches to this asset
+            # Type icon + name - clicking switches to this asset
             op = row.operator(
                 "ylos.switch_asset_confirm",
                 text=entity["name"],
@@ -87,7 +87,7 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
             )
             op.new_asset = entity["name"]
 
-            # Step status dots — only for the active asset to avoid
+            # Step status dots - only for the active asset to avoid
             # hammering the filesystem for every row on every redraw
             if is_active:
                 status = get_asset_step_status(

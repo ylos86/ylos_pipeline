@@ -90,7 +90,7 @@ class YLOS_PT_PipelinePanel(bpy.types.Panel):
         op = row2.operator("ylos.open_folder", text="", icon="FOLDER_REDIRECT")
         op.folder_path = scene.ylos_project_path
         row2.operator("ylos.new_asset", icon="ADD", text="New")
-        row2.operator("ylos.switch_asset", icon="ASSET_MANAGER", text="Browse")
+        row2.operator("ylos.asset_browser", icon="VIEWZOOM", text="Browse")
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,7 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
         if latest_wip:
             wip_header.label(text=f"v{latest_wip:03d}")
         else:
-            wip_header.label(text="—")
+            wip_header.label(text="-")
 
         wip_col.separator(factor=0.3)
 
@@ -218,7 +218,7 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
         if latest_pub:
             pub_header.label(text=f"v{latest_pub:03d}")
         else:
-            pub_header.label(text="—")
+            pub_header.label(text="-")
 
         pub_col.separator(factor=0.3)
 

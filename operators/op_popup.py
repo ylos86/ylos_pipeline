@@ -47,7 +47,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         layout = self.layout
         scene  = context.scene
 
-        # ── Header ──────────────────────────────────────────────────────
+        # --- Header ---
         header = layout.box()
         row = header.row()
         if scene.ylos_project_name:
@@ -56,7 +56,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         else:
             row.label(text="No project loaded", icon="ERROR")
 
-        # ── Tabs ─────────────────────────────────────────────────────────
+        # --- Tabs ---
         row = layout.row(align=True)
         row.prop_enum(scene, "ylos_popup_tab", "PIPELINE")
         row.prop_enum(scene, "ylos_popup_tab", "ASSETS")
@@ -73,7 +73,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         else:
             self._draw_scene(layout, context)
 
-    # ── Tab: Pipeline ───────────────────────────────────────────────────
+    # --- Tab: Pipeline ---
     def _draw_pipeline(self, layout, context):
         scene    = context.scene
         has_proj = bool(scene.ylos_project_path and scene.ylos_project_name)
@@ -127,7 +127,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         )
         r = wip_col.row()
         r.label(text="WIP", icon="FILE_BLEND")
-        r.label(text=f"v{latest_wip:03d}" if latest_wip else "—")
+        r.label(text=f"v{latest_wip:03d}" if latest_wip else "-")
         r2 = wip_col.row(align=True)
         r2.operator("ylos.open_latest_wip", text="Open Latest", icon="IMPORT")
         r2.operator("ylos.open_wip",        text="",            icon="TRIA_DOWN")
@@ -144,13 +144,13 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         )
         r3 = pub_col.row()
         r3.label(text="Publish", icon="EXPORT")
-        r3.label(text=f"v{latest_pub:03d}" if latest_pub else "—")
+        r3.label(text=f"v{latest_pub:03d}" if latest_pub else "-")
         r4 = pub_col.row(align=True)
         r4.operator("ylos.load_latest_publish", text="Load Latest", icon="IMPORT")
         r4.operator("ylos.load_publish",        text="",            icon="TRIA_DOWN")
         pub_col.operator("ylos.publish", text="Publish Step", icon="EXPORT")
 
-    # ── Tab: Assets ──────────────────────────────────────────────────────
+    # --- Tab: Assets ---
     def _draw_assets(self, layout, context):
         scene    = context.scene
         has_proj = bool(scene.ylos_project_path)
@@ -192,7 +192,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         layout.separator(factor=0.3)
         layout.operator("ylos.new_asset", text="+ New Asset", icon="ADD")
 
-    # ── Tab: Scene ───────────────────────────────────────────────────────
+    # --- Tab: Scene ---
     def _draw_scene(self, layout, context):
         scene = context.scene
 
@@ -219,17 +219,17 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         hdr.label(text=f"Step: {results['current_step']}",  icon="SEQUENCE")
         err  = results["error_count"]
         warn = results["warning_count"]
-        hdr.label(text=f"{err}✕  {warn}△")
+        hdr.label(text=f"{err} err  {warn} warn")
 
         col.separator(factor=0.3)
 
         if not cur_issues:
-            col.label(text="All good ✓", icon="CHECKMARK")
+            col.label(text="All good", icon="CHECKMARK")
         else:
             for issue in cur_issues:
                 r = col.row(align=True)
                 r.label(
-                    text=f"{issue['obj_name'] or '—'}  ·  {issue['message']}",
+                    text=f"{issue['obj_name'] or '(scene)'}  -  {issue['message']}",
                     icon=_SEVERITY_ICONS.get(issue["severity"], "DOT"),
                 )
                 if issue.get("fix_id"):
@@ -251,7 +251,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
             )
             n_blocking = sum(1 for i in next_issues if i["severity"] == "ERROR")
             nhdr.label(
-                text="✓ Yes" if not next_issues else f"{n_blocking} blocking",
+                text="Ready" if not next_issues else f"{n_blocking} blocking",
             )
             ncol.separator(factor=0.3)
 
@@ -261,7 +261,7 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
                 for issue in next_issues:
                     r = ncol.row(align=True)
                     r.label(
-                        text=f"{issue['obj_name'] or '—'}  ·  {issue['message']}",
+                        text=f"{issue['obj_name'] or '(scene)'}  -  {issue['message']}",
                         icon=_SEVERITY_ICONS.get(issue["severity"], "DOT"),
                     )
                     if issue.get("fix_id"):
