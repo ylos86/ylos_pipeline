@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 # ylos_core/usd_composer.py
 # Assembles the USD root files for each asset/set.
-# Writes plain-text USDA so we do not need pxr in either DCC.
+# Writes plain-text USDA -- no pxr dependency required.
 #
-# Convention:
-#   - defaultPrim is always "ROOT".
-#   - Entity prim lives at /ROOT/{EntityName}.
-#   - Per-step publishes are composed as subLayers (strongest opinion last).
-#   - When a step has variants, a variantSet "{step}Variant" is written on
-#     the entity prim, each variant carrying a references arc to its publish.
+# Composition model (arch doc §3):
+#   modeling < rigging < lookdev  -- composed as subLayers (strongest last)
+#   lookdev with variants         -- variantSet block on the entity prim
+#   fx                            -- payload arc on /ROOT/{Entity}/fx scope (§3.2)
+#
+# FX as payload means the cache is NOT loaded at open time until the consumer
+# activates the payload. This is the correct pattern for heavy time-sampled
+# mesh caches and VDB volumes.
 #
 # THIS IS THE SINGLE AUTHORITATIVE WRITER for entity root files.
-# Houdini's lookdev/layout layers (authored via pxr/Solaris) are NOT roots --
-# they are per-step publishes that this writer references.
 
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from .asset import (
 )
 
 ROOT_PRIM = "ROOT"
+FX_STEP   = "fx"           # always payload, never sublayer
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +38,19 @@ def _relpath(target: str, root_dir: Path) -> str:
         return str(Path(target).relative_to(root_dir)).replace("\\", "/")
     except ValueError:
         return str(Path(target)).replace("\\", "/")
+
+
+def _fx_scope_lines(rel_path: str, indent: str = "        ") -> list:
+    """
+    Return the USDA lines for the /fx payload scope child prim.
+    Callers pass the correct indentation level.
+    """
+    return [
+        f'{indent}def Scope "fx" (\n',
+        f'{indent}    prepend payload = @{rel_path}@\n',
+        f'{indent}) {{\n',
+        f'{indent}}}\n',
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -70,16 +84,19 @@ def write_usda_root(filepath: str, sublayers: list) -> None:
 
 
 def write_usda_with_variants(filepath: str, sublayers: list,
-                             variant_blocks: dict, entity_name: str) -> None:
+                             variant_blocks: dict, entity_name: str,
+                             fx_payload_path: str | None = None) -> None:
     """
-    Write a root USDA with subLayers plus a variantSet per step that has variants.
+    Write a root USDA with subLayers, optional variantSets, and optional FX payload.
 
-    sublayers:      list of USD paths for single/default steps (no variants)
-    variant_blocks: {step: {variant_name: abs_path}}
-    entity_name:    name of the entity prim under /ROOT
-
-    Variant arcs use references so each variant pulls in its own publish.
-    Syntax follows canonical USDA (variantSets / variants / variantSet blocks).
+    Args:
+        sublayers:       USD paths for single/default steps (no variants).
+                         Strongest opinion FIRST in this list (reversed for USD).
+        variant_blocks:  {step: {variant_name: abs_path}}
+        entity_name:     Name of the entity prim under /ROOT.
+        fx_payload_path: Absolute path to the FX publish USD.
+                         Written as a payload arc on /ROOT/{entity_name}/fx.
+                         NOT a sublayer -- the cache is deferred until activated.
     """
     root_dir = Path(filepath).parent
 
@@ -98,12 +115,19 @@ def write_usda_with_variants(filepath: str, sublayers: list,
     lines.append(f'def Xform "{ROOT_PRIM}"\n{{\n')
 
     if not variant_blocks:
-        lines.append(f'    def Xform "{entity_name}"\n    {{\n    }}\n')
+        # Simple entity prim -- may still carry FX payload scope.
+        if fx_payload_path:
+            lines.append(f'    def Xform "{entity_name}"\n    {{\n')
+            lines.extend(_fx_scope_lines(_relpath(fx_payload_path, root_dir), "        "))
+            lines.append('    }\n')
+        else:
+            lines.append(f'    def Xform "{entity_name}"\n    {{\n    }}\n')
         lines.append('}\n')
         with open(filepath, "w", encoding="utf-8") as f:
             f.writelines(lines)
         return
 
+    # Entity prim carrying variantSets.
     set_names = [f"{step}Variant" for step in variant_blocks]
 
     lines.append(f'    def Xform "{entity_name}" (\n')
@@ -129,8 +153,13 @@ def write_usda_with_variants(filepath: str, sublayers: list,
             lines.append('            }\n')
         lines.append('        }\n')
 
-    lines.append('    }\n')
-    lines.append('}\n')
+    # FX payload scope as child of entity prim (after variantSet blocks).
+    if fx_payload_path:
+        lines.append('\n')
+        lines.extend(_fx_scope_lines(_relpath(fx_payload_path, root_dir), "        "))
+
+    lines.append('    }\n')   # close entity prim
+    lines.append('}\n')       # close ROOT
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.writelines(lines)
@@ -144,17 +173,22 @@ def compose_asset_root(project_path: str, asset_name: str,
                        steps_override: list = None) -> dict:
     """
     Build or rebuild asset_root.usd from the latest publish of each step.
-    If multiple variants exist for a step, writes a USD variantSet block.
 
-    Layer order (strongest opinion last in USD): modeling < rigging < lookdev
+    FX is always emitted as a payload arc (not a sublayer) so heavy caches
+    are deferred until the consumer explicitly loads the payload.
+    All other steps follow the existing sublayer/variantSet pattern.
+
+    Layer strength order (weakest -> strongest): modeling < rigging < lookdev
     """
     asset_root = get_asset_root(project_path, asset_name)
     root_usd   = asset_root / "asset_root.usd"
 
+    # Determine step iteration order (strongest-first so later steps dominate).
     steps = steps_override if steps_override else list(reversed(ASSET_STEPS))
 
     layers_used    = []
     variant_blocks = {}
+    fx_payload_path = None
 
     for step in steps:
         versions = list_publish_versions(project_path, asset_name, step, "asset")
@@ -164,12 +198,16 @@ def compose_asset_root(project_path: str, asset_name: str,
         latest_ver = versions[-1]["version"]
         latest = [v for v in versions if v["version"] == latest_ver]
 
-        if len(latest) == 1 and latest[0]["variant"] == "Default":
+        if step == FX_STEP:
+            # FX is always a payload -- never sublayered regardless of variants.
+            # Phase 3 supports a single FX publish path (no FX variant support).
+            fx_payload_path = latest[0]["path"]
+        elif len(latest) == 1 and latest[0]["variant"] == "Default":
             layers_used.append(latest[0]["path"])
         else:
             variant_blocks[step] = {v["variant"]: v["path"] for v in latest}
 
-    if not layers_used and not variant_blocks:
+    if not layers_used and not variant_blocks and fx_payload_path is None:
         return {
             "success": False,
             "root_path": str(root_usd),
@@ -178,7 +216,10 @@ def compose_asset_root(project_path: str, asset_name: str,
         }
 
     try:
-        write_usda_with_variants(str(root_usd), layers_used, variant_blocks, asset_name)
+        write_usda_with_variants(
+            str(root_usd), layers_used, variant_blocks, asset_name,
+            fx_payload_path=fx_payload_path,
+        )
     except Exception as e:
         return {
             "success": False,
@@ -188,11 +229,16 @@ def compose_asset_root(project_path: str, asset_name: str,
         }
 
     total = len(layers_used) + sum(len(v) for v in variant_blocks.values())
+    fx_note = "  + FX payload" if fx_payload_path else ""
     return {
         "success": True,
         "root_path": str(root_usd),
         "layers_used": layers_used,
-        "message": f"asset_root.usd updated ({total} publish(es), {len(variant_blocks)} variantSet(s)).",
+        "fx_payload_path": fx_payload_path,
+        "message": (
+            f"asset_root.usd updated ({total} publish(es), "
+            f"{len(variant_blocks)} variantSet(s)){fx_note}."
+        ),
     }
 
 
@@ -269,7 +315,6 @@ def read_root_variants(root_usd_path: str) -> dict:
     """
     Parse variantSet blocks from a root USDA written by write_usda_with_variants.
     Returns {set_name: {variant_name: referenced_path}}.
-    Plain-text parse that round-trips the subset this module writes.
     """
     path = Path(root_usd_path)
     if not path.exists():
@@ -299,3 +344,27 @@ def read_root_variants(root_usd_path: str) -> dict:
                 current_variant = None
 
     return result
+
+
+def read_root_fx_payload(root_usd_path: str) -> str | None:
+    """
+    Parse the FX payload path from a root USDA written by this module.
+    Returns the relative path string, or None if no FX payload is present.
+    """
+    path = Path(root_usd_path)
+    if not path.exists():
+        return None
+
+    in_fx_scope = False
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if 'def Scope "fx"' in s:
+            in_fx_scope = True
+            continue
+        if in_fx_scope:
+            if "payload" in s and "@" in s:
+                return s[s.find("@") + 1:s.rfind("@")]
+            if s.startswith("}"):
+                break
+
+    return None
