@@ -1,25 +1,27 @@
 # -*- coding: utf-8 -*-
-# Ylos Pipeline - core/usd_composer.py
-# Assembles the USD "matryoshka" (poupee russe) for each asset.
-# Writes and updates asset_root.usd and set_root.usd as plain-text USDA so we
-# do not need pxr installed in Blender's Python.
+# ylos_core/usd_composer.py
+# Assembles the USD root files for each asset/set.
+# Writes plain-text USDA so we do not need pxr in either DCC.
 #
-# Convention (unified):
+# Convention:
 #   - defaultPrim is always "ROOT".
-#   - The entity prim lives at /ROOT/{EntityName}.
+#   - Entity prim lives at /ROOT/{EntityName}.
 #   - Per-step publishes are composed as subLayers (strongest opinion last).
-#   - When a step has variants, a variantSet "{step}Variant" is written on the
-#     entity prim, each variant carrying a `references` arc to its publish.
+#   - When a step has variants, a variantSet "{step}Variant" is written on
+#     the entity prim, each variant carrying a references arc to its publish.
 #
-# For heavier stage edits, use an external Python env with usd-core installed.
-# This module deliberately stays pxr-free and round-trips the subset it writes.
+# THIS IS THE SINGLE AUTHORITATIVE WRITER for entity root files.
+# Houdini's lookdev/layout layers (authored via pxr/Solaris) are NOT roots --
+# they are per-step publishes that this writer references.
 
 from pathlib import Path
+
 from .project import ASSET_STEPS, SET_STEPS
 from .asset import (
     get_latest_publish_path,
     get_asset_root,
     get_set_root,
+    list_publish_versions,
 )
 
 ROOT_PRIM = "ROOT"
@@ -30,7 +32,7 @@ ROOT_PRIM = "ROOT"
 # ---------------------------------------------------------------------------
 
 def _relpath(target: str, root_dir: Path) -> str:
-    """Path of `target` relative to root_dir, POSIX separators for USDA."""
+    """Path of target relative to root_dir, POSIX separators for USDA."""
     try:
         return str(Path(target).relative_to(root_dir)).replace("\\", "/")
     except ValueError:
@@ -41,7 +43,7 @@ def _relpath(target: str, root_dir: Path) -> str:
 # USDA writers (no pxr dependency)
 # ---------------------------------------------------------------------------
 
-def write_usda_root(filepath: str, sublayers: list[str]) -> None:
+def write_usda_root(filepath: str, sublayers: list) -> None:
     """
     Write a minimal USDA file that sublayers the given paths under /ROOT.
     sublayers: paths to USD files, strongest opinion FIRST (we reverse for USD).
@@ -56,7 +58,7 @@ def write_usda_root(filepath: str, sublayers: list[str]) -> None:
 
     if rel_layers:
         lines.append('    subLayers = [\n')
-        for rl in reversed(rel_layers):     # strongest opinion last in USD
+        for rl in reversed(rel_layers):
             lines.append(f'        @{rl}@,\n')
         lines.append('    ]\n')
 
@@ -67,7 +69,7 @@ def write_usda_root(filepath: str, sublayers: list[str]) -> None:
         f.writelines(lines)
 
 
-def write_usda_with_variants(filepath: str, sublayers: list[str],
+def write_usda_with_variants(filepath: str, sublayers: list,
                              variant_blocks: dict, entity_name: str) -> None:
     """
     Write a root USDA with subLayers plus a variantSet per step that has variants.
@@ -76,7 +78,7 @@ def write_usda_with_variants(filepath: str, sublayers: list[str],
     variant_blocks: {step: {variant_name: abs_path}}
     entity_name:    name of the entity prim under /ROOT
 
-    Variant arcs use `references` so each variant pulls in its own publish.
+    Variant arcs use references so each variant pulls in its own publish.
     Syntax follows canonical USDA (variantSets / variants / variantSet blocks).
     """
     root_dir = Path(filepath).parent
@@ -93,26 +95,21 @@ def write_usda_with_variants(filepath: str, sublayers: list[str],
         lines.append('    ]\n')
 
     lines.append(')\n\n')
-
-    # Root prim.
     lines.append(f'def Xform "{ROOT_PRIM}"\n{{\n')
 
     if not variant_blocks:
-        # No variants: entity is just a child Xform (publishes come via sublayers).
         lines.append(f'    def Xform "{entity_name}"\n    {{\n    }}\n')
         lines.append('}\n')
         with open(filepath, "w", encoding="utf-8") as f:
             f.writelines(lines)
         return
 
-    # Entity prim carrying variantSets.
     set_names = [f"{step}Variant" for step in variant_blocks]
 
     lines.append(f'    def Xform "{entity_name}" (\n')
     lines.append('        prepend variantSets = [' +
                  ', '.join(f'"{s}"' for s in set_names) + ']\n')
 
-    # Selected (default) variant per set, declared in the prim metadata block.
     lines.append('        variants = {\n')
     for step, variants in variant_blocks.items():
         set_name  = f"{step}Variant"
@@ -122,7 +119,6 @@ def write_usda_with_variants(filepath: str, sublayers: list[str],
     lines.append('    )\n')
     lines.append('    {\n')
 
-    # variantSet definition blocks.
     for step, variants in variant_blocks.items():
         set_name = f"{step}Variant"
         lines.append(f'        variantSet "{set_name}" = {{\n')
@@ -133,8 +129,8 @@ def write_usda_with_variants(filepath: str, sublayers: list[str],
             lines.append('            }\n')
         lines.append('        }\n')
 
-    lines.append('    }\n')   # close entity prim
-    lines.append('}\n')       # close ROOT
+    lines.append('    }\n')
+    lines.append('}\n')
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.writelines(lines)
@@ -150,17 +146,15 @@ def compose_asset_root(project_path: str, asset_name: str,
     Build or rebuild asset_root.usd from the latest publish of each step.
     If multiple variants exist for a step, writes a USD variantSet block.
 
-    Layer order (strongest opinion on top): lookdev > rigging > modeling
+    Layer order (strongest opinion last in USD): modeling < rigging < lookdev
     """
-    from .asset import list_publish_versions
-
     asset_root = get_asset_root(project_path, asset_name)
     root_usd   = asset_root / "asset_root.usd"
 
     steps = steps_override if steps_override else list(reversed(ASSET_STEPS))
 
     layers_used    = []
-    variant_blocks = {}   # step -> {variant_name: path}
+    variant_blocks = {}
 
     for step in steps:
         versions = list_publish_versions(project_path, asset_name, step, "asset")
@@ -211,7 +205,7 @@ def compose_set_root(project_path: str, set_name: str) -> dict:
     set_root = get_set_root(project_path, set_name)
     root_usd = set_root / "set_root.usd"
 
-    steps = list(reversed(SET_STEPS))  # lighting > lookdev > modeling
+    steps = list(reversed(SET_STEPS))
 
     layers_used = []
     for step in steps:
@@ -249,10 +243,8 @@ def compose_set_root(project_path: str, set_name: str) -> dict:
 # Inspect existing root
 # ---------------------------------------------------------------------------
 
-def read_root_sublayers(root_usd_path: str) -> list[str]:
-    """
-    Parse an existing root USDA and return its subLayer paths (plain text, no pxr).
-    """
+def read_root_sublayers(root_usd_path: str) -> list:
+    """Parse an existing root USDA and return its subLayer paths (no pxr)."""
     path = Path(root_usd_path)
     if not path.exists():
         return []
@@ -276,9 +268,8 @@ def read_root_sublayers(root_usd_path: str) -> list[str]:
 def read_root_variants(root_usd_path: str) -> dict:
     """
     Parse variantSet blocks from a root USDA written by write_usda_with_variants.
-
-    Returns {set_name: {variant_name: referenced_path}}. Plain-text parse that
-    round-trips the subset this module writes (not a general USD parser).
+    Returns {set_name: {variant_name: referenced_path}}.
+    Plain-text parse that round-trips the subset this module writes.
     """
     path = Path(root_usd_path)
     if not path.exists():

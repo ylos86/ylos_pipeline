@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
-# Ylos Pipeline - core/asset.py
+# ylos_core/asset.py
 # Asset and shot creation on disk, path resolution for wip/publish,
-# version detection (manual control - no auto-increment),
-# name sanitization and validation utilities.
+# version detection (manual control -- no auto-increment).
+# Pure stdlib -- no bpy, no hou, no pxr.
 
 import os
 import re
+import json
+import time as _time
 from pathlib import Path
 from datetime import datetime
+
 from .project import (
     ASSET_STEPS,
     SHOT_STEPS,
@@ -15,9 +18,12 @@ from .project import (
     load_project,
 )
 
+# Re-export naming helpers so callers that import them from asset keep working.
+from .naming import sanitize_entity_name, validate_entity_name
+
 
 # ---------------------------------------------------------------------------
-# Naming helpers
+# Asset sub-type tables
 # ---------------------------------------------------------------------------
 
 # USD file naming prefix per asset sub-type (DOMAIN_AssetName_Variant.usd)
@@ -28,54 +34,11 @@ ASSET_TYPE_PREFIXES = {
 }
 
 # Parent collection in the Blender scene hierarchy per asset sub-type.
-# The asset working collection (bare name, no COL_ prefix) is placed
-# under these organizational containers so the outliner stays clean.
 ASSET_TYPE_PARENT_COL = {
-    "PROP":        "COL_ENV_Props",   # COL_ENV -> COL_ENV_Props
+    "PROP":        "COL_ENV_Props",
     "CHARACTER":   "COL_CHAR",
     "ENVIRONMENT": "COL_ENV",
 }
-
-
-def sanitize_entity_name(raw: str) -> str:
-    """
-    Normalize a raw user-typed name into a pipeline-safe identifier.
-
-    Rules:
-    - Strips leading/trailing whitespace
-    - Collapses spaces and hyphens (PascalCase join: 'Hero Char' -> 'HeroChar')
-    - Drops any character outside [A-Za-z0-9_]
-    - Strips leading underscores and digits
-
-    Returns '' if nothing remains (caller should reject).
-    """
-    name = raw.strip()
-    # Remove spaces/hyphens so 'Hero Char' -> 'HeroChar'
-    name = re.sub(r'[\s\-]+', '', name)
-    # Drop illegal characters
-    name = re.sub(r'[^A-Za-z0-9_]', '', name)
-    # Strip leading underscores and digits
-    name = name.lstrip('_0123456789')
-    return name
-
-
-def validate_entity_name(name: str) -> tuple:
-    """
-    Validate a (sanitized) entity name.
-
-    Returns (is_valid: bool, error_message: str).
-    Requirements: non-empty, at least 2 chars, starts with uppercase (PascalCase).
-    """
-    if not name:
-        return False, "Name cannot be empty."
-    if len(name) < 2:
-        return False, "Name must be at least 2 characters."
-    if not name[0].isupper():
-        return (
-            False,
-            "Name must start with an uppercase letter (PascalCase). Got: '" + name + "'",
-        )
-    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +58,7 @@ def get_set_root(project_path: str, set_name: str) -> Path:
 
 
 def get_step_path(entity_root: Path, step: str, sub: str) -> Path:
-    """
-    Return wip or publish dir for a given step.
-    sub: "wip" or "publish"
-    """
+    """Return wip or publish dir for a given step. sub: 'wip' or 'publish'"""
     return entity_root / step / sub
 
 
@@ -220,19 +180,14 @@ def _write_asset_manifest(root: Path, name: str, steps: list,
                            asset_subtype: str = "") -> None:
     """
     Write manifest.json alongside the asset folders.
-
-    Stores the specific asset sub-type (PROP/CHARACTER/ENVIRONMENT) so that
-    the asset list panel can display the correct icon without needing to infer
-    the type from the name or folder structure.
+    NOTE: this is the entity-level manifest (folder metadata).
+    Publish sidecars are handled by ylos_core.manifest.
     """
-    import json
-    # Prefer the specific sub-type over the generic entity_type so
-    # list_project_entities() gets the right icon key.
     type_field = asset_subtype.upper() if asset_subtype else entity_type.upper()
     manifest = {
         "name":        name,
-        "type":        type_field,     # PROP | CHARACTER | ENVIRONMENT | SHOT | SET
-        "entity_type": entity_type,    # asset | shot | set  (normalized)
+        "type":        type_field,
+        "entity_type": entity_type,
         "steps":       steps,
         "publishes":   {step: [] for step in steps},
     }
@@ -244,9 +199,6 @@ def _write_asset_manifest(root: Path, name: str, steps: list,
 # Version detection
 # ---------------------------------------------------------------------------
 
-# WIP files are versioned .blend only. Anchored on the .blend extension so
-# Blender auto-backups (.blend1, .blend2) and thumbnails (_thumb.png) never
-# get picked up as versions.
 VERSION_PATTERN         = re.compile(r"_v(\d{3})\.blend$")
 VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(?:usd[az]?)$")
 
@@ -315,20 +267,11 @@ def get_latest_publish_path(project_path: str, entity_name: str, step: str,
 
 
 def build_wip_filename(entity_name: str, step: str, version: int) -> str:
-    """
-    Construct a WIP .blend filename.
-    e.g. HeroCharacter_modeling_v001.blend
-    """
     return entity_name + "_" + step + "_v" + str(version).zfill(3) + ".blend"
 
 
 def build_publish_filename(entity_name: str, step: str, version: int,
                            ext: str = "usd", variant: str = "") -> str:
-    """
-    Construct a publish USD filename.
-    Default:  HeroCharacter_lookdev_v001.usd
-    Variant:  HeroCharacter_lookdev_v001__Dirty.usd
-    """
     base = entity_name + "_" + step + "_v" + str(version).zfill(3)
     if variant and variant.lower() not in ("", "default"):
         return base + "__" + variant + "." + ext
@@ -337,10 +280,6 @@ def build_publish_filename(entity_name: str, step: str, version: int,
 
 def resolve_wip_save_path(project_path: str, entity_name: str, step: str,
                           version: int, entity_type: str = "asset") -> str:
-    """
-    Full absolute path for a WIP save, given explicit version number.
-    Manual version control - caller decides the version.
-    """
     root = _get_entity_root(project_path, entity_name, entity_type)
     filename = build_wip_filename(entity_name, step, version)
     return str(root / step / "wip" / filename)
@@ -358,10 +297,6 @@ def resolve_publish_path(project_path: str, entity_name: str, step: str,
 
 def get_latest_wip_version(project_path: str, entity_name: str, step: str,
                            entity_type: str = "asset") -> int:
-    """
-    Return the highest existing WIP version number, or 0 if none exist.
-    Useful for suggesting the next version in the UI (latest + 1).
-    """
     versions = list_wip_versions(project_path, entity_name, step, entity_type)
     if not versions:
         return 0
@@ -370,7 +305,6 @@ def get_latest_wip_version(project_path: str, entity_name: str, step: str,
 
 def get_latest_publish_version(project_path: str, entity_name: str, step: str,
                                entity_type: str = "asset") -> int:
-    """Return the highest existing publish version number, or 0 if none."""
     versions = list_publish_versions(project_path, entity_name, step, entity_type)
     if not versions:
         return 0
@@ -383,7 +317,6 @@ def get_latest_publish_version(project_path: str, entity_name: str, step: str,
 
 def _get_entity_root(project_path: str, entity_name: str,
                      entity_type: str) -> Path:
-    """Return the root Path for an entity based on its type."""
     if entity_type == "asset":
         return get_asset_root(project_path, entity_name)
     elif entity_type == "shot":
@@ -397,10 +330,8 @@ def _get_entity_root(project_path: str, entity_name: str,
 # Project-level entity listing (used by asset list panel)
 # ---------------------------------------------------------------------------
 
-import time as _time
-
 _entity_cache = {}
-_CACHE_TTL = 4.0   # seconds before re-reading from disk
+_CACHE_TTL = 4.0
 
 
 def list_project_entities(project_path: str,
@@ -408,7 +339,7 @@ def list_project_entities(project_path: str,
     """
     List all entities (assets/shots/sets) in the project.
     Returns list of dicts: {name, type_label, type_icon, path}
-    Caches results for _CACHE_TTL seconds to avoid hammering the filesystem.
+    Caches results for _CACHE_TTL seconds.
     """
     cache_key = project_path + ":" + entity_type
     cached = _entity_cache.get(cache_key)
@@ -430,7 +361,6 @@ def list_project_entities(project_path: str,
             asset_type = "PROP"
             if manifest_path.exists():
                 try:
-                    import json
                     with open(manifest_path) as f:
                         mf = json.load(f)
                     asset_type = mf.get("type", "PROP").upper()
@@ -473,10 +403,7 @@ def invalidate_entity_cache(project_path: str = None):
 
 def get_asset_step_status(project_path: str, asset_name: str,
                           entity_type: str = "asset") -> dict:
-    """
-    Returns {step_id: bool} - True if at least one publish exists for that step.
-    """
-    from .project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
+    """Returns {step_id: bool} - True if at least one publish exists for that step."""
     step_map = {"asset": ASSET_STEPS, "shot": SHOT_STEPS, "set": SET_STEPS}
     steps = step_map.get(entity_type, ASSET_STEPS)
     return {

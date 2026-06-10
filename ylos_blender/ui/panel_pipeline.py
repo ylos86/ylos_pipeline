@@ -5,8 +5,8 @@
 
 import bpy
 import os
-from ..core.asset import get_latest_wip_version, get_latest_publish_version
-from ..core.project import SCENE_PRESETS
+from ylos_core.asset import get_latest_wip_version, get_latest_publish_version
+from ylos_core.project import SCENE_PRESETS
 
 # Steps per context type with abbreviated labels
 _ASSET_STEPS = [

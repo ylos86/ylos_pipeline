@@ -5,7 +5,7 @@
 # two-line issues so long messages do not truncate, prominent primary actions.
 
 import bpy
-from ..core.asset import (
+from ylos_core.asset import (
     get_latest_wip_version,
     get_latest_publish_version,
     list_project_entities,

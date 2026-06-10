@@ -4,11 +4,8 @@
 
 import bpy
 from bpy.props import StringProperty, EnumProperty
-from ..core.project import (
-    create_project,
-    apply_scene_preset,
-    setup_scene_collections,
-)
+from ylos_core.project import create_project
+from ..core_bpy.project_bpy import apply_scene_preset, setup_scene_collections
 
 
 class YLOS_OT_NewProject(bpy.types.Operator):

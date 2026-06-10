@@ -1,19 +1,36 @@
 # -*- coding: utf-8 -*-
 # Ylos Pipeline - Blender Production Pipeline Addon
 # Compatible: Blender 4.2 LTS and 5.x
+#
+# Architecture: monorepo ylos_pipeline
+#   ylos_core/       -- pure stdlib, shared with Houdini adapter
+#   ylos_blender/    -- this addon (bpy-dependent layer)
+#   _vendor/ylos_core/ -- vendored copy of ylos_core, populated by build.py
+#
+# sys.path injection: _vendor/ is inserted at module load time (before
+# any operator-level imports) so "from ylos_core.xxx import yyy" resolves
+# correctly inside all submodules without requiring ylos_core to be installed.
 
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 2, 7),
+    "version": (0, 3, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport Header > Ylos button",
     "description": "Production pipeline - USD publish, WIP versioning, scene naming checker",
     "category": "Pipeline",
 }
 
+import sys
+from pathlib import Path
+
+# Inject _vendor/ into sys.path so ylos_core is importable from any submodule.
+# Done at module level so the path is available before any import below executes.
+_vendor_path = str(Path(__file__).parent / "_vendor")
+if _vendor_path not in sys.path:
+    sys.path.insert(0, _vendor_path)
+
 import bpy
-from . import core
 from .ui import panel_pipeline, panel_asset_list
 from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
@@ -59,7 +76,6 @@ def _draw_header_button(self, context):
     row = layout.row(align=True)
     row.operator("ylos.open_popup", text="Ylos", icon="FUND")
 
-    # Show active context info next to the button
     if scene.ylos_project_name and scene.ylos_current_asset:
         row.label(
             text=f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}"
@@ -67,10 +83,9 @@ def _draw_header_button(self, context):
 
 
 def register():
-    from .core import project as proj_module
-    proj_module.register_properties()
+    from .core_bpy.project_bpy import register_properties
+    register_properties()
 
-    # Register ylos_popup_tab on scene
     bpy.types.Scene.ylos_popup_tab = bpy.props.EnumProperty(
         name="Tab",
         items=[
@@ -81,13 +96,12 @@ def register():
         default="PIPELINE",
     )
 
-    from .core.thumbnails import init_previews
+    from .core_bpy.thumbnails import init_previews
     init_previews()
 
     for cls in _classes:
         bpy.utils.register_class(cls)
 
-    # Inject header button
     bpy.types.VIEW3D_HT_header.append(_draw_header_button)
 
 
@@ -97,14 +111,18 @@ def unregister():
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
 
-    from .core import project as proj_module
-    proj_module.unregister_properties()
+    from .core_bpy.project_bpy import unregister_properties
+    unregister_properties()
 
     if hasattr(bpy.types.Scene, "ylos_popup_tab"):
         del bpy.types.Scene.ylos_popup_tab
 
-    from .core.thumbnails import clear_previews
+    from .core_bpy.thumbnails import clear_previews
     clear_previews()
+
+    # Clean up _vendor path from sys.path on unregister.
+    if _vendor_path in sys.path:
+        sys.path.remove(_vendor_path)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,49 @@
+## [0.3.0] - 2026-06-10
+
+### Architecture — Phase 1: monorepo extraction
+
+This release restructures the codebase into a monorepo without any change to
+Blender-visible behaviour. All v0.2.7 workflows pass unchanged.
+
+#### New layout
+```
+ylos_pipeline/
+  ylos_core/        pure stdlib — shared contract, no bpy/hou/pxr
+  ylos_blender/     Blender addon (bpy layer), vendors ylos_core at build time
+  tests/            116 pytest tests, bpy-free, run with: python3 -m pytest
+  build.py          vendors core + produces installable zip
+```
+
+#### New modules in `ylos_core`
+- `naming.py` — pure naming constants + helpers extracted from `scene_checker`
+  and `asset` (`sanitize_entity_name`, `validate_entity_name`, `get_next_step`,
+  `name_matches_asset`, `PREFIXES`, `STEP_ORDER`)
+- `locking.py` — `atomic_write_text` / `atomic_write_json` for mutable files
+  (entity roots and `project.json`); pattern: write `.tmp` then `os.replace()`
+- `manifest.py` — publish sidecar writer/reader (`write_publish_sidecar`,
+  `read_publish_sidecar`, `find_removed_prims`); implements §5 of arch doc
+
+#### `project.json` schema v2
+- Added `"schema_version": 2` to all newly created projects
+- Added `"step_owners"` matrix (modeling/rigging/fx → blender,
+  lookdev/layout → houdini, lighting/rendering → any)
+- `load_project()` forward-guards: refuses with a clear error if
+  `schema_version` is newer than the installed addon
+- v1 projects (no `schema_version` key) load without error; missing keys
+  are injected with defaults on first read
+
+#### `ylos_blender` internal changes
+- `core/` split into `ylos_core/` (pure) and `core_bpy/` (bpy-dependent):
+  - `core_bpy/project_bpy.py` — `apply_scene_preset`, `setup_scene_collections`,
+    `register_properties`, `unregister_properties`
+  - `core_bpy/scene_checker.py` — all check functions; imports pure naming
+    from `ylos_core.naming`
+  - `core_bpy/thumbnails.py` — unchanged
+- `__init__.py` injects `_vendor/` into `sys.path` at module load time
+- Version bumped to `(0, 3, 0)`
+
+---
+
 ## [0.2.7] - 2026-06-10
 
 ### Added

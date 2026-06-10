@@ -5,12 +5,12 @@
 
 import bpy
 from bpy.props import StringProperty, EnumProperty, BoolVectorProperty
-from ..core.asset import (
+from ylos_core.asset import (
     create_asset, create_shot, create_set, invalidate_entity_cache,
     sanitize_entity_name, validate_entity_name,
     ASSET_TYPE_PARENT_COL,
 )
-from ..core.asset import ASSET_STEPS, SHOT_STEPS, SET_STEPS
+from ylos_core.asset import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 
 
 # Step labels - order MUST match ASSET_STEPS / SHOT_STEPS / SET_STEPS.

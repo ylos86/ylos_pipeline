@@ -5,12 +5,12 @@
 import bpy
 import os
 from bpy.props import IntProperty, EnumProperty
-from ..core.asset import (
+from ylos_core.asset import (
     resolve_wip_save_path,
     get_latest_wip_version,
     list_wip_versions,
 )
-from ..core.thumbnails import generate_thumbnail, reload_thumb_icon
+from ..core_bpy.thumbnails import generate_thumbnail, reload_thumb_icon
 
 
 class YLOS_OT_SaveWip(bpy.types.Operator):

@@ -1,70 +1,46 @@
 # -*- coding: utf-8 -*-
-# Ylos Pipeline - core/scene_checker.py
+# ylos_blender/core_bpy/scene_checker.py
 # Scene naming checker + next-step readiness scanner.
-# Returns structured issue lists - no bpy.ops calls here, pure logic.
+# Returns structured issue lists -- no bpy.ops calls here, pure logic.
+#
+# Pure naming constants and helpers (PREFIXES, sanitize_entity_name, etc.)
+# live in ylos_core.naming. Only functions that require bpy objects or
+# bpy.data live here.
 
 import bpy
 import re
 
-# ---------------------------------------------------------------------------
-# Naming conventions
-# ---------------------------------------------------------------------------
-
-PREFIXES = {
-    "MESH":     "GEO_",
-    "ARMATURE": "RIG_",
-    "LIGHT":    "LGT_",
-    "CAMERA":   "CAM_",
-    "EMPTY":    "CTRL_",
-    "CURVE":    "CRV_",
-    "LATTICE":  "LAT_",
-}
-
-MATERIAL_PREFIX = "MAT_"
-UV_DEFAULT_NAMES = {"UVMap", "UVChannel_1", "uv0"}
-
-DEFAULT_BLENDER_NAMES = {
-    "Cube", "Plane", "Sphere", "UV Sphere", "Ico Sphere",
-    "Cylinder", "Cone", "Torus", "Circle", "Grid", "Monkey",
-    "Camera", "Light", "Point", "Sun", "Spot", "Area",
-    "Armature", "Empty", "Curve", "BezierCurve", "Text",
-    "Lattice", "Metaball",
-}
-
-# Steps in asset pipeline order
-STEP_ORDER = ["modeling", "rigging", "lookdev", "fx"]
-
-
-def get_next_step(current_step: str) -> str | None:
-    try:
-        idx = STEP_ORDER.index(current_step)
-        return STEP_ORDER[idx + 1] if idx + 1 < len(STEP_ORDER) else None
-    except ValueError:
-        return None
+from ylos_core.naming import (
+    PREFIXES,
+    MATERIAL_PREFIX,
+    UV_DEFAULT_NAMES,
+    DEFAULT_BLENDER_NAMES,
+    STEP_ORDER,
+    get_next_step,
+    name_matches_asset,
+)
 
 
 # ---------------------------------------------------------------------------
-# Individual checks (return list of issue dicts)
+# Issue factory
 # ---------------------------------------------------------------------------
-# Issue dict keys:
-#   severity:  "OK" | "WARNING" | "ERROR"
-#   obj_name:  Blender object name (empty string for scene-level)
-#   message:   Human-readable description
-#   fix_id:    str ID for auto-fix (empty = manual only)
 
 def _issue(severity, obj_name, message, fix_id=""):
     return {"severity": severity, "obj_name": obj_name,
             "message": message, "fix_id": fix_id}
 
 
+# ---------------------------------------------------------------------------
+# Per-object checks (take bpy objects as arguments)
+# ---------------------------------------------------------------------------
+
 def check_object_prefix(obj) -> dict | None:
     """Check that object has the correct type prefix."""
     prefix = PREFIXES.get(obj.type)
     if prefix is None:
-        return None   # type not tracked
+        return None
 
     if not obj.name.startswith(prefix):
-        # Default Blender name?
         base = re.split(r"\.\d+$", obj.name)[0]
         if base in DEFAULT_BLENDER_NAMES:
             return _issue("ERROR", obj.name,
@@ -95,11 +71,11 @@ def check_scale(obj) -> dict | None:
     if abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4 or abs(sz - 1.0) > 1e-4:
         return _issue("WARNING", obj.name,
                       f"Scale not applied: ({sx:.2f}, {sy:.2f}, {sz:.2f})",
-                      "")   # manual - changes geometry
+                      "")
     return None
 
 
-def check_materials(obj) -> list[dict]:
+def check_materials(obj) -> list:
     """Check that all materials have MAT_ prefix."""
     issues = []
     if obj.type != "MESH":
@@ -118,7 +94,7 @@ def check_materials(obj) -> list[dict]:
     return issues
 
 
-def check_uv_maps(obj) -> list[dict]:
+def check_uv_maps(obj) -> list:
     """Check that mesh has at least one UV map with a meaningful name."""
     if obj.type != "MESH" or not obj.data:
         return []
@@ -169,24 +145,23 @@ def run_scene_check(context) -> dict:
 
     Returns:
         {
-          "current_step":  str,
-          "next_step":     str | None,
+          "current_step":   str,
+          "next_step":      str | None,
           "current_issues": [issue, ...],
-          "next_issues":    [issue, ...],   # what's needed for next step
+          "next_issues":    [issue, ...],
           "error_count":    int,
           "warning_count":  int,
         }
     """
-    scene        = context.scene
-    step         = scene.ylos_current_step
-    next_step    = get_next_step(step)
+    scene     = context.scene
+    step      = scene.ylos_current_step
+    next_step = get_next_step(step)
     current_issues = []
     next_issues    = []
 
     visible_objects = [o for o in scene.objects if not o.hide_get()
                        and o.type in PREFIXES]
 
-    # --- Current step checks ---
     asset_name = scene.ylos_current_asset if hasattr(scene, "ylos_current_asset") else ""
 
     for obj in visible_objects:
@@ -203,11 +178,9 @@ def run_scene_check(context) -> dict:
             if issue:
                 current_issues.append(issue)
 
-    # Collection membership check
     if asset_name:
         current_issues.extend(check_collection_membership(scene, asset_name))
 
-    # --- Next step readiness ---
     if next_step == "rigging":
         for obj in visible_objects:
             if obj.type == "MESH":
@@ -223,7 +196,6 @@ def run_scene_check(context) -> dict:
             next_issues.extend(check_uv_maps(obj))
 
     elif next_step == "fx" or next_step is None:
-        # Pre-publish: full material check
         for obj in visible_objects:
             next_issues.extend(check_materials(obj))
 
@@ -241,14 +213,11 @@ def run_scene_check(context) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Auto-fix helpers (called by operators)
+# Auto-fix helpers
 # ---------------------------------------------------------------------------
 
 def auto_fix(fix_id: str, context) -> str:
-    """
-    Attempt to auto-fix an issue by its fix_id.
-    Returns a human-readable result message.
-    """
+    """Attempt to auto-fix an issue by its fix_id. Returns a result message."""
     scene = context.scene
 
     if fix_id.startswith("fix_prefix:"):
@@ -257,7 +226,6 @@ def auto_fix(fix_id: str, context) -> str:
         if not obj:
             return f"Object '{obj_name}' not found"
         prefix = PREFIXES.get(obj.type, "OBJ_")
-        # Strip existing wrong prefix if any
         clean = re.sub(r"^[A-Z]+_", "", obj.name)
         new_name = f"{prefix}{clean}"
         obj.name = new_name
@@ -290,7 +258,7 @@ def auto_fix(fix_id: str, context) -> str:
             uv = obj.data.uv_layers.get(uv_name)
             if uv:
                 uv.name = "UV0"
-                return f"UV map renamed to 'UV0'"
+                return "UV map renamed to 'UV0'"
         return f"Could not fix UV on '{obj_name}'"
 
     return f"No auto-fix for: {fix_id}"
@@ -300,25 +268,8 @@ def auto_fix(fix_id: str, context) -> str:
 # Asset collection helpers
 # ---------------------------------------------------------------------------
 
-def _name_matches_asset(obj_name: str, prefix: str, asset_name: str) -> bool:
-    """
-    True if obj_name follows the convention PREFIX_AssetName(_...) for this asset.
-
-    Requires the asset name to be a whole field: 'GEO_Hero' or 'GEO_Hero_A' match
-    asset 'Hero', but 'GEO_HeroSword' does NOT (avoids false positives where one
-    asset name is a prefix of another).
-    """
-    expected = (prefix + asset_name).lower()
-    low = obj_name.lower()
-    if not low.startswith(expected):
-        return False
-    rest = low[len(expected):]
-    # Accept exact match or a field separator right after the asset name.
-    return rest == "" or rest.startswith("_") or rest.startswith(".")
-
-
 def get_asset_objects_for_publish(scene, asset_name: str,
-                                   step: str) -> tuple[list, str]:
+                                   step: str) -> tuple:
     """
     Find the objects to export for this asset/step.
 
@@ -328,7 +279,6 @@ def get_asset_objects_for_publish(scene, asset_name: str,
 
     Returns (objects, method_description).
     """
-    # Method 1 - named collection
     coll = bpy.data.collections.get(asset_name)
     if coll:
         objects = [
@@ -339,7 +289,6 @@ def get_asset_objects_for_publish(scene, asset_name: str,
         if objects:
             return objects, f"collection '{asset_name}'"
 
-    # Method 2 - name-based prefix search (whole-field match)
     prefixes_by_step = {
         "modeling": ("GEO_",),
         "rigging":  ("GEO_", "RIG_"),
@@ -351,7 +300,7 @@ def get_asset_objects_for_publish(scene, asset_name: str,
     objects = [
         o for o in scene.objects
         if not o.hide_get()
-        and any(_name_matches_asset(o.name, p, asset_name) for p in prefixes)
+        and any(name_matches_asset(o.name, p, asset_name) for p in prefixes)
     ]
 
     if objects:
@@ -360,20 +309,16 @@ def get_asset_objects_for_publish(scene, asset_name: str,
     return [], "none"
 
 
-def check_collection_membership(scene, asset_name: str) -> list[dict]:
-    """
-    Check that GEO_{asset_name}* objects live inside the asset collection.
-    """
+def check_collection_membership(scene, asset_name: str) -> list:
+    """Check that GEO_{asset_name}* objects live inside the asset collection."""
     issues = []
     coll = bpy.data.collections.get(asset_name)
-    # Set of object names actually inside the collection (fixes the
-    # 'name in all_objects' bug: all_objects holds objects, not names).
     coll_object_names = (
         {o.name for o in coll.all_objects} if coll is not None else set()
     )
 
     for obj in scene.objects:
-        if not _name_matches_asset(obj.name, "GEO_", asset_name):
+        if not name_matches_asset(obj.name, "GEO_", asset_name):
             continue
         if coll is None:
             issues.append(_issue(
@@ -381,7 +326,7 @@ def check_collection_membership(scene, asset_name: str) -> list[dict]:
                 f"No collection '{asset_name}' - create it and move asset objects inside",
                 "",
             ))
-            break   # one warning per missing collection is enough
+            break
         elif obj.name not in coll_object_names:
             issues.append(_issue(
                 "WARNING", obj.name,

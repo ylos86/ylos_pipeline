@@ -5,7 +5,7 @@
 import bpy
 import os
 from bpy.props import StringProperty, EnumProperty, BoolProperty
-from ..core.asset import list_publish_versions, get_latest_publish_path
+from ylos_core.asset import list_publish_versions, get_latest_publish_path
 
 
 # ---------------------------------------------------------------------------

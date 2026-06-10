@@ -4,7 +4,7 @@
 
 import bpy
 from bpy.props import StringProperty
-from ..core.asset import list_project_entities, invalidate_entity_cache
+from ylos_core.asset import list_project_entities, invalidate_entity_cache
 
 
 class YLOS_OT_AssetBrowser(bpy.types.Operator):

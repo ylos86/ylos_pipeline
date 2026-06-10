@@ -4,11 +4,11 @@
 # with type icons and per-step publish status indicators.
 
 import bpy
-from ..core.asset import (
+from ylos_core.asset import (
     list_project_entities,
     get_asset_step_status,
 )
-from ..core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
+from ylos_core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 
 _STEP_ABBREVS = {
     "modeling":  "M",

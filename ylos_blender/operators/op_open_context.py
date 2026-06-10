@@ -8,13 +8,13 @@ import os
 import subprocess
 import platform
 from bpy.props import StringProperty, BoolProperty
-from ..core.project import (
+from ylos_core.project import (
     load_project,
-    apply_scene_preset,
     find_project_root,
     PIPELINE_DIR,
     PROJECT_CONFIG_FILE,
 )
+from ..core_bpy.project_bpy import apply_scene_preset
 
 
 def _sanitize_path(raw: str) -> str:

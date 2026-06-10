@@ -1,27 +1,24 @@
+# Build outputs
+dist/
+ylos_blender/_vendor/
+ylos_houdini/pythonlibs/ylos_core/
+
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
-
-# Blender
-*.blend1
-*.blend2
+.pytest_cache/
+*.egg-info/
 
 # OS
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
+# Blender auto-backups
+*.blend1
+*.blend2
+*.blend3
 
-# Distribution
-*.zip
-dist/
-
-# Project data (never commit production files)
-YLOS_*/
+# Sentinel file written by build.py
+_VENDORED

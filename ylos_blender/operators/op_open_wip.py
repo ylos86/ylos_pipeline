@@ -5,8 +5,8 @@
 import bpy
 import os
 from bpy.props import StringProperty
-from ..core.asset import list_wip_versions, _get_entity_root
-from ..core.thumbnails import load_thumb_icon, get_thumb_path
+from ylos_core.asset import list_wip_versions, _get_entity_root
+from ..core_bpy.thumbnails import load_thumb_icon, get_thumb_path
 
 
 # ---------------------------------------------------------------------------

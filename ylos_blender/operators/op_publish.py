@@ -5,14 +5,14 @@
 import bpy
 import os
 from bpy.props import IntProperty, BoolProperty, EnumProperty, StringProperty
-from ..core.asset import (
+from ylos_core.asset import (
     resolve_publish_path,
     get_latest_publish_version,
     list_publish_versions,
 )
-from ..core.project import is_step_valid_for_context
-from ..core.usd_composer import compose_asset_root, compose_set_root
-from ..core.scene_checker import get_asset_objects_for_publish
+from ylos_core.project import is_step_valid_for_context
+from ylos_core.usd_composer import compose_asset_root, compose_set_root
+from ..core_bpy.scene_checker import get_asset_objects_for_publish
 
 
 def _usd_export(filepath: str, context,
