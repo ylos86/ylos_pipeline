@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # Ylos Pipeline - core/asset.py
 # Asset and shot creation on disk, path resolution for wip/publish,
-# version detection (manual control - no auto-increment).
+# version detection (manual control - no auto-increment),
+# name sanitization and validation utilities.
 
 import os
 import re
@@ -13,6 +14,68 @@ from .project import (
     SET_STEPS,
     load_project,
 )
+
+
+# ---------------------------------------------------------------------------
+# Naming helpers
+# ---------------------------------------------------------------------------
+
+# USD file naming prefix per asset sub-type (DOMAIN_AssetName_Variant.usd)
+ASSET_TYPE_PREFIXES = {
+    "PROP":        "PROP",
+    "CHARACTER":   "CHAR",
+    "ENVIRONMENT": "ENV",
+}
+
+# Parent collection in the Blender scene hierarchy per asset sub-type.
+# The asset working collection (bare name, no COL_ prefix) is placed
+# under these organizational containers so the outliner stays clean.
+ASSET_TYPE_PARENT_COL = {
+    "PROP":        "COL_ENV_Props",   # COL_ENV -> COL_ENV_Props
+    "CHARACTER":   "COL_CHAR",
+    "ENVIRONMENT": "COL_ENV",
+}
+
+
+def sanitize_entity_name(raw: str) -> str:
+    """
+    Normalize a raw user-typed name into a pipeline-safe identifier.
+
+    Rules:
+    - Strips leading/trailing whitespace
+    - Collapses spaces and hyphens (PascalCase join: 'Hero Char' -> 'HeroChar')
+    - Drops any character outside [A-Za-z0-9_]
+    - Strips leading underscores and digits
+
+    Returns '' if nothing remains (caller should reject).
+    """
+    name = raw.strip()
+    # Remove spaces/hyphens so 'Hero Char' -> 'HeroChar'
+    name = re.sub(r'[\s\-]+', '', name)
+    # Drop illegal characters
+    name = re.sub(r'[^A-Za-z0-9_]', '', name)
+    # Strip leading underscores and digits
+    name = name.lstrip('_0123456789')
+    return name
+
+
+def validate_entity_name(name: str) -> tuple:
+    """
+    Validate a (sanitized) entity name.
+
+    Returns (is_valid: bool, error_message: str).
+    Requirements: non-empty, at least 2 chars, starts with uppercase (PascalCase).
+    """
+    if not name:
+        return False, "Name cannot be empty."
+    if len(name) < 2:
+        return False, "Name must be at least 2 characters."
+    if not name[0].isupper():
+        return (
+            False,
+            "Name must start with an uppercase letter (PascalCase). Got: '" + name + "'",
+        )
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +106,8 @@ def get_step_path(entity_root: Path, step: str, sub: str) -> Path:
 # Asset creation
 # ---------------------------------------------------------------------------
 
-def create_asset(project_path: str, asset_name: str, steps: list = None) -> dict:
+def create_asset(project_path: str, asset_name: str, steps: list = None,
+                 asset_type: str = "PROP") -> dict:
     """
     Create the folder structure for a new asset.
 
@@ -51,6 +115,7 @@ def create_asset(project_path: str, asset_name: str, steps: list = None) -> dict
         project_path: Absolute path to project root.
         asset_name:   Asset name in PascalCase (e.g. "HeroCharacter").
         steps:        List of steps to create. Defaults to all ASSET_STEPS.
+        asset_type:   Sub-type: "PROP" | "CHARACTER" | "ENVIRONMENT".
 
     Returns:
         dict with "success", "asset_path", "message".
@@ -64,7 +129,7 @@ def create_asset(project_path: str, asset_name: str, steps: list = None) -> dict
         return {
             "success": False,
             "asset_path": str(asset_root),
-            "message": f"Asset already exists: {asset_name}",
+            "message": "Asset already exists: " + asset_name,
         }
 
     try:
@@ -72,8 +137,8 @@ def create_asset(project_path: str, asset_name: str, steps: list = None) -> dict
             (asset_root / step / "wip").mkdir(parents=True, exist_ok=True)
             (asset_root / step / "publish").mkdir(parents=True, exist_ok=True)
 
-        # Write a minimal asset manifest
-        _write_asset_manifest(asset_root, asset_name, steps)
+        _write_asset_manifest(asset_root, asset_name, steps,
+                              entity_type="asset", asset_subtype=asset_type)
 
     except Exception as e:
         return {"success": False, "asset_path": str(asset_root), "message": str(e)}
@@ -81,7 +146,7 @@ def create_asset(project_path: str, asset_name: str, steps: list = None) -> dict
     return {
         "success": True,
         "asset_path": str(asset_root),
-        "message": f"Asset {asset_name} created with steps: {', '.join(steps)}",
+        "message": "Asset " + asset_name + " created with steps: " + ", ".join(steps),
     }
 
 
@@ -99,7 +164,7 @@ def create_shot(project_path: str, shot_name: str, steps: list = None) -> dict:
         return {
             "success": False,
             "asset_path": str(shot_root),
-            "message": f"Shot already exists: {shot_name}",
+            "message": "Shot already exists: " + shot_name,
         }
 
     try:
@@ -115,7 +180,7 @@ def create_shot(project_path: str, shot_name: str, steps: list = None) -> dict:
     return {
         "success": True,
         "asset_path": str(shot_root),
-        "message": f"Shot {shot_name} created.",
+        "message": "Shot " + shot_name + " created.",
     }
 
 
@@ -130,7 +195,7 @@ def create_set(project_path: str, set_name: str, steps: list = None) -> dict:
         return {
             "success": False,
             "asset_path": str(set_root),
-            "message": f"Set already exists: {set_name}",
+            "message": "Set already exists: " + set_name,
         }
 
     try:
@@ -146,18 +211,30 @@ def create_set(project_path: str, set_name: str, steps: list = None) -> dict:
     return {
         "success": True,
         "asset_path": str(set_root),
-        "message": f"Set {set_name} created.",
+        "message": "Set " + set_name + " created.",
     }
 
 
-def _write_asset_manifest(root: Path, name: str, steps: list, entity_type: str = "asset"):
-    """Write a minimal YAML manifest alongside the asset folders."""
+def _write_asset_manifest(root: Path, name: str, steps: list,
+                           entity_type: str = "asset",
+                           asset_subtype: str = "") -> None:
+    """
+    Write manifest.json alongside the asset folders.
+
+    Stores the specific asset sub-type (PROP/CHARACTER/ENVIRONMENT) so that
+    the asset list panel can display the correct icon without needing to infer
+    the type from the name or folder structure.
+    """
     import json
+    # Prefer the specific sub-type over the generic entity_type so
+    # list_project_entities() gets the right icon key.
+    type_field = asset_subtype.upper() if asset_subtype else entity_type.upper()
     manifest = {
-        "name": name,
-        "type": entity_type,
-        "steps": steps,
-        "publishes": {step: [] for step in steps},
+        "name":        name,
+        "type":        type_field,     # PROP | CHARACTER | ENVIRONMENT | SHOT | SET
+        "entity_type": entity_type,    # asset | shot | set  (normalized)
+        "steps":       steps,
+        "publishes":   {step: [] for step in steps},
     }
     with open(root / "manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=4, ensure_ascii=False)
@@ -171,11 +248,11 @@ def _write_asset_manifest(root: Path, name: str, steps: list, entity_type: str =
 # Blender auto-backups (.blend1, .blend2) and thumbnails (_thumb.png) never
 # get picked up as versions.
 VERSION_PATTERN         = re.compile(r"_v(\d{3})\.blend$")
-VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(usd[az]?)$")
+VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(?:usd[az]?)$")
 
 
 def list_wip_versions(project_path: str, entity_name: str, step: str,
-                      entity_type: str = "asset") -> list[dict]:
+                      entity_type: str = "asset") -> list:
     """
     Return all existing WIP .blend files for a given entity+step, sorted by version.
     Each entry: {"version": int, "filename": str, "path": str, "date": str}
@@ -205,7 +282,7 @@ def list_wip_versions(project_path: str, entity_name: str, step: str,
 
 
 def list_publish_versions(project_path: str, entity_name: str, step: str,
-                          entity_type: str = "asset") -> list[dict]:
+                          entity_type: str = "asset") -> list:
     """Return all published USD files for a given entity+step."""
     root = _get_entity_root(project_path, entity_name, entity_type)
     pub_dir = root / step / "publish"
@@ -229,7 +306,7 @@ def list_publish_versions(project_path: str, entity_name: str, step: str,
 
 
 def get_latest_publish_path(project_path: str, entity_name: str, step: str,
-                            entity_type: str = "asset") -> str | None:
+                            entity_type: str = "asset"):
     """Return the path of the highest-version published USD for a step, or None."""
     versions = list_publish_versions(project_path, entity_name, step, entity_type)
     if not versions:
@@ -242,7 +319,7 @@ def build_wip_filename(entity_name: str, step: str, version: int) -> str:
     Construct a WIP .blend filename.
     e.g. HeroCharacter_modeling_v001.blend
     """
-    return f"{entity_name}_{step}_v{version:03d}.blend"
+    return entity_name + "_" + step + "_v" + str(version).zfill(3) + ".blend"
 
 
 def build_publish_filename(entity_name: str, step: str, version: int,
@@ -252,9 +329,10 @@ def build_publish_filename(entity_name: str, step: str, version: int,
     Default:  HeroCharacter_lookdev_v001.usd
     Variant:  HeroCharacter_lookdev_v001__Dirty.usd
     """
+    base = entity_name + "_" + step + "_v" + str(version).zfill(3)
     if variant and variant.lower() not in ("", "default"):
-        return f"{entity_name}_{step}_v{version:03d}__{variant}.{ext}"
-    return f"{entity_name}_{step}_v{version:03d}.{ext}"
+        return base + "__" + variant + "." + ext
+    return base + "." + ext
 
 
 def resolve_wip_save_path(project_path: str, entity_name: str, step: str,
@@ -312,7 +390,7 @@ def _get_entity_root(project_path: str, entity_name: str,
         return get_shot_root(project_path, entity_name)
     elif entity_type == "set":
         return get_set_root(project_path, entity_name)
-    raise ValueError(f"Unknown entity type: {entity_type}")
+    raise ValueError("Unknown entity type: " + entity_type)
 
 
 # ---------------------------------------------------------------------------
@@ -321,18 +399,18 @@ def _get_entity_root(project_path: str, entity_name: str,
 
 import time as _time
 
-_entity_cache: dict = {}
+_entity_cache = {}
 _CACHE_TTL = 4.0   # seconds before re-reading from disk
 
 
 def list_project_entities(project_path: str,
-                          entity_type: str = "asset") -> list[dict]:
+                          entity_type: str = "asset") -> list:
     """
     List all entities (assets/shots/sets) in the project.
     Returns list of dicts: {name, type_label, type_icon, path}
     Caches results for _CACHE_TTL seconds to avoid hammering the filesystem.
     """
-    cache_key = f"{project_path}:{entity_type}"
+    cache_key = project_path + ":" + entity_type
     cached = _entity_cache.get(cache_key)
     if cached and (_time.time() - cached["ts"]) < _CACHE_TTL:
         return cached["data"]

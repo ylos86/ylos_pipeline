@@ -1,3 +1,24 @@
+## [0.2.7] - 2026-06-10
+
+### Added
+- `sanitize_entity_name()` — strips spaces, hyphens, illegal chars; joins words PascalCase-style
+- `validate_entity_name()` — enforces non-empty, >=2 chars, uppercase first letter
+- `ASSET_TYPE_PARENT_COL` — maps PROP/CHARACTER/ENVIRONMENT to target COL_ hierarchy
+- `ASSET_TYPE_PREFIXES` — USD file domain prefix per asset sub-type
+- Asset `manifest.json` now stores `entity_type` (asset/shot/set) + `type` (PROP/CHARACTER/ENVIRONMENT)
+  so the asset list panel shows the correct icon without inferring from name
+
+### Changed
+- `create_asset()` accepts new `asset_type` kwarg (default "PROP")
+- `op_new_asset`: asset collection is now placed under the correct parent collection:
+  - PROP -> COL_ENV / COL_ENV_Props
+  - CHARACTER -> COL_CHAR
+  - ENVIRONMENT -> COL_ENV
+  - SHOT -> COL_SHOTS
+  - SET -> COL_ENV / COL_SETS
+- `op_new_asset`: dialog shows live preview of sanitized name and collection target
+- Collection creation now applies to ASSET, SHOT, and SET (was ASSET only)
+
 # Changelog
 
 All notable changes to Ylos Pipeline are documented here.
