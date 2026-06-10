@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+
+  <tool name="ylos_open_panel" label="Ylos" icon="MISC_python">
+    <toolMenuContext name="viewer">
+      <contextNetType>OBJ</contextNetType>
+      <contextNetType>LOP</contextNetType>
+    </toolMenuContext>
+    <script scriptType="python"><![CDATA[
+from ylos_houdini.panel import show_floating
+show_floating()
+    ]]></script>
+    <help><![CDATA[Open the Ylos Pipeline panel (floating window).]]></help>
+  </tool>
+
+  <tool name="ylos_save_wip" label="Save WIP" icon="DESKTOP_save">
+    <toolMenuContext name="viewer">
+      <contextNetType>OBJ</contextNetType>
+      <contextNetType>LOP</contextNetType>
+    </toolMenuContext>
+    <script scriptType="python"><![CDATA[
+from ylos_houdini.wip import save_wip_dialog
+save_wip_dialog()
+    ]]></script>
+    <help><![CDATA[Save the current hip as a versioned Ylos WIP file.]]></help>
+  </tool>
+
+  <shelf name="ylos_shelf" label="Ylos Pipeline">
+    <memberTool name="ylos_open_panel"/>
+    <memberTool name="ylos_save_wip"/>
+  </shelf>
+
+</shelfDocument>

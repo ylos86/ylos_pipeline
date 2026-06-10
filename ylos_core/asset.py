@@ -202,13 +202,34 @@ def _write_asset_manifest(root: Path, name: str, steps: list,
 VERSION_PATTERN         = re.compile(r"_v(\d{3})\.blend$")
 VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(?:usd[az]?)$")
 
+# Houdini saves .hip (commercial), .hiplc (indie), .hipnc (apprentice).
+# All three are valid WIP extensions for the Houdini adapter.
+HIP_EXTENSIONS = ("hip", "hiplc", "hipnc")
+
+
+def _make_wip_pattern(exts):
+    """Build a compiled regex matching versioned WIPs for the given extensions."""
+    ext_alts = "|".join(re.escape(e.lstrip(".")) for e in exts)
+    return re.compile(r"_v(\d{3})\.(?:" + ext_alts + r")$")
+
 
 def list_wip_versions(project_path: str, entity_name: str, step: str,
-                      entity_type: str = "asset") -> list:
+                      entity_type: str = "asset",
+                      exts: list = None) -> list:
     """
-    Return all existing WIP .blend files for a given entity+step, sorted by version.
+    Return all existing WIP files for a given entity+step, sorted by version.
+
+    Args:
+        exts: List of file extensions to include (without leading dot).
+              Defaults to ["blend"]. Pass list(HIP_EXTENSIONS) for Houdini.
+
     Each entry: {"version": int, "filename": str, "path": str, "date": str}
     """
+    if exts is None:
+        exts = ["blend"]
+    ext_set = {e.lower().lstrip(".") for e in exts}
+    pattern = _make_wip_pattern(ext_set)
+
     root = _get_entity_root(project_path, entity_name, entity_type)
     wip_dir = root / step / "wip"
 
@@ -217,9 +238,9 @@ def list_wip_versions(project_path: str, entity_name: str, step: str,
 
     results = []
     for f in sorted(wip_dir.iterdir()):
-        if f.suffix.lower() != ".blend":
+        if f.suffix.lower().lstrip(".") not in ext_set:
             continue
-        m = VERSION_PATTERN.search(f.name)
+        m = pattern.search(f.name)
         if m:
             mtime = f.stat().st_mtime
             date_str = datetime.fromtimestamp(mtime).strftime("%b %d, %H:%M")
@@ -266,8 +287,14 @@ def get_latest_publish_path(project_path: str, entity_name: str, step: str,
     return versions[-1]["path"]
 
 
-def build_wip_filename(entity_name: str, step: str, version: int) -> str:
-    return entity_name + "_" + step + "_v" + str(version).zfill(3) + ".blend"
+def build_wip_filename(entity_name: str, step: str, version: int,
+                       ext: str = "blend") -> str:
+    """
+    Construct a WIP filename.
+    e.g. HeroCharacter_modeling_v001.blend  (Blender)
+         HeroCharacter_modeling_v001.hipnc  (Houdini Apprentice)
+    """
+    return entity_name + "_" + step + "_v" + str(version).zfill(3) + "." + ext.lstrip(".")
 
 
 def build_publish_filename(entity_name: str, step: str, version: int,
@@ -279,9 +306,11 @@ def build_publish_filename(entity_name: str, step: str, version: int,
 
 
 def resolve_wip_save_path(project_path: str, entity_name: str, step: str,
-                          version: int, entity_type: str = "asset") -> str:
+                          version: int, entity_type: str = "asset",
+                          ext: str = "blend") -> str:
+    """Full absolute path for a WIP save, given explicit version and extension."""
     root = _get_entity_root(project_path, entity_name, entity_type)
-    filename = build_wip_filename(entity_name, step, version)
+    filename = build_wip_filename(entity_name, step, version, ext)
     return str(root / step / "wip" / filename)
 
 
@@ -296,8 +325,10 @@ def resolve_publish_path(project_path: str, entity_name: str, step: str,
 
 
 def get_latest_wip_version(project_path: str, entity_name: str, step: str,
-                           entity_type: str = "asset") -> int:
-    versions = list_wip_versions(project_path, entity_name, step, entity_type)
+                           entity_type: str = "asset",
+                           exts: list = None) -> int:
+    """Return the highest existing WIP version number, or 0 if none exist."""
+    versions = list_wip_versions(project_path, entity_name, step, entity_type, exts)
     if not versions:
         return 0
     return versions[-1]["version"]

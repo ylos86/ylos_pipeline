@@ -1,0 +1,15 @@
+{
+    "env": [
+        {
+            "PYTHONPATH": {
+                "value": "$YLOS_PIPELINE_PATH/pythonlibs",
+                "method": "prepend"
+            }
+        }
+    ],
+    "path":                 "$YLOS_PIPELINE_PATH",
+    "hpath":                "$YLOS_PIPELINE_PATH",
+    "python_panel_path":    "$YLOS_PIPELINE_PATH/python_panels",
+    "toolbar_path":         "$YLOS_PIPELINE_PATH/toolbar",
+    "otlscan_path":         "$YLOS_PIPELINE_PATH/otls"
+}

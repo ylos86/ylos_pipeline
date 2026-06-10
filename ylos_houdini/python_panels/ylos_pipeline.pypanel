@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+  <interface
+    name="ylos_pipeline"
+    label="Ylos Pipeline"
+    icon="MISC_python"
+    help_url="">
+    <script><![CDATA[
+def createInterface():
+    from ylos_houdini.panel import YlosPipelinePanel
+    return YlosPipelinePanel()
+    ]]></script>
+    <help><![CDATA[
+Ylos Pipeline panel.
+Tabs: Pipeline (project/context), Assets (entity list), Scene (save WIP, import to Solaris).
+    ]]></help>
+  </interface>
+</pythonPanelDocument>
