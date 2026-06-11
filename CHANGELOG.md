@@ -44,6 +44,132 @@ ylos_pipeline/
 
 ---
 
+## [0.3.2] - 2026-06-11
+
+### Architecture — Phase 3: FX payload + prim stability + sidecars
+
+All changes are Blender-side. Zero behaviour change for non-FX workflows.
+
+#### `ylos_core/usd_composer.py`
+- FX step is now always emitted as a **payload arc** on `/ROOT/{Entity}/fx`,
+  never as a sublayer. Heavy time-sampled caches are deferred until the
+  consumer activates the payload (arch doc §3.2). Validated with usd-core:
+  `Usd.Stage.Open(..., load=Usd.Stage.LoadNone)` confirms the FX scope is
+  present but unloaded at open time.
+- `write_usda_with_variants`: new `fx_payload_path` parameter; injects
+  `def Scope "fx" (prepend payload = @rel@)` as a child of the entity prim
+  in both no-variant and variant cases.
+- `compose_asset_root`: separates FX from other steps; returns
+  `fx_payload_path` in the result dict; FX note appended to the message.
+- `read_root_fx_payload`: new reader, no pxr required.
+- `FX_STEP = "fx"` constant exported.
+
+#### `ylos_blender/operators/op_publish.py` (full rewrite)
+- **Sidecar written after every successful publish** via
+  `ylos_core.manifest.write_publish_sidecar` (entity, step, version,
+  `dcc="blender"`, `dcc_version`, `prim_paths`, `variant`, `source_wip`,
+  `frame_range` for FX).
+- **Prim stability check** before modeling publish N>1 (arch doc §4):
+  compares derived prim paths against the previous publish sidecar via
+  `find_removed_prims`. Removed prims trigger a blocking-confirmable
+  warning listing the missing paths with an explicit note that Houdini
+  lookdev overs will be broken. A `confirm_stability` checkbox must be
+  enabled to proceed.
+- **FX animated export**: `export_animation=True` with explicit
+  `fx_frame_start` / `fx_frame_end` (pre-populated from scene range,
+  editable in the publish dialog).
+- `_get_prim_paths(objects, entity_name)` — derives `/ROOT/{entity}/{obj.name}`
+  for MESH/ARMATURE/CURVE objects.
+
+#### Tests
+- 17 new `TestFxPayloadOutput` tests (USDA text validation).
+- 3 new `TestFxPayloadUsdCore` round-trip tests requiring `usd-core`.
+- Total: **133 tests**.
+
+---
+
+## [0.3.1] - 2026-06-11
+
+### Architecture — Phase 2: Houdini read-only adapter
+
+All Houdini work. Zero change to Blender adapter behaviour.
+Fully usable under Apprentice 21.0.631 (read USD, save .hipnc).
+Publish actions (Phase 4) remain gated on Indie licence.
+
+#### New package: `ylos_houdini/`
+```
+ylos_houdini/
+  packages/ylos_pipeline.json    Houdini package — PYTHONPATH + HOUDINI_PATH
+                                 via $YLOS_PIPELINE_PATH env variable
+  startup/ylos_init.py           Registers afterLoad callback at Houdini start
+  python_panels/ylos_pipeline.pypanel
+  toolbar/ylos.shelf             Tools: "Ylos" (open panel) + "Save WIP"
+  pythonlibs/ylos_houdini/       Python adapter modules (see below)
+```
+
+#### `ylos_houdini/session.py` — `YlosSession` singleton
+- Holds active project/entity/step context for the Houdini session.
+- **Hip persistence**: `hou.node('/').setUserData("ylos_context", ...)` written
+  on every context mutation; restored by the `afterLoad` callback.
+- **Conflict resolution**: hip userData always wins over `ylos_prefs.json`.
+  Prefs are only consulted when opening a blank hip with no context.
+- **`ylos_prefs.json`**: persists last-used project path in
+  `$HOUDINI_USER_PREF_DIR/` for blank-hip auto-load.
+- **License detection**: `hou.licenseCategory()` cached on first access.
+  `can_publish()` returns False for Apprentice/Education.
+- **Change notification**: `register_on_change(callback)` for panel refresh.
+
+#### `ylos_houdini/wip.py` — versioned WIP save
+- Extension determined by licence: Apprentice → `.hipnc`, Indie → `.hiplc`,
+  Commercial → `.hip`.
+- Version detection reuses `ylos_core.asset.list_wip_versions` parameterised
+  by `HIP_EXTENSIONS` — no duplication of version logic.
+- `save_wip_dialog()`: Houdini `hou.ui.readInput` dialog, callable from shelf.
+
+#### `ylos_houdini/lop_utils.py` — LOP stage import
+- `import_asset_to_stage()`: creates a Reference LOP node pointing to
+  the entity's `asset_root.usd` in the active Solaris stage.
+- `import_current_entity()`: panel button convenience wrapper.
+- `hda_import_asset_cook()`: cook script for the `Ylos Import Asset` HDA.
+
+#### `ylos_houdini/panel.py` — PySide2/6 Python Panel
+Three tabs mirroring the Blender addon:
+- **Pipeline**: project load, entity/step selectors, licence badge,
+  Apprentice notice when publish is disabled.
+- **Assets**: entity list with step-status colour grid (MOD/RIG/LKD/FX).
+- **Scene**: Save WIP, Open Root in Solaris, WIP history, publish history.
+Auto-refreshes on session change via `YlosSession.register_on_change`.
+
+#### `create_hdas.py` (repo root)
+- Run once from the Houdini Python Shell to generate
+  `ylos_houdini/otls/ylos_import_asset.hda` (LOP type `ylos::import_asset::1.0`).
+
+#### `ylos_core/asset.py` extensions (backward-compatible)
+- `list_wip_versions`: new `exts` param (default `["blend"]`).
+- `build_wip_filename`: new `ext` param (default `"blend"`).
+- `resolve_wip_save_path`: new `ext` param.
+- `get_latest_wip_version`: new `exts` param.
+- `HIP_EXTENSIONS = ("hip", "hiplc", "hipnc")` exported.
+
+#### `build.py`
+- Houdini package build now functional: vendors `ylos_core` into
+  `pythonlibs/ylos_core/`, copies to `dist/ylos_houdini/` with
+  install instructions.
+
+#### Installation (Houdini)
+```bash
+python3 build.py --houdini
+# -> dist/ylos_houdini/
+mv dist/ylos_houdini ~/tools/ylos_houdini
+# houdini.env:
+YLOS_PIPELINE_PATH = /Users/<you>/tools/ylos_houdini
+cp $YLOS_PIPELINE_PATH/packages/ylos_pipeline.json $HOUDINI_USER_PREF_DIR/packages/
+# Then inside Houdini Python Shell:
+exec(open("/path/to/ylos_pipeline/create_hdas.py").read())
+```
+
+---
+
 ## [0.2.7] - 2026-06-10
 
 ### Added

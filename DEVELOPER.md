@@ -161,22 +161,42 @@ the `allow_full_scene` flag (UI: "Allow Full-Scene Export").
 No `pxr` in Blender's Python, so root files are written as plain-text USDA and
 the subset we write is round-trip readable.
 
-- **Unified convention:** `defaultPrim = "ROOT"` everywhere; the entity prim is
-  `/ROOT/{EntityName}`. Per-step publishes compose as `subLayers`
-  (weakest first in the file list, reversed on write so the strongest opinion is
-  last in USD -- lookdev > rigging > modeling).
-- **Variants:** when a step has >1 variant for its latest version,
-  `write_usda_with_variants` emits a `variantSet "{step}Variant"` on the entity
-  prim, each variant carrying a `references` arc to its publish. Syntax is
-  canonical USDA and has been validated against `usd-core` (opens, lists
-  variants, switches, resolves references).
-- **Readers:** `read_root_sublayers()` and `read_root_variants()` parse back the
-  exact subset we write. These are not general USD parsers -- if you change the
-  writer format, change the readers in lockstep.
+**Unified convention:** `defaultPrim = "ROOT"` everywhere; the entity prim is
+`/ROOT/{EntityName}`. Per-step publishes compose as `subLayers` (weakest first
+in the file list, reversed on write so the strongest opinion is last in USD --
+lookdev > rigging > modeling).
 
-For anything heavier (payloads, deep edits) the intended path is an **external**
-Python env with `usd-core`, not bundling `pxr` into Blender. See the
-`blender-ta` skill notes on why pip-into-Blender-python is discouraged.
+**Variants:** when a step has >1 variant for its latest version,
+`write_usda_with_variants` emits a `variantSet "{step}Variant"` on the entity
+prim, each variant carrying a `references` arc to its publish.
+
+**FX payload (Phase 3):** the FX step is never sublayered. Instead, a
+`def Scope "fx" (prepend payload = @...@)` child prim is emitted under the
+entity prim. This means FX caches are deferred and do not load at stage open
+time (validated with `usd-core` `Usd.Stage.LoadNone`). Rule: if `step == FX_STEP`,
+`compose_asset_root` routes it to `fx_payload_path`, not `layers_used`.
+
+Resulting USDA structure:
+```
+#usda 1.0
+( defaultPrim = "ROOT"  subLayers = [ @modeling@, @rigging@ ] )
+
+def Xform "ROOT" {
+    def Xform "Hero" (
+        prepend variantSets = ["lookdevVariant"]
+    ) {
+        variantSet "lookdevVariant" = { "Default" (...) {} }
+
+        def Scope "fx" (
+            prepend payload = @../../fx/publish/Hero_fx_v001.usd@
+        ) { }
+    }
+}
+```
+
+**Readers:** `read_root_sublayers()`, `read_root_variants()`, and
+`read_root_fx_payload()` parse back the exact subset we write without pxr.
+If you change the writer format, change the readers in lockstep.
 
 ---
 
@@ -205,32 +225,33 @@ there and to the relevant `operators/__init__.py` import block.
 
 ---
 
-## 6. Testing without Blender
+## 6. Testing
 
-`core` is import-safe under a mock `bpy` because it avoids `bpy.ops`. A minimal
-mock that loads the whole addon and dry-runs register/unregister:
+**133 tests, all bpy-free.** Run with `python3 -m pytest tests/ -v`.
 
-```python
-# Build a fake 'bpy' package with bpy.props / bpy.types / bpy.utils(.previews),
-# register_class that raises on duplicates, then:
-spec = importlib.util.spec_from_file_location(
-    "ylos_pipeline", ADDON/"__init__.py",
-    submodule_search_locations=[str(ADDON)])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-mod.register(); mod.unregister()   # asserts no duplicate bl_idname / class name
-```
+`ylos_core` has no bpy imports so tests run natively. `ylos_blender` operators
+are not tested directly (bpy required); test coverage comes from the core logic
+they call.
 
-USDA output is validated for real with `usd-core` (pip-installable outside
-Blender): open each generated root, assert `defaultPrim == /ROOT`, and that
-variant sets list + switch + resolve references. This is the check you cannot do
-inside Blender, so do it here before shipping a composer change.
+Test files:
 
-Pure-logic checks worth keeping green:
-- `is_step_valid_for_context` rejects `composite` for `asset`.
-- `list_wip_versions` ignores `.blend1` / `_thumb.png`.
-- `scene_checker._name_matches_asset` rejects `GEO_HeroSword` for asset `Hero`.
-- `check_collection_membership` returns 0 issues when all objects are inside.
+| File | Coverage |
+|---|---|
+| `test_naming.py` | sanitize/validate, PREFIXES, name_matches_asset, get_next_step |
+| `test_project.py` | create_project, load_project, schema v2, step_owners, forward guard |
+| `test_asset.py` | create_asset/shot/set, version detection, path resolution |
+| `test_usd_composer.py` | sublayers, variantSets, **FX payload** (USDA text + usd-core round-trip) |
+| `test_manifest.py` | sidecar write/read, immutability guard, find_removed_prims |
+| `test_locking.py` | atomic_write_text, atomic_write_json |
+
+**usd-core round-trip tests** (`TestFxPayloadUsdCore`) are in `test_usd_composer.py`
+and run automatically when `pxr` is importable. Install with:
+`pip install usd-core --break-system-packages`
+
+Key assertions covered by usd-core tests:
+- `Usd.Stage.Open(..., load=Usd.Stage.LoadNone)` -- FX scope exists but is NOT loaded.
+- `Usd.Stage.Open(..., load=Usd.Stage.LoadAll)` -- FX scope loads on demand.
+- Modeling sublayer resolves `/ROOT/Hero/GEO_Body` after composition.
 
 ---
 
@@ -253,14 +274,104 @@ Pure-logic checks worth keeping green:
 
 ---
 
-## 8. Known limitations / next work
+## 8. Houdini adapter (`ylos_houdini/`)
 
-- Shot root USD assembly is not implemented (assets + sets only); publishing a
-  shot step exports USD but writes no shot_root.
-- `compose_*` always uses the latest version per step; no pinning to a specific
-  published version yet.
-- Texture export on USD publish is not path-managed; pack or manage separately.
-- `get_asset_step_status` hits disk per active row; fine at small scale, would
-  need batching for very large projects (the entity list is already TTL-cached
-  in `asset.py`).
-- No delivery-target export (USDZ/glTF) yet despite the `delivery/` folders.
+Introduced in Phase 2. Fully usable under Apprentice (read USD, save `.hipnc`).
+
+### Session persistence
+
+`YlosSession` (singleton in `pythonlibs/ylos_houdini/session.py`) holds the
+active context. It persists to `hou.node('/').userData("ylos_context")` on
+every mutation and restores it on `hipFileEventType.AfterLoad`.
+
+**Conflict resolution:** hip userData always wins over `ylos_prefs.json`.
+Prefs are only consulted when opening a blank/new hip with no context.
+This means a hip always remembers its own project, not the last one you used.
+
+The `afterLoad` callback is registered at Houdini start by
+`startup/ylos_init.py` (picked up via `$HOUDINI_PATH/startup/*.py`).
+
+### WIP save
+
+`wip.py` determines the file extension from `hou.licenseCategory()`:
+Apprentice → `.hipnc`, Indie → `.hiplc`, Commercial → `.hip`. Version
+detection reuses `ylos_core.asset.list_wip_versions(exts=HIP_EXTENSIONS)`
+-- no duplicated logic.
+
+### LOP import
+
+`lop_utils.import_asset_to_stage()` finds the entity's `asset_root.usd` and
+creates a Reference LOP node in `/stage`. If the node already exists (same
+entity imported twice), it updates the path in place rather than duplicating.
+
+### HDA
+
+`create_hdas.py` at the repo root generates the `Ylos Import Asset` HDA
+(`ylos::import_asset::1.0`) when run once from the Houdini Python Shell.
+The cook script calls `hda_import_asset_cook(node)` from `lop_utils.py`,
+which uses `pxr` (available natively in Houdini) to add the reference arc.
+
+### Panel
+
+PySide2/6 Python Panel registered via `python_panels/ylos_pipeline.pypanel`.
+Three tabs: Pipeline (project + context), Assets (entity list + step grid),
+Scene (save WIP + import to Solaris + history lists).
+
+---
+
+## 9. Publish sidecar (`ylos_core/manifest.py`)
+
+Every Blender USD publish writes an immutable JSON sidecar at
+`{publish_path}.manifest.json`:
+
+```json
+{
+    "schema_version": 1,
+    "entity": "CHAR_Hero",  "step": "modeling",  "version": 3,
+    "variant": null,
+    "dcc": "blender",  "dcc_version": "4.2.3",
+    "source_wip": "CHAR_Hero_modeling_v007.blend",
+    "timestamp": "2026-06-11T10:00:00Z",
+    "prim_paths": ["/ROOT/CHAR_Hero/GEO_Body", "/ROOT/CHAR_Hero/GEO_Head"],
+    "frame_range": null
+}
+```
+
+Sidecars are **immutable** -- never overwritten. `write_publish_sidecar` raises
+`FileExistsError` if the sidecar already exists (re-publishing the same version
+skips sidecar creation silently in the operator).
+
+`prim_paths` lists first-level GEO/ARMATURE/CURVE prims -- not the full
+hierarchy. This is enough for the prim stability check without parsing USD.
+
+### Prim stability check (§4)
+
+Before every modeling publish where `version > 1`:
+
+1. `_resolve_objects` gets the objects about to be exported.
+2. `_get_prim_paths(objects, entity_name)` derives `/ROOT/{entity}/{obj.name}`.
+3. `find_removed_prims(prev_publish_path, new_prims)` reads the previous
+   sidecar and diffs against the new list.
+4. If removals are found, the publish dialog shows a blocking warning with the
+   removed paths. The operator requires `confirm_stability = True` to proceed.
+
+The check uses only the sidecar -- no USD parse, no pxr.
+
+---
+
+## 10. Known limitations / next work
+
+**Phase 4 (Publish lookdev HDA) -- gated on Indie licence.**
+Apprentice writes `.usdnc` (non-commercial, unreadable outside Houdini
+non-commercial). Implementing publish on Apprentice would produce files the rest
+of the pipeline cannot consume. Gate is hard: do not develop in mock.
+
+**Phase 5 (Layout) -- gated on Indie licence.** Same reason.
+
+Other open items:
+- Shot root USD assembly is not implemented (assets + sets only).
+- `compose_*` always uses the latest published version per step; no pinning.
+- Texture paths are not managed at publish time (pack or manage separately).
+- No delivery-target export (USDZ/glTF) despite the `delivery/` folders.
+- FX payload does not support variants (single publish path only, Phase 3).
+- Multi-user locking is not implemented (last-write-wins, solo assumption).
