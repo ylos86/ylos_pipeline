@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # ylos_core/manifest.py
-# Publish sidecar writer (architecture doc §5).
+# Publish sidecar writer (architecture doc S-5).
 #
 # Every USD publish gets an immutable JSON sidecar at:
 #   {publish_path}.manifest.json
 #
 # The sidecar records provenance (which DCC, which wip, which timestamp)
 # and the list of prim paths exported -- used by the prim-stability check
-# (§4) without requiring a pxr USD parse.
+# (S-4) without requiring a pxr USD parse.
 #
 # Sidecars are IMMUTABLE: never rewritten, never deleted by pipeline code.
 # If a publish is superseded, its sidecar remains as an audit trail.
@@ -16,6 +16,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from .locking import atomic_write_json
 
 
 SIDECAR_SCHEMA_VERSION = 1
@@ -52,7 +53,7 @@ def write_publish_sidecar(
         prim_paths:   List of top-level prim paths exported
                       (e.g. ["/ROOT/CHAR_Hero/GEO_Body"]).
                       Limited to first-level under the entity prim plus GEO
-                      prims -- NOT the full hierarchy. See §5 of arch doc.
+                      prims -- NOT the full hierarchy. See S-5 of arch doc.
         variant:      Variant name, or None for the default publish.
         source_wip:   Filename of the WIP file that produced this publish.
         frame_range:  [start_frame, end_frame] for time-sampled publishes,
@@ -83,8 +84,7 @@ def write_publish_sidecar(
         "frame_range":    frame_range,
     }
 
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    atomic_write_json(target, data, indent=2)
 
 
 def read_publish_sidecar(publish_path: str) -> dict | None:
@@ -119,7 +119,7 @@ def find_removed_prims(old_publish_path: str, new_prim_paths: list) -> list:
     Returns a list of prim paths that were present in the old publish
     but are absent from new_prim_paths.
 
-    Used by the prim-stability check (§4): before publishing modeling
+    Used by the prim-stability check (S-4): before publishing modeling
     version N, call this with the previous publish path and the list
     of prims about to be exported. Any returned paths mean lookdev overs
     in Houdini may be broken.

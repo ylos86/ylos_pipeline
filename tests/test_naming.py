@@ -127,3 +127,41 @@ class TestPrefixTable:
     def test_required_types_present(self):
         for t in ("MESH", "ARMATURE", "LIGHT", "CAMERA", "EMPTY", "CURVE"):
             assert t in PREFIXES
+
+
+class TestValidateTexturePathsRelative:
+    def test_relative_path_inside_project(self, tmp_path):
+        from ylos_core.naming import validate_texture_paths_relative
+        (tmp_path / "textures").mkdir()
+        paths = ["textures/hero_diffuse.png", "textures/hero_normal.png"]
+        result = validate_texture_paths_relative(paths, str(tmp_path))
+        assert result == []
+
+    def test_absolute_path_flagged(self, tmp_path):
+        from ylos_core.naming import validate_texture_paths_relative
+        paths = ["/absolute/path/texture.png"]
+        result = validate_texture_paths_relative(paths, str(tmp_path))
+        assert "/absolute/path/texture.png" in result
+
+    def test_path_escaping_project_flagged(self, tmp_path):
+        from ylos_core.naming import validate_texture_paths_relative
+        paths = ["../../outside/texture.png"]
+        result = validate_texture_paths_relative(paths, str(tmp_path))
+        assert "../../outside/texture.png" in result
+
+    def test_empty_list_returns_empty(self, tmp_path):
+        from ylos_core.naming import validate_texture_paths_relative
+        assert validate_texture_paths_relative([], str(tmp_path)) == []
+
+    def test_mixed_paths(self, tmp_path):
+        from ylos_core.naming import validate_texture_paths_relative
+        (tmp_path / "textures").mkdir()
+        paths = [
+            "textures/ok.png",
+            "/absolute/bad.png",
+            "../../outside.png",
+        ]
+        bad = validate_texture_paths_relative(paths, str(tmp_path))
+        assert "textures/ok.png" not in bad
+        assert "/absolute/bad.png" in bad
+        assert "../../outside.png" in bad

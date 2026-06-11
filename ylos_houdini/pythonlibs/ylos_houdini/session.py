@@ -2,11 +2,11 @@
 # ylos_houdini/session.py
 # YlosSession -- singleton that holds the active project/entity/step context.
 #
-# Persistence model (arch doc §7):
+# Persistence model (arch doc S-7):
 #   - Primary store  : hou.node('/').userData("ylos_context")  -- survives hip save/load
 #   - Fallback store : $HOUDINI_USER_PREF_DIR/ylos_prefs.json -- last used project
 #
-# Conflict resolution rule (arch doc review §2):
+# Conflict resolution rule (arch doc review S-2):
 #   userData of the loaded hip always wins; ylos_prefs.json is only consulted
 #   when opening a blank / new hip that carries no context.
 #
@@ -265,7 +265,7 @@ def _on_hip_event(event_type) -> None:
         import hou
         if event_type == hou.hipFileEventType.AfterLoad:
             session = YlosSession.get()
-            # Hip userData takes priority (arch doc §7 conflict resolution).
+            # Hip userData takes priority (arch doc S-7 conflict resolution).
             restored = session.load_from_hip()
             if not restored:
                 # Blank/new hip -- fall back to last-used project from prefs.

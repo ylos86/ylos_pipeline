@@ -149,3 +149,48 @@ class TestStepConstants:
     def test_step_owners_coverage(self):
         for step in ASSET_STEPS:
             assert step in STEP_OWNERS
+
+
+class TestGetStepOwner:
+    def _config(self):
+        return {
+            "step_owners": {
+                "modeling": "blender",
+                "rigging":  "blender",
+                "fx":       "blender",
+                "lookdev":  "houdini",
+                "layout":   "houdini",
+                "lighting": "any",
+            }
+        }
+
+    def test_blender_step(self):
+        from ylos_core.project import get_step_owner
+        assert get_step_owner(self._config(), "modeling") == "blender"
+
+    def test_houdini_step(self):
+        from ylos_core.project import get_step_owner
+        assert get_step_owner(self._config(), "lookdev") == "houdini"
+
+    def test_any_step(self):
+        from ylos_core.project import get_step_owner
+        assert get_step_owner(self._config(), "lighting") == "any"
+
+    def test_unknown_step_returns_any(self):
+        from ylos_core.project import get_step_owner
+        assert get_step_owner(self._config(), "nonexistent") == "any"
+
+    def test_empty_config_returns_module_default(self):
+        from ylos_core.project import get_step_owner, STEP_OWNERS
+        # Empty config falls back to module-level STEP_OWNERS, not "any"
+        assert get_step_owner({}, "modeling") == STEP_OWNERS["modeling"]
+
+    def test_truly_unknown_step_returns_any(self):
+        from ylos_core.project import get_step_owner
+        assert get_step_owner({}, "completelymadeupstep") == "any"
+
+    def test_uses_default_step_owners_if_key_missing(self):
+        from ylos_core.project import get_step_owner, STEP_OWNERS
+        # Config without step_owners falls back to module-level STEP_OWNERS
+        result = get_step_owner({}, "lookdev")
+        assert result == STEP_OWNERS.get("lookdev", "any")

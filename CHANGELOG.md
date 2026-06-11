@@ -44,6 +44,77 @@ ylos_pipeline/
 
 ---
 
+## [0.3.3] - 2026-06-11
+
+### Correctifs v0.3.1 — C1-C7
+
+#### C1 — Atomicite : locking.py branche (code mort elimine)
+- `ylos_core/usd_composer.py` : toutes les ecritures de root passent par
+  `locking.atomic_write_text()`. Plus aucun `open(path, "w")` dans ce module.
+- `ylos_core/project.py` : `_write_project_json()` delegue a
+  `locking.atomic_write_json()`. La docstring qui renvoyait la responsabilite
+  aux callers est supprimee.
+- `ylos_core/manifest.py` : sidecar ecrit via `atomic_write_json`. Le guard
+  `FileExistsError` reste AVANT l'ecriture.
+- `ylos_core/locking.py` : `import json` remonte au niveau module.
+
+#### C2 — Immutabilite des publishes
+- `op_publish.execute()` : avant l'export, recherche le premier slot libre
+  (USD + sidecar absents) en incrementant depuis la version demandee.
+  Report si la version est changee : "v001 existe -- publie en v002".
+  Aucun chemin de code ne peut plus ecraser un publish existant.
+- `op_publish.draw()` : le label "WARNING: will overwrite" est remplace par
+  une info non-anxiogene : "vNNN existe -- sera publie en vMMM".
+- Le `except FileExistsError: pass` sur le sidecar est supprime. La garantie
+  de slot libre en amont rend une collision impossible ; si elle survient
+  malgre tout, c'est une vraie anomalie reportee en WARNING.
+
+#### C3 — Purge de sys.modules a l'unregister
+- `ylos_blender/__init__.py` : au chargement du module, si `ylos_core` est
+  deja dans `sys.modules` avec un `__file__` ne pointant pas vers notre
+  `_vendor`, purge avant injection. A l'unregister, purge complete de
+  `ylos_core` et `ylos_core.*` de `sys.modules`.
+- Hypothese documentee dans `DEVELOPER.md` : un seul addon Ylos par session.
+- `CORE_VERSION = "0.3.1"` expose dans `ylos_core/__init__.py`.
+
+#### C4 — step_owners : lu et applique
+- `ylos_core/project.py` : ajout de `get_step_owner(config, step) -> str`.
+- `op_publish` : si `step_owner not in ("blender", "any")`, le dialog affiche
+  un avertissement avec une checkbox `confirm_foreign_step`. L'execute est
+  bloque tant que la checkbox n'est pas cochee.
+
+#### C5 — Conformite ASCII
+- Remplacement de tous les caracteres section (U+00A7, present dans les
+  commentaires) par "S-" dans l'ensemble du repo.
+- Remplacement de U+21BA (fleche de rafraichissement dans panel.py) par "~".
+- Ajout de `tests/test_ascii_compliance.py` : test parametrise qui ouvre
+  chaque `.py` du repo en `encoding="ascii"` -- la regle est desormais
+  auto-appliquee.
+
+#### C6 — Harness Phase 1 complete
+- `build.py` : `_VENDORED` contient desormais un hash SHA-256 (16 car.) de
+  tous les `.py` du core plus un timestamp ISO. Detecte les edits manuels
+  de `_vendor`.
+- `ylos_core/__init__.py` : `CORE_VERSION = "0.3.1"`.
+- `bl_info` bumpe a `(0, 3, 1)`.
+- Ajout de `tests/test_composer_roundtrip.py` : tests USD round-trip
+  specifiques a usd-core, incluant `HasAuthoredPayloads()` sur le prim FX,
+  cycle Load/Unload, coexistence modeling + FX.
+
+#### C7 — Ajout mineur
+- `ylos_core/naming.py` : ajout de `validate_texture_paths_relative(paths,
+  project_root)` -- retourne les chemins absolus ou hors-projet. Destine au
+  publish lookdev Houdini (Phase 4, arch doc S-3.1). Couvert par tests.
+
+#### Tests
+- `tests/test_ascii_compliance.py` : nouveau, parametrise sur tous les .py.
+- `tests/test_composer_roundtrip.py` : nouveau, 9 tests usd-core.
+- `tests/test_project.py` : 6 nouveaux tests `TestGetStepOwner`.
+- `tests/test_naming.py` : 5 nouveaux tests `TestValidateTexturePathsRelative`.
+- Total : **209 tests verts**.
+
+---
+
 ## [0.3.2] - 2026-06-11
 
 ### Architecture — Phase 3: FX payload + prim stability + sidecars

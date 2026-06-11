@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import SCHEMA_VERSION
+from .locking import atomic_write_json
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ SET_STEPS = [
     "lighting",
 ]
 
-# Step-owner matrix (§2.1 of architecture doc).
+# Step-owner matrix (S-2.1 of architecture doc).
 # Value is the DCC that owns authoring for that step.
 # "any"    -- either DCC may publish; last-write-wins (solo assumption).
 # Blender/Houdini adapters use this to grey/deprioritize foreign steps in their UI.
@@ -128,6 +129,15 @@ STEPS_BY_CONTEXT = {
     "shot":  SHOT_STEPS,
     "set":   SET_STEPS,
 }
+
+
+def get_step_owner(config: dict, step: str) -> str:
+    """
+    Return the DCC that owns the given step, from project.json step_owners.
+    Returns "any" if the step is not in the matrix or config is missing.
+    Possible return values: "blender", "houdini", "any".
+    """
+    return config.get("step_owners", STEP_OWNERS).get(step, "any")
 
 
 def is_step_valid_for_context(step: str, context_type: str) -> bool:
@@ -214,14 +224,11 @@ def _build_project_config(name: str, prod_type: str, path: str) -> dict:
 
 
 def _write_project_json(project_path: Path, config: dict) -> None:
-    """Write project.json to the _pipeline folder (plain write -- callers
-    that need atomicity should use locking.atomic_write_json instead)."""
+    """Write project.json to the _pipeline folder via atomic write."""
     pipeline_dir = project_path / PIPELINE_DIR
     pipeline_dir.mkdir(parents=True, exist_ok=True)
     config_path = pipeline_dir / PROJECT_CONFIG_FILE
-
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
+    atomic_write_json(str(config_path), config)
 
 
 # ---------------------------------------------------------------------------

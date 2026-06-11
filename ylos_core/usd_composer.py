@@ -3,10 +3,10 @@
 # Assembles the USD root files for each asset/set.
 # Writes plain-text USDA -- no pxr dependency required.
 #
-# Composition model (arch doc §3):
+# Composition model (arch doc S-3):
 #   modeling < rigging < lookdev  -- composed as subLayers (strongest last)
 #   lookdev with variants         -- variantSet block on the entity prim
-#   fx                            -- payload arc on /ROOT/{Entity}/fx scope (§3.2)
+#   fx                            -- payload arc on /ROOT/{Entity}/fx scope (S-3.2)
 #
 # FX as payload means the cache is NOT loaded at open time until the consumer
 # activates the payload. This is the correct pattern for heavy time-sampled
@@ -23,6 +23,7 @@ from .asset import (
     get_set_root,
     list_publish_versions,
 )
+from .locking import atomic_write_text
 
 ROOT_PRIM = "ROOT"
 FX_STEP   = "fx"           # always payload, never sublayer
@@ -79,8 +80,7 @@ def write_usda_root(filepath: str, sublayers: list) -> None:
     lines.append(')\n\n')
     lines.append(f'def Xform "{ROOT_PRIM}"\n{{\n}}\n')
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+    atomic_write_text(filepath, "".join(lines))
 
 
 def write_usda_with_variants(filepath: str, sublayers: list,
@@ -123,8 +123,7 @@ def write_usda_with_variants(filepath: str, sublayers: list,
         else:
             lines.append(f'    def Xform "{entity_name}"\n    {{\n    }}\n')
         lines.append('}\n')
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.writelines(lines)
+        atomic_write_text(filepath, "".join(lines))
         return
 
     # Entity prim carrying variantSets.
@@ -161,8 +160,7 @@ def write_usda_with_variants(filepath: str, sublayers: list,
     lines.append('    }\n')   # close entity prim
     lines.append('}\n')       # close ROOT
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+    atomic_write_text(filepath, "".join(lines))
 
 
 # ---------------------------------------------------------------------------

@@ -3,3 +3,4 @@
 # Shared contract between the Blender and Houdini adapters.
 
 SCHEMA_VERSION = 2
+CORE_VERSION   = "0.3.1"

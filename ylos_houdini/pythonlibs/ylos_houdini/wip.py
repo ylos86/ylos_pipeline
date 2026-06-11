@@ -2,7 +2,7 @@
 # ylos_houdini/wip.py
 # Versioned WIP save for Houdini hip files.
 #
-# Extension is determined by the active license (arch doc §2):
+# Extension is determined by the active license (arch doc S-2):
 #   Apprentice  -> .hipnc
 #   Indie       -> .hiplc
 #   Commercial  -> .hip

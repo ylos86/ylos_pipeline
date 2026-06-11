@@ -112,3 +112,39 @@ def get_next_step(current_step: str) -> str | None:
         return STEP_ORDER[idx + 1] if idx + 1 < len(STEP_ORDER) else None
     except ValueError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Texture path validation (consumed by Phase 4 lookdev publish, arch doc S-3.1)
+# ---------------------------------------------------------------------------
+
+def validate_texture_paths_relative(paths: list, project_root: str) -> list:
+    """
+    Return paths that are NOT safely relative to project_root.
+
+    A path is flagged if:
+    - It is absolute (starts with / or contains a drive letter on Windows).
+    - It resolves outside the project_root tree.
+
+    Used by the Houdini lookdev publish tool to ensure no machine-local
+    absolute paths leak into published USD layers (arch doc S-3.1).
+
+    Args:
+        paths:        List of path strings from a USD layer (as authored).
+        project_root: Absolute path to the project root directory.
+
+    Returns:
+        List of offending paths (empty list = all paths are compliant).
+    """
+    import os
+    root = os.path.realpath(project_root)
+    offending = []
+    for p in paths:
+        if os.path.isabs(p):
+            offending.append(p)
+        else:
+            resolved = os.path.realpath(os.path.join(root, p))
+            # resolved must be root itself or a descendant
+            if resolved != root and not resolved.startswith(root + os.sep):
+                offending.append(p)
+    return offending

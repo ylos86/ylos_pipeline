@@ -7,14 +7,22 @@
 #   ylos_blender/    -- this addon (bpy-dependent layer)
 #   _vendor/ylos_core/ -- vendored copy of ylos_core, populated by build.py
 #
-# sys.path injection: _vendor/ is inserted at module load time (before
-# any operator-level imports) so "from ylos_core.xxx import yyy" resolves
-# correctly inside all submodules without requiring ylos_core to be installed.
+# sys.path/sys.modules management (C3):
+#   - _vendor/ is inserted at position 0 at module load time so our vendored
+#     core always wins over any other ylos_core on the path.
+#   - If ylos_core is already in sys.modules but points elsewhere (stale from
+#     a previous install or a different addon), it is purged before we inject
+#     our path, so our version is loaded cleanly.
+#   - On unregister, both sys.path and sys.modules are cleaned to allow
+#     disable -> zip-replace -> enable without a Blender restart.
+#   - Assumption: only one Ylos Pipeline addon active per Blender session.
+#     Running multiple versions simultaneously is unsupported; the last one
+#     to register wins the sys.modules slot.
 
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 3, 0),
+    "version": (0, 3, 1),
     "blender": (4, 2, 0),
     "location": "3D Viewport Header > Ylos button",
     "description": "Production pipeline - USD publish, WIP versioning, scene naming checker",
@@ -24,9 +32,19 @@ bl_info = {
 import sys
 from pathlib import Path
 
-# Inject _vendor/ into sys.path so ylos_core is importable from any submodule.
-# Done at module level so the path is available before any import below executes.
 _vendor_path = str(Path(__file__).parent / "_vendor")
+
+# --- Purge stale ylos_core from sys.modules if it doesn't point to our vendor.
+# This defends against a stale core loaded from a previous addon version or
+# from a system-wide install.
+if "ylos_core" in sys.modules:
+    existing_file = getattr(sys.modules["ylos_core"], "__file__", "") or ""
+    if _vendor_path not in existing_file:
+        _stale = [k for k in list(sys.modules) if k == "ylos_core" or k.startswith("ylos_core.")]
+        for _k in _stale:
+            del sys.modules[_k]
+
+# --- Inject vendor path so "from ylos_core.xxx import yyy" works in submodules.
 if _vendor_path not in sys.path:
     sys.path.insert(0, _vendor_path)
 
@@ -67,19 +85,13 @@ _classes = (
 
 
 def _draw_header_button(self, context):
-    """Ylos button injected into the 3D Viewport header."""
     layout = self.layout
     scene  = context.scene
-
     layout.separator()
-
     row = layout.row(align=True)
     row.operator("ylos.open_popup", text="Ylos", icon="FUND")
-
     if scene.ylos_project_name and scene.ylos_current_asset:
-        row.label(
-            text=f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}"
-        )
+        row.label(text=f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}")
 
 
 def register():
@@ -120,7 +132,11 @@ def unregister():
     from .core_bpy.thumbnails import clear_previews
     clear_previews()
 
-    # Clean up _vendor path from sys.path on unregister.
+    # Purge ylos_core from sys.modules so the next enable loads a fresh copy.
+    _stale = [k for k in list(sys.modules) if k == "ylos_core" or k.startswith("ylos_core.")]
+    for _k in _stale:
+        del sys.modules[_k]
+
     if _vendor_path in sys.path:
         sys.path.remove(_vendor_path)
 

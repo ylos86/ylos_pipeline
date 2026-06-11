@@ -2,7 +2,7 @@
 # ylos_houdini/panel.py
 # Ylos Pipeline Python Panel for Houdini.
 #
-# Three tabs mirroring the Blender addon (arch doc §8):
+# Three tabs mirroring the Blender addon (arch doc S-8):
 #   Pipeline  -- project load, current context, license badge
 #   Assets    -- entity list, step status
 #   Scene     -- save WIP, open root in Solaris, publish list
@@ -257,7 +257,7 @@ class _AssetsTab(QtWidgets.QWidget):
         top_row = QtWidgets.QHBoxLayout()
         top_row.addWidget(_label("ASSETS", dim=True))
         top_row.addStretch()
-        refresh_btn = _button("↺")
+        refresh_btn = _button("~")
         refresh_btn.setFixedWidth(28)
         refresh_btn.clicked.connect(self._refresh_list)
         top_row.addWidget(refresh_btn)
@@ -377,7 +377,7 @@ class _SceneTab(QtWidgets.QWidget):
 
         # Publish action disabled notice
         self._pub_notice = QtWidgets.QLabel(
-            "Publish (§4) requires Indie license."
+            "Publish (S-4) requires Indie license."
         )
         self._pub_notice.setStyleSheet(
             f"color:{_C['text_dim']};font-size:11px;"
