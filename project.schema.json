@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://blackkite.pipeline/project.schema.json",
+  "title": "Black Kite - project.json",
+  "description": "Manifeste de projet. Source de verite lisible par machine, lue par create_project.py, n8n et les plugins DCC. Tout changement de structure = bump de schema_version + migration, jamais d'edition silencieuse. additionalProperties est laisse a true pour que d'autres outils (suivi de production, etc.) puissent etendre le manifeste sans casser le contrat de base.",
+  "type": "object",
+  "required": ["schema_version", "name", "created_utc", "env", "structure"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version semantique du contrat. La validation refuse une version MAJEURE differente de l'outil."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Nom du projet (un seul segment, pas de separateur de chemin)."
+    },
+    "created_utc": {"type": "string", "format": "date-time"},
+    "modified_utc": {"type": "string", "format": "date-time"},
+    "env": {
+      "type": "object",
+      "description": "Variables d'environnement attendues. Aucun chemin absolu n'est stocke : le projet est relocalisable et se resout via ces env vars a l'execution.",
+      "required": ["root", "cache"],
+      "additionalProperties": false,
+      "properties": {
+        "root": {"type": "string", "description": "Env var de la racine SOURCE, ex $PROJ_ROOT (disque externe, permanent)."},
+        "cache": {"type": "string", "description": "Env var de la racine CACHE, ex $PROJ_CACHE (disque interne, regenerable)."}
+      }
+    },
+    "structure": {
+      "type": "object",
+      "description": "Trace de l'arborescence creee, pour audit et migration.",
+      "required": ["source", "cache"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"type": "array", "items": {"type": "string"}},
+        "cache": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "cache_per_project": {
+      "type": "boolean",
+      "description": "true = cache par projet sous $PROJ_CACHE ; false = cache centralise unique."
+    },
+    "dcc": {
+      "type": "object",
+      "description": "Reglages par DCC, remplis par les plugins (Houdini, Blender)."
+    },
+    "status": {
+      "type": "string",
+      "description": "Etat minimal. Le suivi de production reel (deadlines, client) n'est PAS gere ici."
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# Bundle redondant des sources (export/transfert, regenerable)
+files003.zip
+
+# Reglages locaux Claude Code (overrides machine, non partages)
+.claude/settings.local.json
