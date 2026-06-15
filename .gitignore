@@ -1,3 +1,7 @@
+# Bytecode Python (genere par les imports : CLI, tests, Python embarque de Blender)
+__pycache__/
+*.py[cod]
+
 # macOS
 .DS_Store
 
