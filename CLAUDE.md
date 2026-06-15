@@ -34,18 +34,21 @@ seulement le workflow humain immédiat.
    de création vit à **un seul endroit**, jamais dupliquée entre outils.
 
 ## État actuel
-`create_project.py` (stdlib, importable par les DCC) écrit `project.json`, crée
-`.metadata_never_index` (anti-indexation Spotlight) et un `.gitignore`. **Il émet encore la
-structure mince schéma `1.0.0`** (`_config/`, arbre plat) — il n'a **jamais** produit les
-projets réels (`YLOS__TEST`, `YLOS_Pachamama_TEST`), qui suivent un modèle USD plus riche.
+`create_project.py` (stdlib, importable par les DCC) émet la structure **schéma 2.0.0** via
+deux sous-commandes / fonctions :
+- `project` / `create()` → coquille asset-centric (`_pipeline/project.json`, `assets/`,
+  `sets/`+`shots/` vides, `references/`, `resources/`, `delivery/`, `edit/`) + cache séparé
+  sous `$PROJ_CACHE/<projet>`.
+- `asset` / `create_asset()` → scaffolde une entité (asset/set/shot) : steps → dossiers
+  (+`publish/`), `manifest.json`, stub `asset_root.usda` (convention USD).
+- `.metadata_never_index` (anti-Spotlight) + `.gitignore` (cache, rendus, `*.usdc` hors Git).
 
-Le **contrat schéma `2.0.0` est figé** (Incrément 1) :
-- `project.schema.json` — manifeste projet (principes verrouillés + `pipeline`/`scene`/`delivery`).
-- `asset.schema.json` — manifeste par entité (`entity_type` vs `type`, `steps`, `publishes`).
-- `docs/migration-1.0-to-2.0.md` — table de migration + convention USD à figer.
+Contrats figés : `project.schema.json`, `asset.schema.json`, `docs/usd-convention.md`,
+`docs/migration-1.0-to-2.0.md`. Validé end-to-end (arbre + JSON conformes aux schémas).
 
-**Alignement du générateur sur 2.0 = Incrément 2** (non implémenté). Migration des projets
-existants = Incrément 3.
+**Reste :** migrer les projets réels existants (`YLOS__TEST`, `Pachamama`) vers 2.0
+(Incrément 3) ; retirer le `~/Desktop/create_project.py` mort (Incrément 4) ; vérifier
+l'up-axis Blender↔USD à l'usage.
 
 ## Décisions tranchées (2026-06-14)
 1. **Design cible : hybride.** Garder les principes verrouillés, absorber le modèle métier

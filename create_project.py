@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
 """
-create_project.py - Createur de projet, pipeline Black Kite.
+create_project.py - Createur de projet & d'assets, pipeline Black Kite (schema 2.0).
 
 Source de verite unique de la logique de creation. Importable par les plugins DCC
 (Houdini/hython, Blender) : aucune dependance hors stdlib.
 
 Principes appliques :
   - Racine relocalisable : tout passe par $PROJ_ROOT (source) et $PROJ_CACHE (cache).
+    Aucun chemin absolu n'est stocke dans les manifestes.
   - Separation cache / source : source sur disque externe, cache regenerable sur interne.
-  - project.json = manifeste, source de verite lisible par machine (+ schema_version).
+    Le cache vit sous $PROJ_CACHE/<projet>, JAMAIS co-localise avec la source.
+  - project.json = manifeste, source de verite (schema_version 2.x, cf. project.schema.json).
+  - Topologie ASSET-CENTRIC : assets/ est la colonne vertebrale ; sets/ et shots/ sont du
+    scaffolding optionnel (crees vides).
   - Logique unique : ce module est importe, jamais duplique.
-  - Production != pipeline : le manifeste ne gere PAS le suivi de prod (statut client,
-    deadlines). C'est un probleme distinct, a traiter ailleurs.
+  - Production != pipeline : le manifeste ne gere PAS le suivi de prod (client, deadlines).
 
 Usage CLI :
-    python create_project.py "mon_projet"
-    python create_project.py "mon_projet" --root /Volumes/EXT/3D --cache ~/cache --force
+    python create_project.py project "mon_projet"
+    python create_project.py project "mon_projet" --root /Volumes/EXT/3D --cache ~/cache --force
+    python create_project.py asset  "/Volumes/EXT/3D/mon_projet" "Lina" --type CHARACTER
+    python create_project.py asset  "<projet>" "decor" --entity-type set --steps modeling,lookdev
 
 Usage import (plugin DCC) :
     import create_project
-    info = create_project.create("mon_projet")
+    info  = create_project.create("mon_projet")
+    asset = create_project.create_asset(info["source"], "Lina", asset_type="CHARACTER")
     manifest = create_project.read_manifest(info["source"])
     create_project.validate_manifest(manifest)
 """
@@ -34,14 +40,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # --------------------------------------------------------------------------------------
-# Constantes
+# Constantes - contrat
 # --------------------------------------------------------------------------------------
 
-SCHEMA_VERSION = "1.0.0"          # version du contrat project.json. A bumper a CHAQUE
-                                  # changement de schema (= migration, pas edit silencieux).
+SCHEMA_VERSION = "2.0.0"          # version du contrat (project.json ET manifeste d'asset).
+                                  # A bumper a CHAQUE changement de schema (= migration).
 MANIFEST_NAME = "project.json"
+ASSET_MANIFEST_NAME = "manifest.json"
+ASSET_ROOT_NAME = "asset_root.usda"   # fichier de composition USD (ASCII, cf. convention)
+PIPELINE_DIR = "_pipeline"        # dossier config/manifeste (renomme de _config en 2.0)
 SPOTLIGHT_MARKER = ".metadata_never_index"
 GITIGNORE_NAME = ".gitignore"
+
+TOPOLOGY = "asset-centric"
 
 # Noms des variables d'environnement (jamais de chemin absolu en dur dans les scenes DCC)
 ENV_ROOT = "PROJ_ROOT"            # racine SOURCE  - disque externe, permanent
@@ -51,37 +62,76 @@ ENV_CACHE = "PROJ_CACHE"          # racine CACHE   - disque interne, regenerable
 FALLBACK_ROOT = Path.home() / "BlackKite" / "projects"
 FALLBACK_CACHE = Path.home() / "BlackKite" / "cache"
 
-# Arborescence SOURCE (sous $PROJ_ROOT/<projet>) - permanent, versionne.
-# QUESTION OUVERTE (topologie) : tree hybride asset + shot. Si le travail se revele
-# purement shot-centric ou asset-centric, elaguer la branche inutile - ou remonter
-# 'assets' au-dessus des projets (bibliotheque transverse).
+# --- Defauts pipeline (taxonomie des steps + assemblage USD) --------------------------
+DEFAULT_ASSET_STEPS = ["modeling", "uvs", "rigging", "lookdev", "fx"]
+DEFAULT_SHOT_STEPS = ["layout", "animation", "lighting", "fx", "render", "composite"]
+DEFAULT_SET_STEPS = ["modeling", "lookdev", "lighting"]
+USD_ROOT_PRIM = "/ROOT"           # prim racine des stages d'ASSEMBLAGE (sets/shots).
+                                  # Les assets s'ancrent sous /<NomAsset> (cf. usd-convention.md).
+
+# --- Defauts scene (consommes par les plugins DCC a l'ouverture) ----------------------
+DEFAULT_SCENE = {
+    "fps": 24,
+    "fps_base": 1.0,
+    "unit_scale": 1.0,
+    "color_management": "AgX",
+    "renderer": "CYCLES",
+    "resolution_x": 2048,
+    "resolution_y": 1152,
+    "color_space": "Linear Rec.709",
+}
+
+DEFAULT_DELIVERY = {"targets": ["usd", "exr"]}
+
+# --- Convention USD (cf. docs/usd-convention.md) --------------------------------------
+USD_UP_AXIS = "Y"                 # axe d'echange USD (conversion Z<->Y geree par les DCC)
+USD_METERS_PER_UNIT = 1.0         # aligne sur scene.unit_scale
+
+# Mapping famille d'entite -> dossier parent dans la source
+ENTITY_DIR = {"asset": "assets", "set": "sets", "shot": "shots"}
+_DEFAULT_STEPS = {"asset": DEFAULT_ASSET_STEPS, "set": DEFAULT_SET_STEPS, "shot": DEFAULT_SHOT_STEPS}
+_STEPS_KEY = {"asset": "asset_steps", "set": "set_steps", "shot": "shot_steps"}
+
+# Arborescence SOURCE (sous $PROJ_ROOT/<projet>) - permanent, versionne. Asset-centric.
 SOURCE_TREE = [
-    "_config",                    # config projet + manifeste
-    "assets",                     # travail asset-centric (modeles, lookdev, rigs)
-    "shots",                      # travail shot-centric (seq/shot crees a la demande)
-    "ref/ai",                     # references IA (Midjourney, NanoBanana) + metadata
-    "ref/photo",                  # references photo
-    "ref/board",                  # moodboards / planches
+    PIPELINE_DIR,                 # project.json (manifeste)
+    "assets",                     # COLONNE VERTEBRALE (asset-centric)
+    "sets",                       # assemblage - optionnel (vide au scaffold)
+    "shots",                      # shots - optionnel (vide au scaffold)
+    "references/ai",              # references IA (Midjourney / NanoBanana) + metadata
+    "references/photo",           # references photo
+    "references/board",           # moodboards / planches
+    "resources/hdri",             # ressources reutilisables intra-projet
+    "resources/textures",
     "delivery",                   # masters / sorties finales
+    "edit",                       # montage
 ]
 
-# Arborescence CACHE (sous $PROJ_CACHE/<projet>) - jetable, hors Git.
-# QUESTION OUVERTE (placement du cache) : ici cache PAR PROJET sous $PROJ_CACHE.
-# Alternative = cache centralise unique. Basculer CACHE_PER_PROJECT pour changer.
+# Arborescence CACHE (sous $PROJ_CACHE/<projet>) - jetable, hors Git, NVMe interne.
 CACHE_PER_PROJECT = True
 CACHE_TREE = [
     "houdini",                    # caches Houdini (.bgeo.sc, sims, flip...)
     "blender",                    # caches Blender (bake, sims)
     "render",                     # rendus / AOVs regenerables
+    "alembic",                    # caches .abc
+    "sim",                        # simulations
     "tmp",
 ]
 
 GITIGNORE_CONTENT = """\
 # --- Pipeline Black Kite : regenerable / lourd, hors Git ---
-cache/
-delivery/**/render/
+# Le cache vit sous $PROJ_CACHE (hors arbre source) : rien a ignorer ici pour ca.
 
-# Caches DCC
+# Rendus / masters lourds
+delivery/**/render/
+*.exr
+*.ass
+
+# Geo USD binaire lourde : hors Git. La compo (.usda) est versionnee, la geo (.usdc)
+# est lourde/regeneree. Defaut a affiner par projet.
+*.usdc
+
+# Caches DCC ecrits par erreur dans la source
 *.bgeo.sc
 *.sim
 
@@ -91,18 +141,24 @@ delivery/**/render/
 *.blend1
 *.blend2
 
-# Rendus
-*.exr
-*.ass
-
 # macOS
 .DS_Store
 """
 
 
 # --------------------------------------------------------------------------------------
-# Resolution des chemins (relocalisable)
+# Utilitaires
 # --------------------------------------------------------------------------------------
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _validate_segment(name):
+    """Un nom = un seul segment de chemin, pas d'espace de bord, pas de separateur."""
+    if not name or "/" in name or "\\" in name or name.strip() != name:
+        raise ValueError(f"Nom invalide (un seul segment, sans /): {name!r}")
+
 
 def _resolve(explicit, env_name, fallback):
     """Resout une racine : argument explicite > variable d'env > fallback (avec warning)."""
@@ -126,26 +182,45 @@ def resolve_cache(explicit=None):
     return _resolve(explicit, ENV_CACHE, FALLBACK_CACHE)
 
 
+def _make_tree(base, tree):
+    base.mkdir(parents=True, exist_ok=True)
+    for rel in tree:
+        (base / rel).mkdir(parents=True, exist_ok=True)
+
+
 # --------------------------------------------------------------------------------------
-# Manifeste (project.json) - contrat lisible par machine
+# Manifeste projet (project.json) - contrat lisible par machine
 # --------------------------------------------------------------------------------------
 
-def build_manifest(name):
-    """Construit le dict manifeste. Ne stocke AUCUN chemin absolu machine : le projet
-    est relocalisable, il se resout via $PROJ_ROOT / $PROJ_CACHE a l'execution. Un
-    launcher / plugin lit ce manifeste et pose les env vars PAR SESSION (ce qui evite
-    la collision d'une env var globale entre deux DCC ouverts sur deux projets)."""
-    now = datetime.now(timezone.utc).isoformat()
+def build_manifest(name, display_name=None, prod_type="FILM"):
+    """Construit le dict manifeste projet (schema 2.x). Ne stocke AUCUN chemin absolu : le
+    projet est relocalisable, il se resout via $PROJ_ROOT / $PROJ_CACHE a l'execution. Un
+    launcher / plugin lit ce manifeste et pose les env vars PAR SESSION (ce qui evite la
+    collision d'une env var globale entre deux DCC ouverts sur deux projets)."""
+    now = _now()
     return {
         "schema_version": SCHEMA_VERSION,
         "name": name,
+        "display_name": display_name or name,
+        "prod_type": prod_type,
+        "topology": TOPOLOGY,
         "created_utc": now,
         "modified_utc": now,
         # Quelles env vars ce projet attend
         "env": {"root": f"${ENV_ROOT}", "cache": f"${ENV_CACHE}"},
         # Trace de la structure creee (audit / migration)
-        "structure": {"source": SOURCE_TREE, "cache": CACHE_TREE},
+        "structure": {"source": list(SOURCE_TREE), "cache": list(CACHE_TREE)},
         "cache_per_project": CACHE_PER_PROJECT,
+        # Taxonomie des steps + assemblage USD
+        "pipeline": {
+            "asset_steps": list(DEFAULT_ASSET_STEPS),
+            "shot_steps": list(DEFAULT_SHOT_STEPS),
+            "set_steps": list(DEFAULT_SET_STEPS),
+            "usd_root_prim": USD_ROOT_PRIM,
+        },
+        # Reglages de scene par defaut (lus par les plugins DCC)
+        "scene": dict(DEFAULT_SCENE),
+        "delivery": dict(DEFAULT_DELIVERY),
         # Reserve aux reglages par DCC (rempli par les plugins)
         "dcc": {"houdini": {}, "blender": {}},
         # 'status' minimal. Le VRAI suivi de production (deadlines, client) vit ailleurs.
@@ -160,15 +235,15 @@ def write_manifest(config_dir, manifest):
 
 
 def read_manifest(project_dir):
-    """Lit project.json depuis <projet>/_config. Utile aux plugins / launchers."""
-    path = Path(project_dir) / "_config" / MANIFEST_NAME
+    """Lit project.json depuis <projet>/_pipeline. Utile aux plugins / launchers."""
+    path = Path(project_dir) / PIPELINE_DIR / MANIFEST_NAME
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def validate_manifest(manifest):
     """Validation stdlib (pas de dependance jsonschema). Leve ValueError si invalide.
     Verifie la compatibilite de version MAJEURE du schema (sinon : migration requise)."""
-    required = ("schema_version", "name", "created_utc", "env", "structure")
+    required = ("schema_version", "name", "created_utc", "env", "structure", "pipeline", "scene")
     missing = [k for k in required if k not in manifest]
     if missing:
         raise ValueError(f"project.json invalide - cles manquantes : {missing}")
@@ -182,21 +257,73 @@ def validate_manifest(manifest):
 
 
 # --------------------------------------------------------------------------------------
-# Creation
+# Manifeste d'entite (asset/set/shot) + stub USD
 # --------------------------------------------------------------------------------------
 
-def _make_tree(base, tree):
-    base.mkdir(parents=True, exist_ok=True)
-    for rel in tree:
-        (base / rel).mkdir(parents=True, exist_ok=True)
+def build_asset_manifest(name, entity_type, asset_type, steps):
+    """Manifeste par entite (cf. asset.schema.json). 'entity_type' = famille (asset/set/
+    shot) ; 'type' = sous-type metier (CHARACTER, ENVIRONMENT, PROP...)."""
+    now = _now()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "name": name,
+        "entity_type": entity_type,
+        "type": asset_type,
+        "steps": list(steps),
+        "publishes": {s: [] for s in steps},
+        "created_utc": now,
+        "modified_utc": now,
+    }
 
 
-def create(name, root=None, cache=None, force=False):
-    """Cree un projet complet. Retourne {name, source, cache, manifest}.
-    Non destructif : 'force' ne fait que lever le garde-fou d'existence, il ne supprime
-    jamais rien (les dossiers sont crees avec exist_ok)."""
-    if not name or "/" in name or name.strip() != name:
-        raise ValueError(f"Nom de projet invalide : {name!r}")
+def _meters_per_unit_str():
+    mpu = USD_METERS_PER_UNIT
+    return str(int(mpu)) if float(mpu).is_integer() else str(mpu)
+
+
+def asset_root_usda(name):
+    """Stub d'assemblage USD pour un asset/set (cf. docs/usd-convention.md).
+    defaultPrim = <NomEntite> ; les steps s'empilent en subLayers (rempli au publish,
+    du plus fort/downstream au plus faible). Y-up, metersPerUnit aligne sur scene."""
+    return (
+        "#usda 1.0\n"
+        "(\n"
+        f'    defaultPrim = "{name}"\n'
+        f'    upAxis = "{USD_UP_AXIS}"\n'
+        f"    metersPerUnit = {_meters_per_unit_str()}\n"
+        "    # subLayers : du plus fort (downstream) au plus faible. Rempli au publish.\n"
+        "    subLayers = [\n"
+        "    ]\n"
+        ")\n"
+        "\n"
+        f'def Xform "{name}"\n'
+        "{\n"
+        "}\n"
+    )
+
+
+def _project_steps(project_dir, entity_type):
+    """Steps par defaut pour cette famille : pipeline du manifeste projet si lisible,
+    sinon defauts du module."""
+    key = _STEPS_KEY[entity_type]
+    try:
+        steps = read_manifest(project_dir).get("pipeline", {}).get(key)
+        if steps:
+            return list(steps)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        pass
+    return list(_DEFAULT_STEPS[entity_type])
+
+
+# --------------------------------------------------------------------------------------
+# Creation - projet
+# --------------------------------------------------------------------------------------
+
+def create(name, root=None, cache=None, force=False, prod_type="FILM", display_name=None):
+    """Cree un projet complet (coquille asset-centric). Retourne {name, source, cache,
+    manifest}. Non destructif : 'force' ne fait que lever le garde-fou d'existence, il ne
+    supprime jamais rien (les dossiers sont crees avec exist_ok)."""
+    _validate_segment(name)
 
     root_dir = resolve_root(root)
     cache_root = resolve_cache(cache)
@@ -214,17 +341,17 @@ def create(name, root=None, cache=None, force=False):
     # 2. arborescence cache (tier separe, disque interne)
     _make_tree(cache_dir, CACHE_TREE)
 
-    config_dir = source / "_config"   # cree par SOURCE_TREE
+    config_dir = source / PIPELINE_DIR   # cree par SOURCE_TREE
 
     # 3. manifeste (source de verite)
-    manifest = build_manifest(name)
+    manifest = build_manifest(name, display_name=display_name, prod_type=prod_type)
     validate_manifest(manifest)
     manifest_path = write_manifest(config_dir, manifest)
 
     # 4. marqueur anti-indexation Spotlight (sur la source, lourde)
     (source / SPOTLIGHT_MARKER).touch()
 
-    # 5. .gitignore (cache + rendus hors Git)
+    # 5. .gitignore (cache + rendus + geo lourde hors Git)
     (source / GITIGNORE_NAME).write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
     return {
@@ -236,25 +363,103 @@ def create(name, root=None, cache=None, force=False):
 
 
 # --------------------------------------------------------------------------------------
+# Creation - entite (asset / set / shot)
+# --------------------------------------------------------------------------------------
+
+def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
+                 steps=None, force=False):
+    """Scaffolde une entite dans un projet existant. Cree <famille>/<name>/ avec un dossier
+    par step (+ publish/), un manifest.json et, pour asset/set, un stub asset_root.usda.
+    Retourne {name, entity_type, path, manifest, asset_root}. Non destructif."""
+    project_dir = Path(project_dir)
+    if entity_type not in ENTITY_DIR:
+        raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
+    _validate_segment(name)
+
+    if steps is None:
+        steps = _project_steps(project_dir, entity_type)
+
+    entity_dir = project_dir / ENTITY_DIR[entity_type] / name
+    if entity_dir.exists() and not force:
+        raise FileExistsError(
+            f"L'entite existe deja : {entity_dir} (passer force=True pour forcer)"
+        )
+
+    # 1. dossiers de step (+ publish/) generes depuis les steps declares
+    entity_dir.mkdir(parents=True, exist_ok=True)
+    for step in steps:
+        (entity_dir / step / "publish").mkdir(parents=True, exist_ok=True)
+
+    # 2. manifeste d'entite
+    manifest = build_asset_manifest(name, entity_type, asset_type, steps)
+    manifest_path = entity_dir / ASSET_MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    # 3. stub d'assemblage USD (asset/set ; un shot compose differemment)
+    asset_root_path = None
+    if entity_type in ("asset", "set"):
+        asset_root_path = entity_dir / ASSET_ROOT_NAME
+        asset_root_path.write_text(asset_root_usda(name), encoding="utf-8")
+
+    return {
+        "name": name,
+        "entity_type": entity_type,
+        "path": str(entity_dir),
+        "manifest": str(manifest_path),
+        "asset_root": str(asset_root_path) if asset_root_path else None,
+    }
+
+
+# --------------------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------------------
 
 def _cli(argv=None):
-    p = argparse.ArgumentParser(description="Createur de projet - pipeline Black Kite.")
-    p.add_argument("name", help="Nom du projet (un seul segment, pas de /)")
-    p.add_argument("--root", help=f"Racine source (defaut ${ENV_ROOT})")
-    p.add_argument("--cache", help=f"Racine cache (defaut ${ENV_CACHE})")
-    p.add_argument("--force", action="store_true", help="Passer outre si le projet existe")
+    p = argparse.ArgumentParser(description="Createur projet & assets - pipeline Black Kite.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pp = sub.add_parser("project", help="Cree un projet (coquille asset-centric).")
+    pp.add_argument("name", help="Nom du projet (un seul segment, pas de /)")
+    pp.add_argument("--root", help=f"Racine source (defaut ${ENV_ROOT})")
+    pp.add_argument("--cache", help=f"Racine cache (defaut ${ENV_CACHE})")
+    pp.add_argument("--prod-type", default="FILM", help="Type de production (defaut FILM)")
+    pp.add_argument("--display-name", help="Nom affichable (defaut = name)")
+    pp.add_argument("--force", action="store_true", help="Passer outre si le projet existe")
+
+    pa = sub.add_parser("asset", help="Cree une entite (asset/set/shot) dans un projet.")
+    pa.add_argument("project", help="Chemin du projet existant")
+    pa.add_argument("name", help="Nom de l'entite (un seul segment, pas de /)")
+    pa.add_argument("--entity-type", default="asset", choices=["asset", "set", "shot"],
+                    help="Famille de l'entite (defaut asset)")
+    pa.add_argument("--type", dest="asset_type", default="OTHER",
+                    help="Sous-type metier (CHARACTER, ENVIRONMENT, PROP... ; defaut OTHER)")
+    pa.add_argument("--steps", help="Steps separes par virgules (defaut : pipeline du projet)")
+    pa.add_argument("--force", action="store_true", help="Passer outre si l'entite existe")
+
     args = p.parse_args(argv)
+
     try:
-        info = create(args.name, root=args.root, cache=args.cache, force=args.force)
+        if args.cmd == "project":
+            info = create(args.name, root=args.root, cache=args.cache, force=args.force,
+                          prod_type=args.prod_type, display_name=args.display_name)
+            print(f"[ok] projet '{info['name']}' cree")
+            print(f"  source    : {info['source']}")
+            print(f"  cache     : {info['cache']}")
+            print(f"  manifeste : {info['manifest']}")
+        else:  # asset
+            steps = [s.strip() for s in args.steps.split(",") if s.strip()] if args.steps else None
+            info = create_asset(args.project, args.name, entity_type=args.entity_type,
+                                asset_type=args.asset_type, steps=steps, force=args.force)
+            print(f"[ok] {info['entity_type']} '{info['name']}' cree")
+            print(f"  path      : {info['path']}")
+            print(f"  manifeste : {info['manifest']}")
+            if info["asset_root"]:
+                print(f"  asset_root: {info['asset_root']}")
     except (ValueError, FileExistsError) as e:
         sys.stderr.write(f"[erreur] {e}\n")
         return 1
-    print(f"[ok] projet '{info['name']}' cree")
-    print(f"  source    : {info['source']}")
-    print(f"  cache     : {info['cache']}")
-    print(f"  manifeste : {info['manifest']}")
     return 0
 
 

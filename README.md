@@ -4,10 +4,7 @@ Scaffolder de projet 3D/VFX. `create_project.py` est la **source de vérité uni
 logique de création : importable par les plugins DCC (Houdini, Blender), **stdlib seule**
 (les interpréteurs embarqués hython / Blender ne doivent pas dépendre d'un `pip install`).
 
-## Arborescence créée (cible schéma 2.0 — asset-centric)
-
-> Le générateur émet encore l'arbre `1.0` (`_config/`, plat). L'alignement sur cette cible
-> est l'**Incrément 2**.
+## Arborescence créée (schéma 2.0 — asset-centric)
 
 ```
 $PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné
@@ -15,7 +12,7 @@ $PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné
   assets/                     #   COLONNE VERTÉBRALE (asset-centric)
     <asset>/
       manifest.json           #     entity_type / type / steps / publishes
-      asset_root.usd          #     assemblage USD (compose les publishes versionnés)
+      asset_root.usda         #     assemblage USD (subLayers des publishes versionnés)
       <step>/publish/         #     un dossier par step déclaré (modeling, uvs, lookdev…)
   sets/                       #   assemblage — optionnel (scaffold vide)
   shots/                      #   shots — optionnel (scaffold vide)
@@ -43,24 +40,31 @@ projets différents en simultané.
 
 ## Usage
 
-CLI :
+CLI (sous-commandes `project` / `asset`) :
 
 ```bash
-python create_project.py "nom_projet"
-python create_project.py "nom_projet" --root /Volumes/EXT/3D --cache ~/cache --force
+# Projet (coquille asset-centric)
+python create_project.py project "nom_projet"
+python create_project.py project "nom_projet" --root /Volumes/EXT/3D --cache ~/cache --force
+
+# Entité dans un projet existant (asset / set / shot)
+python create_project.py asset "<projet>" "Lina" --type CHARACTER
+python create_project.py asset "<projet>" "Cuisine" --entity-type set --steps modeling,lookdev
 ```
 
 Import (plugin DCC) :
 
 ```python
 import create_project
-info = create_project.create("nom_projet")
+info  = create_project.create("nom_projet")
+asset = create_project.create_asset(info["source"], "Lina", asset_type="CHARACTER")
 manifest = create_project.read_manifest(info["source"])
 create_project.validate_manifest(manifest)
 ```
 
-`create()` est non destructif : `force` lève seulement le garde-fou d'existence, il ne
-supprime jamais rien.
+`create()` et `create_asset()` sont non destructifs : `force` lève seulement le garde-fou
+d'existence, ils ne suppriment jamais rien. `create_asset()` reprend par défaut les `steps`
+du `pipeline` du manifeste projet (sinon les défauts du module).
 
 ## Le manifeste est un contrat
 
