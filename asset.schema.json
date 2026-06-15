@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ylos.pipeline/asset.schema.json",
-  "title": "Ylos - manifeste d'entite (asset/set/shot)",
+  "title": "Ylos Prod - manifeste d'entite (asset/set/shot)",
   "description": "Manifeste par entite, pose dans <entite>/manifest.json. Source de verite de ses etapes (steps) et de ses publishes versionnes USD. Les dossiers de step sont generes depuis 'steps'. Clarifie l'usage des projets reels ou 'entity_type' (la famille) et 'type' (le sous-type metier) etaient confondus. Tout changement = bump schema_version + migration. additionalProperties=true pour extension par les plugins.",
   "type": "object",
   "required": ["schema_version", "name", "entity_type", "type", "steps"],

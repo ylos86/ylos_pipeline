@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ylos.pipeline/project.schema.json",
-  "title": "Ylos - project.json (schema 2.x)",
+  "title": "Ylos Prod - project.json (schema 2.x)",
   "description": "Manifeste de projet, source de verite lisible par machine (create_project.py, n8n, plugins DCC Houdini/Blender). Schema 2.x : fusionne les principes verrouilles (relocalisable via env vars, schema_version, separation cache/source) avec le modele metier eprouve sur les projets reels (pipeline/steps, scene, delivery, assemblage USD). Topologie ASSET-CENTRIC : l'asset est la colonne vertebrale ; shots/ et sets/ sont du scaffolding optionnel. Pas de bibliotheque transverse : chaque projet est autonome. AUCUN chemin absolu n'est stocke (le projet se resout via $PROJ_ROOT/$PROJ_CACHE a l'execution). Tout changement = bump schema_version + migration, jamais d'edition silencieuse. additionalProperties=true pour qu'un outil de suivi de production puisse etendre le manifeste sans casser le contrat de base.",
   "type": "object",
   "required": ["schema_version", "name", "created_utc", "env", "structure", "pipeline", "scene"],

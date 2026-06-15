@@ -1,4 +1,4 @@
-# Convention USD — Pipeline Ylos
+# Convention USD — Pipeline Ylos Prod
 
 > **Statut** : figée (2026-06-15). S'applique à la génération des `asset_root` et des
 > publishes par `create_project.py` (Incrément 2) et par les plugins DCC.

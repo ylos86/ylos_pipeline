@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-migrate_to_2.0.py - migre un projet Ylos du schema legacy (sans schema_version) vers
+migrate_to_2.0.py - migre un projet Ylos Prod du schema legacy (sans schema_version) vers
 le schema 2.0. Stdlib seule.
 
 Garanties :
@@ -338,7 +338,7 @@ def migrate(project_dir, dry=False, backup=True, type_overrides=None):
 
 
 def _cli(argv=None):
-    p = argparse.ArgumentParser(description="Migration projet Ylos legacy -> 2.0.")
+    p = argparse.ArgumentParser(description="Migration projet Ylos Prod legacy -> 2.0.")
     p.add_argument("project", help="Chemin du projet a migrer")
     p.add_argument("--dry-run", action="store_true", help="Rapport sans rien modifier")
     p.add_argument("--no-backup", action="store_true", help="Ne pas snapshotter (deconseille)")

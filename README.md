@@ -1,4 +1,4 @@
-# Pipeline Ylos
+# Pipeline Ylos Prod
 
 Scaffolder de projet 3D/VFX. `create_project.py` est la **source de vérité unique** de la
 logique de création : importable par les plugins DCC (Houdini, Blender), **stdlib seule**

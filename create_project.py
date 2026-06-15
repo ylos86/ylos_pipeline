@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-create_project.py - Createur de projet & d'assets, pipeline Ylos (schema 2.0).
+create_project.py - Createur de projet & d'assets, pipeline Ylos Prod (schema 2.0).
 
 Source de verite unique de la logique de creation. Importable par les plugins DCC
 (Houdini/hython, Blender) : aucune dependance hors stdlib.
@@ -119,7 +119,7 @@ CACHE_TREE = [
 ]
 
 GITIGNORE_CONTENT = """\
-# --- Pipeline Ylos : regenerable / lourd, hors Git ---
+# --- Pipeline Ylos Prod : regenerable / lourd, hors Git ---
 # Le cache vit sous $PROJ_CACHE (hors arbre source) : rien a ignorer ici pour ca.
 
 # Rendus / masters lourds
