@@ -1,7 +1,7 @@
-# CLAUDE.md — Pipeline Black Kite
+# CLAUDE.md — Pipeline Ylos
 
 ## Contexte
-Pipeline de production 3D/VFX freelance (marque **Black Kite**). Objectif : un système
+Pipeline de production 3D/VFX freelance (marque **Ylos**). Objectif : un système
 de **gestion de production + pipeline d'assets**, scalable et améliorable, destiné à être
 étendu dans le temps par des agents d'automatisation (n8n) et des plugins DCC (Houdini,
 Blender). On construit depuis zéro **en anticipant ces consommateurs futurs**, pas

@@ -1,4 +1,4 @@
-# Pipeline Black Kite
+# Pipeline Ylos
 
 Scaffolder de projet 3D/VFX. `create_project.py` est la **source de vérité unique** de la
 logique de création : importable par les plugins DCC (Houdini, Blender), **stdlib seule**
@@ -30,7 +30,7 @@ $PROJ_CACHE/<projet>/         # CACHE — NVMe interne, régénérable, hors Git
 
 ```bash
 export PROJ_ROOT=/Volumes/EXT_NVME/3D        # source (externe, permanent)
-export PROJ_CACHE=$HOME/blackkite_cache      # cache (interne, jetable)
+export PROJ_CACHE=$HOME/ylos_cache      # cache (interne, jetable)
 ```
 
 Les scènes DCC référencent `$PROJ_ROOT/...` — **jamais de chemin absolu en dur**. Un projet

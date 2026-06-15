@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-create_project.py - Createur de projet & d'assets, pipeline Black Kite (schema 2.0).
+create_project.py - Createur de projet & d'assets, pipeline Ylos (schema 2.0).
 
 Source de verite unique de la logique de creation. Importable par les plugins DCC
 (Houdini/hython, Blender) : aucune dependance hors stdlib.
@@ -59,8 +59,8 @@ ENV_ROOT = "PROJ_ROOT"            # racine SOURCE  - disque externe, permanent
 ENV_CACHE = "PROJ_CACHE"          # racine CACHE   - disque interne, regenerable
 
 # Fallbacks si les env vars ne sont pas posees (avec avertissement)
-FALLBACK_ROOT = Path.home() / "BlackKite" / "projects"
-FALLBACK_CACHE = Path.home() / "BlackKite" / "cache"
+FALLBACK_ROOT = Path.home() / "Ylos" / "projects"
+FALLBACK_CACHE = Path.home() / "Ylos" / "cache"
 
 # --- Defauts pipeline (taxonomie des steps + assemblage USD) --------------------------
 DEFAULT_ASSET_STEPS = ["modeling", "uvs", "rigging", "lookdev", "fx"]
@@ -119,7 +119,7 @@ CACHE_TREE = [
 ]
 
 GITIGNORE_CONTENT = """\
-# --- Pipeline Black Kite : regenerable / lourd, hors Git ---
+# --- Pipeline Ylos : regenerable / lourd, hors Git ---
 # Le cache vit sous $PROJ_CACHE (hors arbre source) : rien a ignorer ici pour ca.
 
 # Rendus / masters lourds
@@ -419,7 +419,7 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
 # --------------------------------------------------------------------------------------
 
 def _cli(argv=None):
-    p = argparse.ArgumentParser(description="Createur projet & assets - pipeline Black Kite.")
+    p = argparse.ArgumentParser(description="Createur projet & assets - pipeline Ylos.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pp = sub.add_parser("project", help="Cree un projet (coquille asset-centric).")
