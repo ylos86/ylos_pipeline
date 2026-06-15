@@ -83,8 +83,8 @@ silencieuse. `validate_manifest()` refuse une version **majeure** incompatible. 
 - **Cache** — root interne séparé, **par projet** (`$PROJ_CACHE/<projet>`), jamais
   co-localisé avec la source.
 
-Reste à figer au début de l'Incrément 2 : la **convention USD** (`references` vs
-`subLayers`, `.usd` vs `.usda`, casse de `/ROOT`).
+- **Convention USD** — figée : `subLayers` (asset stack), `.usda` compo / `.usdc` géo,
+  `defaultPrim = /<NomAsset>`. Cf. [`docs/usd-convention.md`](docs/usd-convention.md).
 
 ## Production ≠ pipeline
 

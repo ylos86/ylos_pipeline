@@ -58,10 +58,11 @@ existants = Incrément 3.
 4. **Cache : root interne séparé, par projet** (`$PROJ_CACHE/<projet>`). Le `cache/`
    co-localisé des projets réels est abandonné (corrige la violation du principe 2).
 
-### Micro-décisions encore à confirmer
-- Nom du dossier config : **`_pipeline/`** retenu (≠ `_config/` du code committé).
-- **Convention USD** (`references` vs `subLayers`, `.usd` vs `.usda`, casse de `/ROOT`) :
-  à figer au début de l'Incrément 2. Cf. `docs/migration-1.0-to-2.0.md`.
+### Conventions tranchées
+- Nom du dossier config : **`_pipeline/`** (≠ `_config/` du code committé).
+- **Convention USD figée** (`subLayers` intra-asset, `.usda` compo / `.usdc` géo,
+  `defaultPrim = /<NomAsset>`) : cf. `docs/usd-convention.md`. Reste à vérifier à l'Inc. 2 :
+  l'**up-axis** (fichiers réels en Y-up alors que renderer = Cycles/Blender Z-up).
 
 ## Conventions
 - Communication : **français**. Code, identifiants, noms de fichiers : **anglais**.

@@ -70,19 +70,21 @@ Règle 2.0 : `entity_type` ∈ `{asset, set, shot}` (la **famille**) ; `type` = 
 métier** (`CHARACTER`, `ENVIRONMENT`, `PROP`, …). Migration `lecube` → `entity_type:"asset"`,
 `type:"PROP"` (ou `OTHER`). Ajouter `schema_version:"2.0.0"` à chaque manifeste.
 
-## Convention USD à figer (incohérence B)
+## Convention USD (figée 2026-06-15)
 
-Les `asset_root.usd` de B ne sont pas cohérents et doivent être normalisés avant que le
-générateur les produise :
+Les `asset_root.usd` de B étaient incohérents (`Lina` en `references`/`.usda`/`</root>` vs
+`lecube` en `subLayers`/`.usd`/`defaultPrim`). La convention est désormais **figée** dans
+[`docs/usd-convention.md`](usd-convention.md) :
 
-| Point | `Lina` | `lecube` | À trancher |
-|-------|--------|----------|-----------|
-| Composition | `references` | `subLayers` | **Choisir une règle** (refs pour assets discrets, subLayers pour layering de steps ?). |
-| Extension | `.usda` | `.usd` | **Une seule** (ASCII `.usda` lisible, ou binaire `.usd`). |
-| Prim racine | `</root>` | (defaultPrim) | Aligner sur `pipeline.usd_root_prim` (`/ROOT`) — **casse incluse**. |
+| Point | `Lina` (B) | `lecube` (B) | **Règle 2.0** |
+|-------|------------|--------------|---------------|
+| Composition intra-asset | `references` | `subLayers` | **`subLayers`** (asset stack, downstream-fort d'abord). |
+| Extension | `.usda` | `.usd` | **`.usda`** compo / **`.usdc`** géo. `.usd` nu banni. |
+| Prim racine | `</root>` | `defaultPrim` | **`defaultPrim = /<NomAsset>`** ; `/ROOT` réservé aux stages d'assemblage. |
 
-> ⚠️ Décision USD non figée par cette migration : à trancher au début de l'Incrément 2,
-> avant que `create_project.py` n'émette des stubs `asset_root.usd`.
+Migration des assets existants : recomposer chaque `asset_root` en `subLayers` sous
+`/<NomAsset>`, renommer les publishes en `.usdc` (géo) / `.usda` (compo), corriger le
+`</root>` bâtard de `Lina`.
 
 ## Cache : co-localisé → root interne séparé
 
