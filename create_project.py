@@ -369,7 +369,7 @@ def create(name, root=None, cache=None, force=False, prod_type="FILM", display_n
 def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
                  steps=None, force=False):
     """Scaffolde une entite dans un projet existant. Cree <famille>/<name>/ avec un dossier
-    par step (+ publish/), un manifest.json et, pour asset/set, un stub asset_root.usda.
+    par step (+ wip/ + publish/), un manifest.json et, pour asset/set, un stub asset_root.usda.
     Retourne {name, entity_type, path, manifest, asset_root}. Non destructif."""
     project_dir = Path(project_dir)
     if entity_type not in ENTITY_DIR:
@@ -385,9 +385,11 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
             f"L'entite existe deja : {entity_dir} (passer force=True pour forcer)"
         )
 
-    # 1. dossiers de step (+ publish/) generes depuis les steps declares
+    # 1. dossiers de step generes depuis les steps declares : wip/ (travail DCC) +
+    #    publish/ (sorties USD versionnees), comme le workflow reel.
     entity_dir.mkdir(parents=True, exist_ok=True)
     for step in steps:
+        (entity_dir / step / "wip").mkdir(parents=True, exist_ok=True)
         (entity_dir / step / "publish").mkdir(parents=True, exist_ok=True)
 
     # 2. manifeste d'entite

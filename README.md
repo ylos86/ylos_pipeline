@@ -12,8 +12,9 @@ $PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné
   assets/                     #   COLONNE VERTÉBRALE (asset-centric)
     <asset>/
       manifest.json           #     entity_type / type / steps / publishes
-      asset_root.usda         #     assemblage USD (subLayers des publishes versionnés)
-      <step>/publish/         #     un dossier par step déclaré (modeling, uvs, lookdev…)
+      asset_root.usda         #     assemblage USD (références des publishes versionnés)
+      <step>/wip/             #     travail DCC (.blend versionnés)
+      <step>/publish/         #     sorties USD versionnées (un dossier par step)
   sets/                       #   assemblage — optionnel (scaffold vide)
   shots/                      #   shots — optionnel (scaffold vide)
   references/                 #   refs projet (ai / photo / board)
