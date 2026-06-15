@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://blackkite.pipeline/asset.schema.json",
+  "title": "Black Kite - manifeste d'entite (asset/set/shot)",
+  "description": "Manifeste par entite, pose dans <entite>/manifest.json. Source de verite de ses etapes (steps) et de ses publishes versionnes USD. Les dossiers de step sont generes depuis 'steps'. Clarifie l'usage des projets reels ou 'entity_type' (la famille) et 'type' (le sous-type metier) etaient confondus. Tout changement = bump schema_version + migration. additionalProperties=true pour extension par les plugins.",
+  "type": "object",
+  "required": ["schema_version", "name", "entity_type", "type", "steps"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Version semantique du contrat asset (aligne sur le schema projet : 2.x)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Nom de l'entite (un seul segment, pas de separateur de chemin)."
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": ["asset", "set", "shot"],
+      "description": "FAMILLE de l'entite, distincte du sous-type metier 'type'. Corrige les projets reels ou 'type' valait parfois 'asset'."
+    },
+    "type": {
+      "type": "string",
+      "description": "Sous-type metier.",
+      "examples": ["CHARACTER", "ENVIRONMENT", "PROP", "VEHICLE", "FX", "OTHER"]
+    },
+    "steps": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Etapes actives de cette entite (sous-ensemble des pipeline.*_steps du projet). Les dossiers <entite>/<step>/ et <step>/publish/ sont generes depuis cette liste."
+    },
+    "publishes": {
+      "type": "object",
+      "description": "Map step -> liste de publishes versionnes (chemins relatifs vers les USD, ex 'modeling/publish/Lina_modeling_v002.usda'). Rempli par les plugins au moment du publish.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    },
+    "created_utc": {"type": "string", "format": "date-time"},
+    "modified_utc": {"type": "string", "format": "date-time"}
+  }
+}

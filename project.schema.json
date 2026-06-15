@@ -1,32 +1,46 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://blackkite.pipeline/project.schema.json",
-  "title": "Black Kite - project.json",
-  "description": "Manifeste de projet. Source de verite lisible par machine, lue par create_project.py, n8n et les plugins DCC. Tout changement de structure = bump de schema_version + migration, jamais d'edition silencieuse. additionalProperties est laisse a true pour que d'autres outils (suivi de production, etc.) puissent etendre le manifeste sans casser le contrat de base.",
+  "title": "Black Kite - project.json (schema 2.x)",
+  "description": "Manifeste de projet, source de verite lisible par machine (create_project.py, n8n, plugins DCC Houdini/Blender). Schema 2.x : fusionne les principes verrouilles (relocalisable via env vars, schema_version, separation cache/source) avec le modele metier eprouve sur les projets reels (pipeline/steps, scene, delivery, assemblage USD). Topologie ASSET-CENTRIC : l'asset est la colonne vertebrale ; shots/ et sets/ sont du scaffolding optionnel. Pas de bibliotheque transverse : chaque projet est autonome. AUCUN chemin absolu n'est stocke (le projet se resout via $PROJ_ROOT/$PROJ_CACHE a l'execution). Tout changement = bump schema_version + migration, jamais d'edition silencieuse. additionalProperties=true pour qu'un outil de suivi de production puisse etendre le manifeste sans casser le contrat de base.",
   "type": "object",
-  "required": ["schema_version", "name", "created_utc", "env", "structure"],
+  "required": ["schema_version", "name", "created_utc", "env", "structure", "pipeline", "scene"],
   "additionalProperties": true,
   "properties": {
     "schema_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "description": "Version semantique du contrat. La validation refuse une version MAJEURE differente de l'outil."
+      "description": "Version semantique du contrat (ici 2.x). La validation refuse une version MAJEURE differente de l'outil."
     },
     "name": {
       "type": "string",
       "minLength": 1,
       "description": "Nom du projet (un seul segment, pas de separateur de chemin)."
     },
+    "display_name": {
+      "type": "string",
+      "description": "Nom affichable (UI / suivi de prod). Optionnel ; defaut = name."
+    },
+    "prod_type": {
+      "type": "string",
+      "description": "Type de production. Libre mais conventionnel (majuscules).",
+      "examples": ["FILM", "SERIES", "SPOT", "AR", "VR", "R&D"]
+    },
+    "topology": {
+      "type": "string",
+      "enum": ["asset-centric", "shot-centric", "asset+shot", "asset+set+shot"],
+      "description": "Topologie de travail. Verrouillee a 'asset-centric' : l'asset est la colonne vertebrale, shots/ et sets/ sont du scaffolding optionnel."
+    },
     "created_utc": {"type": "string", "format": "date-time"},
     "modified_utc": {"type": "string", "format": "date-time"},
     "env": {
       "type": "object",
-      "description": "Variables d'environnement attendues. Aucun chemin absolu n'est stocke : le projet est relocalisable et se resout via ces env vars a l'execution.",
+      "description": "Variables d'environnement attendues. AUCUN chemin absolu n'est stocke : le projet est relocalisable et se resout via ces env vars a l'execution. Pas d'env de bibliotheque transverse (decision : pas de lib partagee inter-projets).",
       "required": ["root", "cache"],
       "additionalProperties": false,
       "properties": {
         "root": {"type": "string", "description": "Env var de la racine SOURCE, ex $PROJ_ROOT (disque externe, permanent)."},
-        "cache": {"type": "string", "description": "Env var de la racine CACHE, ex $PROJ_CACHE (disque interne, regenerable)."}
+        "cache": {"type": "string", "description": "Env var de la racine CACHE, ex $PROJ_CACHE (NVMe interne, regenerable)."}
       }
     },
     "structure": {
@@ -41,7 +55,42 @@
     },
     "cache_per_project": {
       "type": "boolean",
-      "description": "true = cache par projet sous $PROJ_CACHE ; false = cache centralise unique."
+      "description": "true = cache par projet sous $PROJ_CACHE/<projet> (NVMe interne, HORS arbre source). Decision verrouillee : true. Le cache n'est JAMAIS co-localise avec la source."
+    },
+    "pipeline": {
+      "type": "object",
+      "description": "Taxonomie des etapes (steps) par famille d'entite + reglages d'assemblage USD. Les steps declares ici sont les defauts projet ; un manifeste d'asset peut restreindre via sa propre liste 'steps' (cf. asset.schema.json).",
+      "required": ["asset_steps"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_steps": {"type": "array", "items": {"type": "string"}, "description": "Etapes asset, ex [modeling, uvs, rigging, lookdev, fx]."},
+        "shot_steps": {"type": "array", "items": {"type": "string"}, "description": "Etapes shot (optionnel sous asset-centric), ex [layout, animation, lighting, fx, render, composite]."},
+        "set_steps": {"type": "array", "items": {"type": "string"}, "description": "Etapes set/assemblage (optionnel), ex [modeling, lookdev, lighting]."},
+        "usd_root_prim": {"type": "string", "pattern": "^/", "description": "Prim racine USD, ex /ROOT. Doit etre coherent en casse avec les fichiers asset_root.usd generes."}
+      }
+    },
+    "scene": {
+      "type": "object",
+      "description": "Reglages de scene par defaut, consommes par les plugins DCC a l'ouverture (Blender/Houdini).",
+      "additionalProperties": true,
+      "properties": {
+        "fps": {"type": "number"},
+        "fps_base": {"type": "number"},
+        "unit_scale": {"type": "number"},
+        "color_management": {"type": "string", "description": "Ex AgX, Filmic, Standard."},
+        "renderer": {"type": "string", "description": "Ex CYCLES, KARMA, REDSHIFT."},
+        "resolution_x": {"type": "integer"},
+        "resolution_y": {"type": "integer"},
+        "color_space": {"type": "string", "description": "Ex 'Linear Rec.709'."}
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "description": "Cibles de livraison. Les masters vivent sous delivery/ dans la source.",
+      "additionalProperties": true,
+      "properties": {
+        "targets": {"type": "array", "items": {"type": "string"}, "description": "Ex [usd, exr, mov, ar, vr]."}
+      }
     },
     "dcc": {
       "type": "object",
@@ -49,7 +98,7 @@
     },
     "status": {
       "type": "string",
-      "description": "Etat minimal. Le suivi de production reel (deadlines, client) n'est PAS gere ici."
+      "description": "Etat minimal. Le suivi de production reel (deadlines, client) n'est PAS gere ici (production != pipeline)."
     }
   }
 }

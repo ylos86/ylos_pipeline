@@ -4,21 +4,28 @@ Scaffolder de projet 3D/VFX. `create_project.py` est la **source de vérité uni
 logique de création : importable par les plugins DCC (Houdini, Blender), **stdlib seule**
 (les interpréteurs embarqués hython / Blender ne doivent pas dépendre d'un `pip install`).
 
-## Arborescence créée
+## Arborescence créée (cible schéma 2.0 — asset-centric)
+
+> Le générateur émet encore l'arbre `1.0` (`_config/`, plat). L'alignement sur cette cible
+> est l'**Incrément 2**.
 
 ```
-$PROJ_ROOT/<projet>/        # SOURCE — disque externe, permanent, versionné
-  _config/                  #   project.json (manifeste)
-  assets/                   #   asset-centric (réutilisable)
-  shots/                    #   shot-centric (seq/shot créés à la demande)
-  ref/ai/                   #   références IA (Midjourney / NanoBanana) + metadata
-  ref/photo/                #   références photo
-  ref/board/                #   moodboards / planches
-  delivery/                 #   masters
+$PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné
+  _pipeline/                  #   project.json (manifeste)
+  assets/                     #   COLONNE VERTÉBRALE (asset-centric)
+    <asset>/
+      manifest.json           #     entity_type / type / steps / publishes
+      asset_root.usd          #     assemblage USD (compose les publishes versionnés)
+      <step>/publish/         #     un dossier par step déclaré (modeling, uvs, lookdev…)
+  sets/                       #   assemblage — optionnel (scaffold vide)
+  shots/                      #   shots — optionnel (scaffold vide)
+  references/                 #   refs projet (ai / photo / board)
+  resources/                  #   hdri/ textures/ (réutilisable intra-projet)
+  delivery/                   #   masters (cf. delivery.targets)
   .gitignore  .metadata_never_index
 
-$PROJ_CACHE/<projet>/       # CACHE — disque interne, régénérable, hors Git
-  houdini/  blender/  render/  tmp/
+$PROJ_CACHE/<projet>/         # CACHE — NVMe interne, régénérable, hors Git
+  houdini/  blender/  render/  alembic/  sim/  tmp/
 ```
 
 ## Variables d'environnement (design relocalisable)
@@ -57,17 +64,27 @@ supprime jamais rien.
 
 ## Le manifeste est un contrat
 
-`project.json` est lu par le créateur, n8n et les 2 plugins. Schéma documenté :
-`project.schema.json`. Tout changement de structure = **bump `schema_version` + migration**,
-pas édition silencieuse. `validate_manifest()` refuse une version **majeure** incompatible.
+`project.json` est lu par le créateur, n8n et les 2 plugins. Schémas documentés (figés en
+`2.0.0`) :
+- `project.schema.json` — manifeste **projet** (`pipeline`/`scene`/`delivery` + principes).
+- `asset.schema.json` — manifeste **par entité** (`<asset>/manifest.json` : `entity_type`,
+  `type`, `steps`, `publishes`).
 
-## Décisions encore ouvertes (cf. `CLAUDE.md`)
+Tout changement de structure = **bump `schema_version` + migration**, pas édition
+silencieuse. `validate_manifest()` refuse une version **majeure** incompatible. La migration
+`1.0.0 → 2.0.0` est documentée dans [`docs/migration-1.0-to-2.0.md`](docs/migration-1.0-to-2.0.md).
 
-- **Topologie** — tree hybride `assets/` + `shots/`. À élaguer si le travail est purement
-  l'un ou l'autre, ou à remonter `assets/` au-dessus des projets (bibliothèque transverse).
-  Modifier `SOURCE_TREE`.
-- **Cache** — `CACHE_PER_PROJECT = True` (par projet). Basculer en cache centralisé unique
-  si pertinent.
+## Décisions tranchées (2026-06-14, cf. `CLAUDE.md`)
+
+- **Design cible** — hybride : principes verrouillés + modèle métier USD des projets réels.
+- **Topologie** — **asset-centric**. `assets/` est la colonne vertébrale ; `shots/`/`sets/`
+  optionnels (scaffold vide).
+- **Bibliothèque transverse** — **aucune**. Chaque projet autonome, réemploi par copie.
+- **Cache** — root interne séparé, **par projet** (`$PROJ_CACHE/<projet>`), jamais
+  co-localisé avec la source.
+
+Reste à figer au début de l'Incrément 2 : la **convention USD** (`references` vs
+`subLayers`, `.usd` vs `.usda`, casse de `/ROOT`).
 
 ## Production ≠ pipeline
 

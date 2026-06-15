@@ -34,23 +34,34 @@ seulement le workflow humain immédiat.
    de création vit à **un seul endroit**, jamais dupliquée entre outils.
 
 ## État actuel
-`create_project.py` (stdlib) existe et est validé. Il :
-- génère l'arborescence complète
-- écrit `project.json` (manifeste, source de vérité)
-- crée `.metadata_never_index` (supprime l'indexation Spotlight)
-- génère un `.gitignore` (cache + renders)
-- est importable par les plugins DCC
+`create_project.py` (stdlib, importable par les DCC) écrit `project.json`, crée
+`.metadata_never_index` (anti-indexation Spotlight) et un `.gitignore`. **Il émet encore la
+structure mince schéma `1.0.0`** (`_config/`, arbre plat) — il n'a **jamais** produit les
+projets réels (`YLOS__TEST`, `YLOS_Pachamama_TEST`), qui suivent un modèle USD plus riche.
 
-## Questions de design ouvertes — à traiter, pas à présupposer
-1. **Topologie du workflow** : travail centré **asset**, centré **shot**, ou les deux ?
-   Détermine s'il faut une **bibliothèque d'assets transverse**, à un niveau au-dessus des
-   projets individuels. (Pour un solo freelance, interroger d'abord le YAGNI : reuse
-   inter-projets assez fréquent pour justifier une lib first-class dès maintenant, ou un
-   simple chemin « publier vers la lib » suffit ?)
-2. **Placement du cache** : cache interne **centralisé** vs cache **par projet** sur le
-   disque externe.
+Le **contrat schéma `2.0.0` est figé** (Incrément 1) :
+- `project.schema.json` — manifeste projet (principes verrouillés + `pipeline`/`scene`/`delivery`).
+- `asset.schema.json` — manifeste par entité (`entity_type` vs `type`, `steps`, `publishes`).
+- `docs/migration-1.0-to-2.0.md` — table de migration + convention USD à figer.
 
-Tant que ces deux points ne sont pas tranchés, ne fige aucune décision qui en dépend.
+**Alignement du générateur sur 2.0 = Incrément 2** (non implémenté). Migration des projets
+existants = Incrément 3.
+
+## Décisions tranchées (2026-06-14)
+1. **Design cible : hybride.** Garder les principes verrouillés, absorber le modèle métier
+   des projets réels (USD, `scene`, steps, manifeste par asset). Schéma `1.0.0` → `2.0.0`.
+2. **Topologie : asset-centric.** L'asset est la colonne vertébrale (step-folders +
+   `manifest.json` + `asset_root.usd`). `shots/` et `sets/` = scaffolding optionnel (créés
+   vides), non first-class.
+3. **Pas de bibliothèque transverse.** Chaque projet est autonome, réemploi par copie.
+   Pas de `$ASSET_LIB`. (Doublon `Casa` entre projets assumé.)
+4. **Cache : root interne séparé, par projet** (`$PROJ_CACHE/<projet>`). Le `cache/`
+   co-localisé des projets réels est abandonné (corrige la violation du principe 2).
+
+### Micro-décisions encore à confirmer
+- Nom du dossier config : **`_pipeline/`** retenu (≠ `_config/` du code committé).
+- **Convention USD** (`references` vs `subLayers`, `.usd` vs `.usda`, casse de `/ROOT`) :
+  à figer au début de l'Incrément 2. Cf. `docs/migration-1.0-to-2.0.md`.
 
 ## Conventions
 - Communication : **français**. Code, identifiants, noms de fichiers : **anglais**.
