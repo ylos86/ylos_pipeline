@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ylos Prod — Pipeline</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0c0c0f;
+      --bg-2:         #141418;
+      --bg-3:         #1c1c22;
+      --bg-hover:     #222228;
+      --border:       #2a2a32;
+      --border-hi:    #3c3c50;
+      --text:         #e8e8f0;
+      --text-muted:   #7070a0;
+      --text-dim:     #44445a;
+      --accent:       #6366f1;
+      --accent-glow:  #6366f130;
+      --green:        #34d399;
+      --red:          #f87171;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────── */
+    header {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px; height: 54px;
+      background: var(--bg-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .header-left  { display: flex; align-items: center; gap: 14px; }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+
+    .logo { font-size: 15px; font-weight: 700; letter-spacing: -.3px; }
+    .logo em { color: var(--accent); font-style: normal; }
+
+    .project-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 13px; color: var(--text-muted);
+      max-width: 260px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-dim); flex-shrink: 0;
+      transition: background .3s, box-shadow .3s;
+    }
+    .status-dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.offline { background: var(--red); }
+
+    .status-label { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Buttons ─────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 6px 14px; border-radius: 6px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background .15s, opacity .15s;
+    }
+    .btn:active { opacity: .8; }
+    .btn:disabled { opacity: .4; cursor: default; }
+    .btn-primary   { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #7274f8; }
+    .btn-secondary { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-hi); }
+    .btn-ghost     { background: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { color: var(--text); background: var(--bg-3); }
+
+    /* ── Error banner ────────────────────────────── */
+    .error-banner {
+      margin: 24px; padding: 22px 24px;
+      background: #1a0f0f; border: 1px solid #5a2222; border-radius: 10px;
+    }
+    .error-banner h3 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
+    .error-banner p  { color: var(--text-muted); font-size: 13px; margin-bottom: 14px; }
+    .error-cmd {
+      display: inline-block;
+      padding: 8px 14px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 13px; color: var(--green);
+      user-select: all; cursor: text;
+    }
+
+    /* ── Toolbar ─────────────────────────────────── */
+    .toolbar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 12px 20px;
+      background: var(--bg-2); border-bottom: 1px solid var(--border);
+    }
+    .filter-label {
+      font-size: 11px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .7px;
+    }
+    .pills { display: flex; gap: 5px; flex-wrap: wrap; }
+    .pill {
+      padding: 3px 11px; border-radius: 20px;
+      border: 1px solid var(--border); background: var(--bg-3);
+      font-size: 12px; color: var(--text-muted);
+      cursor: pointer; user-select: none;
+      transition: all .15s;
+    }
+    .pill:hover { border-color: var(--border-hi); color: var(--text); }
+    .pill.active { border-color: var(--accent); background: var(--accent-glow); color: var(--accent); }
+
+    .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+    .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .asset-count { font-size: 12px; color: var(--text-dim); }
+
+    .sort-select {
+      padding: 5px 10px; border-radius: 6px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      color: var(--text); font-size: 13px; cursor: pointer; outline: none;
+    }
+    .sort-select:hover { border-color: var(--border-hi); }
+
+    .refresh-icon { color: var(--text-dim); display: flex; align-items: center; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinning { animation: spin 1s linear infinite; }
+
+    /* ── Main ────────────────────────────────────── */
+    main { padding: 20px; }
+
+    /* ── States ──────────────────────────────────── */
+    .state-center {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 80px 24px; gap: 12px;
+    }
+    .state-center svg  { color: var(--text-dim); opacity: .35; }
+    .state-center h3   { font-size: 15px; color: var(--text-muted); }
+    .state-center p    { font-size: 13px; color: var(--text-dim); max-width: 320px; }
+
+    /* ── Asset grid ──────────────────────────────── */
+    .asset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 14px;
+    }
+
+    /* ── Card ────────────────────────────────────── */
+    .card {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
+      overflow: hidden; display: flex; flex-direction: column;
+      transition: border-color .2s, transform .15s, box-shadow .2s;
+    }
+    .card:hover {
+      border-color: var(--border-hi);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    }
+
+    .card-thumb {
+      width: 100%; aspect-ratio: 16/9;
+      background: var(--bg-3); overflow: hidden;
+    }
+    .card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb-placeholder {
+      width: 100%; height: 100%;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; color: var(--text-dim);
+    }
+    .thumb-placeholder span { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+
+    .card-body { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; gap: 9px; }
+
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .card-name { font-size: 15px; font-weight: 600; }
+
+    .badge {
+      display: inline-block; padding: 2px 7px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+      white-space: nowrap; flex-shrink: 0; border: 1px solid transparent;
+    }
+
+    .steps-list { display: flex; flex-direction: column; gap: 3px; }
+
+    .step-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 8px; border-radius: 5px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .step-row:hover { border-color: var(--accent); background: var(--accent-glow); }
+    .step-row:hover .step-name { color: var(--text); }
+
+    .step-name { font-size: 11px; color: var(--text-muted); text-transform: capitalize; }
+    .step-ver  {
+      font-size: 11px; color: var(--accent);
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    }
+
+    .card-footer { margin-top: auto; padding-top: 8px; }
+    .card-footer .btn { width: 100%; }
+
+    /* ── Modal ───────────────────────────────────── */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,.65);
+      display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+    .modal {
+      background: var(--bg-2); border: 1px solid var(--border-hi);
+      border-radius: 12px; padding: 28px; width: 460px;
+      max-width: calc(100vw - 40px);
+    }
+    .modal h2 { font-size: 16px; margin-bottom: 6px; }
+    .modal .subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 22px; }
+    .modal .subtitle code {
+      font-family: ui-monospace, monospace; font-size: 12px;
+      background: var(--bg-3); padding: 1px 5px; border-radius: 4px;
+    }
+
+    .field label {
+      display: block; font-size: 11px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px;
+    }
+    .field input {
+      width: 100%; padding: 9px 12px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text); font-size: 13px;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      outline: none; transition: border-color .15s;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .field input::placeholder { color: var(--text-dim); }
+
+    .modal-err { font-size: 12px; color: var(--red); min-height: 18px; margin-top: 8px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+
+    /* ── Toast ───────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 22px; right: 22px; z-index: 2000;
+      padding: 11px 18px; border-radius: 8px;
+      background: var(--bg-3); border: 1px solid var(--border-hi);
+      font-size: 13px;
+      opacity: 0; transform: translateY(6px);
+      transition: opacity .2s, transform .2s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.ok   { border-color: var(--green); color: var(--green); }
+    .toast.err  { border-color: var(--red);   color: var(--red);   }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <span class="logo">Ylos<em>Prod</em></span>
+    <span class="project-pill">
+      <span class="status-dot" id="js-dot"></span>
+      <span id="js-project-name">Aucun projet</span>
+    </span>
+  </div>
+  <div class="header-right">
+    <span class="status-label" id="js-status-label">Connexion…</span>
+    <button class="btn btn-secondary" id="js-btn-change">Changer projet</button>
+  </div>
+</header>
+
+<!-- ── Server offline ──────────────────────────────── -->
+<div class="error-banner hidden" id="js-error-banner">
+  <h3>Serveur non détecté</h3>
+  <p>Le serveur Ylos n'est pas démarré. Lance-le dans un terminal :</p>
+  <code class="error-cmd">python3 ylos_ui.py</code>
+</div>
+
+<!-- ── Toolbar ─────────────────────────────────────── -->
+<div class="toolbar hidden" id="js-toolbar">
+  <span class="filter-label">Type</span>
+  <div class="pills" id="js-pills-type">
+    <span class="pill active" data-type="ALL">Tous</span>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <span class="filter-label">Famille</span>
+  <div class="pills" id="js-pills-family">
+    <span class="pill active" data-fam="ALL">Tous</span>
+    <span class="pill" data-fam="assets">Assets</span>
+    <span class="pill" data-fam="sets">Sets</span>
+  </div>
+
+  <div class="toolbar-right">
+    <span class="refresh-icon" id="js-refresh-icon"></span>
+    <span class="asset-count" id="js-count"></span>
+    <select class="sort-select" id="js-sort">
+      <option value="name-asc">Nom A → Z</option>
+      <option value="name-desc">Nom Z → A</option>
+      <option value="type">Type</option>
+      <option value="version">Version (plus récent)</option>
+    </select>
+  </div>
+</div>
+
+<!-- ── Main content ────────────────────────────────── -->
+<main>
+
+  <div class="state-center" id="js-no-project">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+      <rect x="2" y="3" width="20" height="14" rx="2"/>
+      <polyline points="8 21 12 17 16 21"/>
+    </svg>
+    <h3>Aucun projet actif</h3>
+    <p>Définis un projet pour afficher ses assets.</p>
+    <button class="btn btn-primary" id="js-btn-change-empty">Choisir un projet</button>
+  </div>
+
+  <div class="asset-grid hidden" id="js-grid"></div>
+
+  <div class="state-center hidden" id="js-empty">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </svg>
+    <h3>Aucun asset</h3>
+    <p id="js-empty-reason">Ce projet ne contient pas encore d'assets.</p>
+  </div>
+
+</main>
+
+<!-- ── Modal changer projet ────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal">
+  <div class="modal">
+    <h2>Changer de projet</h2>
+    <p class="subtitle">Chemin absolu du dossier contenant <code>_pipeline/project.json</code>.</p>
+    <div class="field">
+      <label>Chemin</label>
+      <input type="text" id="js-modal-input" spellcheck="false"
+             placeholder="/Volumes/Ylos/Projets/MonProjet">
+    </div>
+    <div class="modal-err" id="js-modal-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   id="js-modal-cancel">Annuler</button>
+      <button class="btn btn-primary" id="js-modal-ok">Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ───────────────────────────────────────── -->
+<div class="toast" id="js-toast"></div>
+
+<script>
+'use strict';
+
+const BASE     = 'http://127.0.0.1:8765';
+const POLL_MS  = 30_000;
+const TYPE_COLORS = {
+  CHARACTER: '#60a5fa', PROP: '#fb923c', SET: '#34d399',
+  SHOT: '#a78bfa', VEHICLE: '#fbbf24', FX: '#f472b6',
+};
+
+// ── State ───────────────────────────────────────────
+const S = {
+  online:       false,
+  project:      null,
+  assets:       [],
+  filterType:   'ALL',
+  filterFamily: 'ALL',
+  sort:         'name-asc',
+};
+let _pollTimer  = null;
+let _toastTimer = null;
+
+// ── DOM refs ────────────────────────────────────────
+const el = id => document.getElementById(id);
+const DOT          = el('js-dot');
+const STATUS_LBL   = el('js-status-label');
+const PROJECT_NAME = el('js-project-name');
+const ERR_BANNER   = el('js-error-banner');
+const TOOLBAR      = el('js-toolbar');
+const NO_PROJECT   = el('js-no-project');
+const GRID         = el('js-grid');
+const EMPTY        = el('js-empty');
+const EMPTY_REASON = el('js-empty-reason');
+const COUNT        = el('js-count');
+const REFRESH_ICON = el('js-refresh-icon');
+const MODAL        = el('js-modal');
+const MODAL_INPUT  = el('js-modal-input');
+const MODAL_ERR    = el('js-modal-err');
+const MODAL_OK     = el('js-modal-ok');
+const TOAST        = el('js-toast');
+
+// ── API helper ──────────────────────────────────────
+async function api(path, opts = {}) {
+  const res  = await fetch(BASE + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  const data = await res.json();
+  return { ok: res.ok, data };
+}
+
+// ── Server + project ────────────────────────────────
+async function checkServer() {
+  try {
+    const { ok, data } = await api('/api/project');
+    setOnline(true);
+    S.project = ok ? data : null;
+    PROJECT_NAME.textContent = ok
+      ? (data.display_name || data.name || data._project_path?.split('/').pop() || '—')
+      : 'Aucun projet';
+  } catch {
+    setOnline(false);
+    S.project = null;
+    PROJECT_NAME.textContent = 'Aucun projet';
+  }
+}
+
+function setOnline(v) {
+  S.online = v;
+  DOT.className          = 'status-dot ' + (v ? 'online' : 'offline');
+  STATUS_LBL.textContent = v ? 'Connecté' : 'Hors ligne';
+  ERR_BANNER.classList.toggle('hidden', v);
+}
+
+// ── Assets ──────────────────────────────────────────
+async function loadAssets() {
+  if (!S.online || !S.project) { render(); return; }
+  setRefreshing(true);
+  try {
+    const { ok, data } = await api('/api/assets');
+    if (ok) {
+      S.assets = data.assets || [];
+      rebuildTypeFilter();
+    }
+  } catch {
+    setOnline(false);
+  } finally {
+    setRefreshing(false);
+  }
+  render();
+}
+
+// ── Filters / sort ──────────────────────────────────
+function filtered() {
+  let list = S.assets;
+  if (S.filterType   !== 'ALL') list = list.filter(a => (a.type || '') === S.filterType);
+  if (S.filterFamily !== 'ALL') list = list.filter(a => a.family === S.filterFamily);
+  return sorted(list);
+}
+
+function sorted(list) {
+  const cp = [...list];
+  switch (S.sort) {
+    case 'name-asc':  cp.sort((a, b) => a.name.localeCompare(b.name)); break;
+    case 'name-desc': cp.sort((a, b) => b.name.localeCompare(a.name)); break;
+    case 'type':      cp.sort((a, b) => (a.type||'').localeCompare(b.type||'') || a.name.localeCompare(b.name)); break;
+    case 'version':   cp.sort((a, b) => maxVer(b) - maxVer(a) || a.name.localeCompare(b.name)); break;
+  }
+  return cp;
+}
+
+function verNum(path) {
+  return +(path?.match(/v(\d+)/i)?.[1] ?? 0);
+}
+
+function maxVer(asset) {
+  const vals = Object.values(asset.last_versions || {});
+  return vals.length ? Math.max(...vals.map(verNum)) : 0;
+}
+
+// ── Render ──────────────────────────────────────────
+function render() {
+  const hasProject = !!(S.project && S.online);
+  const visible    = hasProject ? filtered() : [];
+
+  NO_PROJECT.classList.toggle('hidden', hasProject || !S.online);
+  TOOLBAR   .classList.toggle('hidden', !hasProject);
+  GRID      .classList.toggle('hidden', !hasProject || visible.length === 0);
+  EMPTY     .classList.toggle('hidden', !hasProject || visible.length > 0);
+
+  if (!hasProject) return;
+
+  COUNT.textContent = `${visible.length} / ${S.assets.length} asset${S.assets.length !== 1 ? 's' : ''}`;
+
+  if (visible.length === 0) {
+    EMPTY_REASON.textContent = (S.filterType !== 'ALL' || S.filterFamily !== 'ALL')
+      ? 'Aucun asset ne correspond aux filtres.'
+      : "Ce projet ne contient pas encore d'assets.";
+    return;
+  }
+
+  GRID.innerHTML = visible.map(cardHTML).join('');
+
+  GRID.addEventListener('error', e => {
+    if (e.target.tagName === 'IMG') {
+      e.target.style.display = 'none';
+      const ph = e.target.nextElementSibling;
+      if (ph) ph.style.display = 'flex';
+    }
+  }, true);
+
+  GRID.querySelectorAll('[data-open]').forEach(btn =>
+    btn.addEventListener('click', () => openBlender(btn.dataset.open))
+  );
+}
+
+// ── Card HTML ────────────────────────────────────────
+function cardHTML(asset) {
+  const { name, type, last_versions = {}, thumb } = asset;
+  const steps     = Object.entries(last_versions);
+  const color     = TYPE_COLORS[type] || '#7070a0';
+  const projPath  = S.project._project_path;
+
+  const thumbSection = thumb
+    ? `<img src="${BASE}${esc(thumb)}" alt="${esc(name)}" loading="lazy">
+       <div class="thumb-placeholder" style="display:none">${placeholderInner(type)}</div>`
+    : `<div class="thumb-placeholder">${placeholderInner(type)}</div>`;
+
+  const stepsSection = steps.length
+    ? steps.map(([step, path]) => {
+        const ver      = path?.match(/v\d+/i)?.[0] ?? '—';
+        const fullPath = `${projPath}/${path}`;
+        return `<div class="step-row" data-open="${esc(fullPath)}" title="Ouvrir ${esc(step)} dans Blender">
+                  <span class="step-name">${esc(step)}</span>
+                  <span class="step-ver">${esc(ver)}</span>
+                </div>`;
+      }).join('')
+    : `<span style="font-size:11px;color:var(--text-dim)">Aucun publish</span>`;
+
+  // step dont le numéro de version est le plus élevé parmi last_versions
+  const bestEntry = steps.length
+    ? steps.reduce((best, cur) => verNum(cur[1]) > verNum(best[1]) ? cur : best)
+    : null;
+  const bestPath = bestEntry ? `${projPath}/${bestEntry[1]}` : null;
+
+  return `
+    <div class="card">
+      <div class="card-thumb">${thumbSection}</div>
+      <div class="card-body">
+        <div class="card-head">
+          <span class="card-name">${esc(name)}</span>
+          ${type ? `<span class="badge" style="background:${color}22;color:${color};border-color:${color}44">${esc(type)}</span>` : ''}
+        </div>
+        <div class="steps-list">${stepsSection}</div>
+        <div class="card-footer">
+          ${bestPath
+            ? `<button class="btn btn-primary" data-open="${esc(bestPath)}">
+                 ${iconPlay(13)} Ouvrir dans Blender
+               </button>`
+            : `<button class="btn btn-secondary" disabled>Aucun publish</button>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+function placeholderInner(type) {
+  return `${iconBox(32)}<span>${esc(type || 'ASSET')}</span>`;
+}
+
+function iconPlay(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>`;
+}
+function iconBox(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+    <line x1="12" y1="22.08" x2="12" y2="12"/>
+  </svg>`;
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Type filter rebuild ──────────────────────────────
+function rebuildTypeFilter() {
+  const types = [...new Set(S.assets.map(a => a.type).filter(Boolean))].sort();
+  const ctnr  = el('js-pills-type');
+
+  ctnr.innerHTML = `<span class="pill ${S.filterType === 'ALL' ? 'active' : ''}" data-type="ALL">Tous</span>`;
+  types.forEach(t => {
+    const p = document.createElement('span');
+    p.className    = 'pill' + (S.filterType === t ? ' active' : '');
+    p.dataset.type = t;
+    p.textContent  = t;
+    ctnr.appendChild(p);
+  });
+
+  ctnr.querySelectorAll('.pill').forEach(p =>
+    p.addEventListener('click', () => {
+      S.filterType = p.dataset.type;
+      ctnr.querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x === p));
+      render();
+    })
+  );
+}
+
+// ── Open Blender ─────────────────────────────────────
+async function openBlender(path) {
+  try {
+    const { ok, data } = await api('/api/open-blender', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    ok ? toast('Blender lancé', 'ok') : toast(data.error || 'Erreur', 'err');
+  } catch {
+    toast('Serveur non disponible', 'err');
+  }
+}
+
+// ── Modal ────────────────────────────────────────────
+function openModal() {
+  MODAL_INPUT.value     = S.project?._project_path || '';
+  MODAL_ERR.textContent = '';
+  MODAL.classList.remove('hidden');
+  setTimeout(() => MODAL_INPUT.focus(), 40);
+}
+function closeModal() { MODAL.classList.add('hidden'); }
+
+async function confirmModal() {
+  const path = MODAL_INPUT.value.trim();
+  if (!path) { MODAL_ERR.textContent = 'Chemin requis.'; return; }
+  MODAL_ERR.textContent = '';
+  MODAL_OK.disabled     = true;
+  MODAL_OK.textContent  = 'Chargement…';
+  try {
+    const { ok, data } = await api('/api/set-project', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    if (ok) {
+      closeModal();
+      S.assets = [];
+      await checkServer();
+      await loadAssets();
+      toast('Projet changé', 'ok');
+    } else {
+      MODAL_ERR.textContent = data.error || 'Erreur inconnue';
+    }
+  } catch {
+    MODAL_ERR.textContent = 'Serveur non disponible';
+  } finally {
+    MODAL_OK.disabled    = false;
+    MODAL_OK.textContent = 'Confirmer';
+  }
+}
+
+// ── Toast ────────────────────────────────────────────
+function toast(msg, type = 'ok') {
+  clearTimeout(_toastTimer);
+  TOAST.textContent = msg;
+  TOAST.className   = `toast ${type}`;
+  requestAnimationFrame(() => TOAST.classList.add('show'));
+  _toastTimer = setTimeout(() => TOAST.classList.remove('show'), 2600);
+}
+
+// ── Refresh indicator ────────────────────────────────
+function setRefreshing(on) {
+  REFRESH_ICON.innerHTML = on
+    ? `<svg class="spinning" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+         <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+       </svg>`
+    : '';
+}
+
+// ── Polling ──────────────────────────────────────────
+function startPoll() {
+  _pollTimer = setInterval(async () => {
+    await checkServer();
+    await loadAssets();
+  }, POLL_MS);
+}
+
+// ── Event bindings ───────────────────────────────────
+el('js-btn-change')      .addEventListener('click', openModal);
+el('js-btn-change-empty').addEventListener('click', openModal);
+el('js-modal-cancel')    .addEventListener('click', closeModal);
+MODAL_OK                 .addEventListener('click', confirmModal);
+MODAL.addEventListener('click', e => { if (e.target === MODAL) closeModal(); });
+MODAL_INPUT.addEventListener('keydown', e => {
+  if (e.key === 'Enter')  confirmModal();
+  if (e.key === 'Escape') closeModal();
+});
+
+el('js-sort').addEventListener('change', e => { S.sort = e.target.value; render(); });
+
+el('js-pills-family').querySelectorAll('.pill').forEach(p =>
+  p.addEventListener('click', () => {
+    S.filterFamily = p.dataset.fam;
+    el('js-pills-family').querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x === p));
+    render();
+  })
+);
+
+// ── Init ─────────────────────────────────────────────
+(async () => {
+  await checkServer();
+  await loadAssets();
+  startPoll();
+})();
+</script>
+</body>
+</html>
