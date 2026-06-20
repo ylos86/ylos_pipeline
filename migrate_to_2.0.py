@@ -31,9 +31,6 @@ from pathlib import Path
 
 import create_project as cp   # reutilise constantes + validate_manifest (logique unique)
 
-# Ordre de force des references (le plus fort/downstream d'abord)
-DOWNSTREAM_ORDER = ["fx", "lookdev", "rigging", "uvs", "modeling",
-                    "layout", "animation", "lighting", "render", "composite"]
 # Sous-types metier pour les entites dont le 'type' valait 'asset' (a confirmer)
 TYPE_OVERRIDES_DEFAULT = {"lecube": "PROP", "montains": "ENVIRONMENT"}
 USD_EXTS = (".usd", ".usda", ".usdc")
@@ -174,35 +171,11 @@ def all_publishes(entity_dir, steps):
 
 
 # --------------------------------------------------------------------------------------
-# asset_root : recompose en references-sous-/<Asset>
+# asset_root : recompose depuis les publishes existants
 # --------------------------------------------------------------------------------------
 
-def build_asset_root(name, latest):
-    ordered = [s for s in DOWNSTREAM_ORDER if s in latest]
-    ordered += [s for s in latest if s not in DOWNSTREAM_ORDER]
-    lines = [
-        "#usda 1.0",
-        "(",
-        f'    defaultPrim = "{name}"',
-        f'    upAxis = "{cp.USD_UP_AXIS}"',
-        "    metersPerUnit = 1",
-        "    subLayers = [",
-    ]
-    for s in ordered:
-        lines.append(f"        @{latest[s]}@,")
-    lines += [
-        "    ]",
-        ")",
-        "",
-        f'def Xform "{name}"',
-        "{",
-        "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-
 def recompose_asset_root(entity_dir, name, steps, rename_log, dry):
-    content = build_asset_root(name, latest_publishes(entity_dir, steps))
+    content = cp.build_asset_root(name, latest_publishes(entity_dir, steps))
     legacy = entity_dir / "asset_root.usd"
     target = entity_dir / cp.ASSET_ROOT_NAME   # asset_root.usda
     if legacy.exists():

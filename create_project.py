@@ -35,6 +35,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +93,13 @@ USD_METERS_PER_UNIT = 1.0         # aligne sur scene.unit_scale
 ENTITY_DIR = {"asset": "assets", "set": "sets", "shot": "shots"}
 _DEFAULT_STEPS = {"asset": DEFAULT_ASSET_STEPS, "set": DEFAULT_SET_STEPS, "shot": DEFAULT_SHOT_STEPS}
 _STEPS_KEY = {"asset": "asset_steps", "set": "set_steps", "shot": "shot_steps"}
+
+# Ordre de force des steps pour l'empilement subLayers (plus fort / downstream en premier).
+# USD : le premier sublayer de la liste est le plus fort.
+DOWNSTREAM_ORDER = ["fx", "lookdev", "rigging", "uvs", "modeling",
+                    "layout", "animation", "lighting", "render", "composite"]
+
+_VER_RE = re.compile(r"_v(\d+)\.")
 
 # Arborescence SOURCE (sous $PROJ_ROOT/<projet>) - permanent, versionne. Asset-centric.
 SOURCE_TREE = [
@@ -186,6 +195,12 @@ def _make_tree(base, tree):
     base.mkdir(parents=True, exist_ok=True)
     for rel in tree:
         (base / rel).mkdir(parents=True, exist_ok=True)
+
+
+def _ver(path):
+    """Extrait le numéro de version d'un chemin de publish (ex 'step/publish/A_step_v002.usdc' -> 2)."""
+    m = _VER_RE.search(str(path))
+    return int(m.group(1)) if m else 0
 
 
 # --------------------------------------------------------------------------------------
@@ -302,6 +317,37 @@ def asset_root_usda(name):
     )
 
 
+def build_asset_root(name, latest):
+    """Reconstruit asset_root.usda depuis {step: chemin_relatif_du_latest_publish}.
+    subLayers dans le header de stage, ordre downstream-fort en premier (cf. usd-convention.md)."""
+    ordered = [s for s in DOWNSTREAM_ORDER if s in latest]
+    ordered += [s for s in latest if s not in DOWNSTREAM_ORDER]
+    lines = [
+        "#usda 1.0",
+        "(",
+        f'    defaultPrim = "{name}"',
+        f'    upAxis = "{USD_UP_AXIS}"',
+        f"    metersPerUnit = {_meters_per_unit_str()}",
+        "    subLayers = [",
+    ]
+    for s in ordered:
+        lines.append(f"        @{latest[s]}@,")
+    lines += [
+        "    ]",
+        ")",
+        "",
+        f'def Xform "{name}"',
+        "{",
+        "}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _latest_from_publishes(publishes):
+    """Retourne {step: chemin_latest} depuis manifest.publishes (dict step -> [paths])."""
+    return {step: max(paths, key=_ver) for step, paths in publishes.items() if paths}
+
+
 def _project_steps(project_dir, entity_type):
     """Steps par defaut pour cette famille : pipeline du manifeste projet si lisible,
     sinon defauts du module."""
@@ -415,6 +461,94 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
 
 
 # --------------------------------------------------------------------------------------
+# Publish - versionner un fichier dans un step d'entite
+# --------------------------------------------------------------------------------------
+
+def publish_asset(project_root, asset_name, step, source_file):
+    """Publie source_file dans <asset>/<step>/publish/ avec versioning automatique.
+
+    - Scanne manifest.publishes[step] pour determiner la prochaine version (v001, v002...).
+    - Copie source_file -> <step>/publish/<asset>_<step>_v<NNN><ext> (jamais d'ecrasement).
+    - Met a jour manifest.json (publishes[step] et modified_utc).
+    - Reconstruit asset_root.usda (subLayers) pour les entites asset/set.
+
+    Retourne {name, step, version, publish_path, manifest, asset_root}.
+    Non-destructif : leve FileExistsError si la version cible existe deja.
+    """
+    project_root = Path(project_root)
+    source_file = Path(source_file)
+
+    if not source_file.is_file():
+        raise FileNotFoundError(f"Fichier source introuvable : {source_file}")
+
+    # Localiser l'entite dans assets/ sets/ shots/
+    entity_dir = None
+    for family in ("assets", "sets", "shots"):
+        candidate = project_root / family / asset_name
+        if candidate.is_dir() and (candidate / ASSET_MANIFEST_NAME).is_file():
+            entity_dir = candidate
+            break
+    if entity_dir is None:
+        raise FileNotFoundError(
+            f"Entite '{asset_name}' introuvable dans {project_root} (assets/, sets/, shots/)."
+        )
+
+    manifest_path = entity_dir / ASSET_MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    valid_steps = manifest.get("steps", [])
+    if step not in valid_steps:
+        raise ValueError(
+            f"Step '{step}' invalide pour '{asset_name}' (steps declares : {valid_steps})."
+        )
+
+    # Prochain numero de version
+    existing = manifest.get("publishes", {}).get(step, [])
+    next_ver = max((_ver(p) for p in existing), default=0) + 1
+
+    # Chemin cible versionne
+    ext = source_file.suffix
+    versioned_name = f"{asset_name}_{step}_v{next_ver:03d}{ext}"
+    publish_dir = entity_dir / step / "publish"
+    publish_dir.mkdir(parents=True, exist_ok=True)
+    target = publish_dir / versioned_name
+
+    if target.exists():
+        raise FileExistsError(
+            f"Version deja presente, non ecrasee : {target}"
+        )
+
+    shutil.copy2(source_file, target)
+
+    # Mettre a jour manifest.json
+    publishes = manifest.setdefault("publishes", {})
+    publishes.setdefault(step, [])
+    publishes[step].append(f"{step}/publish/{versioned_name}")
+    manifest["modified_utc"] = _now()
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    # Reconstruire asset_root.usda (asset/set uniquement)
+    asset_root_path = None
+    entity_type = manifest.get("entity_type", "asset")
+    if entity_type in ("asset", "set"):
+        content = build_asset_root(manifest.get("name", asset_name),
+                                   _latest_from_publishes(publishes))
+        asset_root_path = entity_dir / ASSET_ROOT_NAME
+        asset_root_path.write_text(content, encoding="utf-8")
+
+    return {
+        "name": asset_name,
+        "step": step,
+        "version": next_ver,
+        "publish_path": str(target),
+        "manifest": str(manifest_path),
+        "asset_root": str(asset_root_path) if asset_root_path else None,
+    }
+
+
+# --------------------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------------------
 
@@ -440,6 +574,12 @@ def _cli(argv=None):
     pa.add_argument("--steps", help="Steps separes par virgules (defaut : pipeline du projet)")
     pa.add_argument("--force", action="store_true", help="Passer outre si l'entite existe")
 
+    pub = sub.add_parser("publish", help="Publie un fichier USD dans un step d'entite.")
+    pub.add_argument("project", help="Chemin du projet existant")
+    pub.add_argument("asset", help="Nom de l'entite")
+    pub.add_argument("step", help="Step de publication (ex: modeling, lookdev)")
+    pub.add_argument("file", help="Fichier source a publier (.usda ou .usdc)")
+
     args = p.parse_args(argv)
 
     try:
@@ -450,7 +590,7 @@ def _cli(argv=None):
             print(f"  source    : {info['source']}")
             print(f"  cache     : {info['cache']}")
             print(f"  manifeste : {info['manifest']}")
-        else:  # asset
+        elif args.cmd == "asset":
             steps = [s.strip() for s in args.steps.split(",") if s.strip()] if args.steps else None
             info = create_asset(args.project, args.name, entity_type=args.entity_type,
                                 asset_type=args.asset_type, steps=steps, force=args.force)
@@ -459,7 +599,14 @@ def _cli(argv=None):
             print(f"  manifeste : {info['manifest']}")
             if info["asset_root"]:
                 print(f"  asset_root: {info['asset_root']}")
-    except (ValueError, FileExistsError) as e:
+        else:  # publish
+            info = publish_asset(args.project, args.asset, args.step, args.file)
+            print(f"[ok] publish {info['name']} / {info['step']} v{info['version']:03d}")
+            print(f"  publish   : {info['publish_path']}")
+            print(f"  manifeste : {info['manifest']}")
+            if info["asset_root"]:
+                print(f"  asset_root: {info['asset_root']}")
+    except (ValueError, FileExistsError, FileNotFoundError) as e:
         sys.stderr.write(f"[erreur] {e}\n")
         return 1
     return 0
