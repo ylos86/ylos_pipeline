@@ -52,6 +52,20 @@ def _migrator_module(repo):
     return mod
 
 
+# Mapping champ scene{} (project.json) -> setter Blender.
+# Les lambdas ne s'executent qu'a l'appel : pas de side-effect au chargement de l'addon.
+_SCENE_SETTERS = {
+    "fps":              lambda s, v: setattr(s.render, "fps", int(v)),
+    "fps_base":         lambda s, v: setattr(s.render, "fps_base", float(v)),
+    "unit_scale":       lambda s, v: setattr(s.unit_settings, "scale_length", float(v)),
+    "resolution_x":     lambda s, v: setattr(s.render, "resolution_x", int(v)),
+    "resolution_y":     lambda s, v: setattr(s.render, "resolution_y", int(v)),
+    "renderer":         lambda s, v: setattr(s.render, "engine", str(v)),
+    "color_management": lambda s, v: setattr(s.view_settings, "view_transform", str(v)),
+    "color_space":      lambda s, v: setattr(s.sequencer_colorspace_settings, "name", str(v)),
+}
+
+
 # --------------------------------------------------------------------------------------
 # Proprietes
 # --------------------------------------------------------------------------------------
@@ -164,6 +178,45 @@ class YLOS_OT_convert(Operator):
         return {'FINISHED'}
 
 
+class YLOS_OT_load_project(Operator):
+    bl_idname = "ylos.load_project"
+    bl_label = "Ouvrir projet"
+    bl_description = "Lit project.json et applique les reglages de scene (fps, rendu, color management...)"
+
+    def execute(self, context):
+        p = context.scene.ylos
+        project_path = p.target_project.strip()
+        if not project_path:
+            self.report({'ERROR'}, "Aucun projet selectionne"); return {'CANCELLED'}
+        try:
+            cp = _create_project_module(p.repo)
+            manifest = cp.read_manifest(project_path)
+        except Exception as e:
+            self.report({'ERROR'}, f"Lecture project.json : {e}"); return {'CANCELLED'}
+
+        scene = context.scene
+        scene_data = manifest.get("scene", {})
+        applied, failed = [], []
+
+        for key, setter in _SCENE_SETTERS.items():
+            if key not in scene_data:
+                continue
+            try:
+                setter(scene, scene_data[key])
+                applied.append(key)
+            except Exception as e:
+                failed.append(key)
+                self.report({'WARNING'}, f"Reglage ignore — {key} : {e}")
+
+        msg = f"'{manifest.get('name', '?')}' charge"
+        if applied:
+            msg += f" — {', '.join(applied)}"
+        if failed:
+            msg += f" — ignores : {', '.join(failed)}"
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
 # --------------------------------------------------------------------------------------
 # Panneau
 # --------------------------------------------------------------------------------------
@@ -185,6 +238,11 @@ class YLOS_PT_panel(Panel):
         box.prop(p, "cache")
 
         box = layout.box()
+        box.label(text="Projet actif", icon="FILE_FOLDER")
+        box.prop(p, "target_project")
+        box.operator("ylos.load_project", icon="IMPORT")
+
+        box = layout.box()
         box.label(text="Nouveau projet", icon="FILE_NEW")
         box.prop(p, "project_name")
         box.prop(p, "prod_type")
@@ -192,7 +250,6 @@ class YLOS_PT_panel(Panel):
 
         box = layout.box()
         box.label(text="Nouvel asset", icon="MESH_DATA")
-        box.prop(p, "target_project")
         box.prop(p, "asset_name")
         row = box.row(align=True)
         row.prop(p, "entity_type", text="")
@@ -211,7 +268,8 @@ class YLOS_PT_panel(Panel):
 # Enregistrement
 # --------------------------------------------------------------------------------------
 
-_classes = (YLOS_Props, YLOS_OT_create_project, YLOS_OT_create_asset, YLOS_OT_convert, YLOS_PT_panel)
+_classes = (YLOS_Props, YLOS_OT_create_project, YLOS_OT_create_asset, YLOS_OT_convert,
+            YLOS_OT_load_project, YLOS_PT_panel)
 
 
 def register():
