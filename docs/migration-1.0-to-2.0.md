@@ -1,7 +1,8 @@
 # Migration du schéma `project.json` : 1.0.0 → 2.0.0
 
-> **Statut** : contrat figé (Incrément 1). Le générateur (`create_project.py`) et le
-> migrateur des projets existants sont l'**Incrément 2/3**, non encore implémentés.
+> **Statut** : implémenté (Incréments 1–3). Générateur (`create_project.py`) et migrateur
+> (`migrate_to_2.0.py`) opérationnels. Les projets réels (`YLOS__TEST`, `Pachamama`)
+> restent à migrer (étape manuelle).
 
 ## Pourquoi un bump MAJEUR
 

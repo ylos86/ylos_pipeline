@@ -152,7 +152,7 @@ def latest_publishes(entity_dir, steps):
             continue
         best, best_v = None, -1
         for f in pub.iterdir():
-            if f.is_file() and f.suffix in USD_EXTS and _version(f.name) >= best_v:
+            if f.is_file() and f.suffix in USD_EXTS and _version(f.name) > best_v:
                 best, best_v = f, _version(f.name)
         if best is not None:
             result[step] = f"{step}/publish/{best.name}"
@@ -186,16 +186,18 @@ def build_asset_root(name, latest):
         f'    defaultPrim = "{name}"',
         f'    upAxis = "{cp.USD_UP_AXIS}"',
         "    metersPerUnit = 1",
+        "    subLayers = [",
+    ]
+    for s in ordered:
+        lines.append(f"        @{latest[s]}@,")
+    lines += [
+        "    ]",
         ")",
         "",
+        f'def Xform "{name}"',
+        "{",
+        "}",
     ]
-    if ordered:
-        lines += [f'def Xform "{name}" (', "    prepend references = ["]
-        # references : earlier = plus fort. Les publishes authorent /root -> cible </root>.
-        lines += [f"        @{latest[s]}@</root>," for s in ordered]
-        lines += ["    ]", ")", "{", "}"]
-    else:
-        lines += [f'def Xform "{name}"', "{", "}"]
     return "\n".join(lines) + "\n"
 
 

@@ -25,7 +25,7 @@ from bpy.types import Operator, Panel, PropertyGroup
 from bpy.props import StringProperty, EnumProperty, BoolProperty, PointerProperty
 
 # Emplacement du repo (source unique). Modifiable dans le panneau si le repo bouge.
-_REPO_DEFAULT = "/Users/sebastiendeoliveirabispo/Desktop/Claude/YlosPipeline"
+_REPO_DEFAULT = str(Path(__file__).resolve().parent.parent.parent)
 
 
 def _ensure_repo(repo):
