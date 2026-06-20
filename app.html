@@ -256,6 +256,21 @@
     .toast.ok   { border-color: var(--green); color: var(--green); }
     .toast.err  { border-color: var(--red);   color: var(--red);   }
 
+    .modal-select {
+      width: 100%; padding: 9px 12px; border-radius: 7px;
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); font-size: 13px; cursor: pointer; outline: none;
+      transition: border-color .15s;
+    }
+    .modal-select:hover { border-color: var(--border-hi); }
+    .modal-select:focus { border-color: var(--accent); }
+
+    .step-check {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;
+    }
+    .step-check input[type=checkbox] { accent-color: var(--accent); }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -272,6 +287,7 @@
   </div>
   <div class="header-right">
     <span class="status-label" id="js-status-label">Connexion…</span>
+    <button class="btn btn-primary"   id="js-btn-new-project">+ Nouveau projet</button>
     <button class="btn btn-secondary" id="js-btn-change">Changer projet</button>
   </div>
 </header>
@@ -302,6 +318,7 @@
   <div class="toolbar-right">
     <span class="refresh-icon" id="js-refresh-icon"></span>
     <span class="asset-count" id="js-count"></span>
+    <button class="btn btn-primary" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px">+ Créer asset</button>
     <select class="sort-select" id="js-sort">
       <option value="name-asc">Nom A → Z</option>
       <option value="name-desc">Nom Z → A</option>
@@ -357,6 +374,76 @@
 </div>
 
 <!-- ── Toast ───────────────────────────────────────── -->
+<!-- ── Modal nouveau projet ────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal-new-project">
+  <div class="modal">
+    <h2>Nouveau projet</h2>
+    <p class="subtitle">Crée un projet et en fait le projet actif.</p>
+    <div class="field">
+      <label>Nom</label>
+      <input type="text" id="js-np-name" spellcheck="false" placeholder="MonProjet">
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Type de production</label>
+      <select id="js-np-prod-type" class="modal-select">
+        <option value="FILM">FILM</option>
+        <option value="SERIES">SERIES</option>
+        <option value="GAME">GAME</option>
+        <option value="XR">XR</option>
+      </select>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Dossier racine</label>
+      <input type="text" id="js-np-root" spellcheck="false" placeholder="~/Projets">
+    </div>
+    <div class="modal-err" id="js-np-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   id="js-np-cancel">Annuler</button>
+      <button class="btn btn-primary" id="js-np-ok">Créer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal nouvel asset ──────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal-new-asset">
+  <div class="modal">
+    <h2>Créer un asset</h2>
+    <p class="subtitle">Scaffolde une nouvelle entité dans le projet actif.</p>
+    <div class="field">
+      <label>Nom</label>
+      <input type="text" id="js-na-name" spellcheck="false" placeholder="Lina">
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Famille</label>
+      <select id="js-na-family" class="modal-select">
+        <option value="asset">asset</option>
+        <option value="set">set</option>
+        <option value="shot">shot</option>
+      </select>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Type métier</label>
+      <select id="js-na-type" class="modal-select">
+        <option value="CHARACTER">CHARACTER</option>
+        <option value="PROP">PROP</option>
+        <option value="ENVIRONMENT">ENVIRONMENT</option>
+        <option value="VEHICLE">VEHICLE</option>
+        <option value="FX">FX</option>
+      </select>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Steps</label>
+      <div id="js-na-steps" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px"></div>
+    </div>
+    <div class="modal-err" id="js-na-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   id="js-na-cancel">Annuler</button>
+      <button class="btn btn-primary" id="js-na-ok">Créer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ───────────────────────────────────────── -->
 <div class="toast" id="js-toast"></div>
 
 <script>
@@ -399,6 +486,10 @@ const MODAL_INPUT  = el('js-modal-input');
 const MODAL_ERR    = el('js-modal-err');
 const MODAL_OK     = el('js-modal-ok');
 const TOAST        = el('js-toast');
+const MODAL_NP     = el('js-modal-new-project');
+const MODAL_NA     = el('js-modal-new-asset');
+
+const DEFAULT_STEPS = ['modeling', 'uvs', 'rigging', 'lookdev', 'fx'];
 
 // ── API helper ──────────────────────────────────────
 async function api(path, opts = {}) {
@@ -705,6 +796,106 @@ el('js-pills-family').querySelectorAll('.pill').forEach(p =>
     render();
   })
 );
+
+// ── Modal nouveau projet ──────────────────────────────
+function openNewProjectModal() {
+  el('js-np-name').value      = '';
+  el('js-np-root').value      = '';
+  el('js-np-err').textContent = '';
+  MODAL_NP.classList.remove('hidden');
+  setTimeout(() => el('js-np-name').focus(), 40);
+}
+function closeNewProjectModal() { MODAL_NP.classList.add('hidden'); }
+
+async function confirmNewProject() {
+  const name = el('js-np-name').value.trim();
+  const root = el('js-np-root').value.trim();
+  if (!name) { el('js-np-err').textContent = 'Nom requis.'; return; }
+  if (!root) { el('js-np-err').textContent = 'Dossier racine requis.'; return; }
+  el('js-np-err').textContent = '';
+  const btn = el('js-np-ok');
+  btn.disabled = true; btn.textContent = 'Création…';
+  try {
+    const { ok, data } = await api('/api/create-project', {
+      method: 'POST',
+      body: JSON.stringify({ name, prod_type: el('js-np-prod-type').value, root }),
+    });
+    if (ok) {
+      closeNewProjectModal();
+      S.assets = [];
+      await checkServer();
+      await loadAssets();
+      toast('Projet créé', 'ok');
+    } else {
+      el('js-np-err').textContent = data.error || 'Erreur inconnue';
+    }
+  } catch {
+    el('js-np-err').textContent = 'Serveur non disponible';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Créer';
+  }
+}
+
+// ── Modal nouvel asset ────────────────────────────────
+function openNewAssetModal() {
+  el('js-na-name').value      = '';
+  el('js-na-err').textContent = '';
+  el('js-na-steps').innerHTML = DEFAULT_STEPS.map(s =>
+    `<label class="step-check"><input type="checkbox" value="${s}" checked> ${s}</label>`
+  ).join('');
+  MODAL_NA.classList.remove('hidden');
+  setTimeout(() => el('js-na-name').focus(), 40);
+}
+function closeNewAssetModal() { MODAL_NA.classList.add('hidden'); }
+
+async function confirmNewAsset() {
+  const name  = el('js-na-name').value.trim();
+  const steps = [...el('js-na-steps').querySelectorAll('input:checked')].map(i => i.value);
+  if (!name)         { el('js-na-err').textContent = 'Nom requis.'; return; }
+  if (!steps.length) { el('js-na-err').textContent = 'Au moins un step requis.'; return; }
+  el('js-na-err').textContent = '';
+  const btn = el('js-na-ok');
+  btn.disabled = true; btn.textContent = 'Création…';
+  try {
+    const { ok, data } = await api('/api/create-asset', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        entity_type: el('js-na-family').value,
+        asset_type:  el('js-na-type').value,
+        steps,
+      }),
+    });
+    if (ok) {
+      closeNewAssetModal();
+      if (data.wip_path) await openBlender(data.wip_path);
+      await loadAssets();
+      toast('Asset créé', 'ok');
+    } else {
+      el('js-na-err').textContent = data.error || 'Erreur inconnue';
+    }
+  } catch {
+    el('js-na-err').textContent = 'Serveur non disponible';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Créer';
+  }
+}
+
+el('js-btn-new-project').addEventListener('click', openNewProjectModal);
+el('js-np-cancel').addEventListener('click', closeNewProjectModal);
+el('js-np-ok').addEventListener('click', confirmNewProject);
+MODAL_NP.addEventListener('click', e => { if (e.target === MODAL_NP) closeNewProjectModal(); });
+el('js-np-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmNewProject(); if (e.key === 'Escape') closeNewProjectModal();
+});
+
+el('js-btn-new-asset').addEventListener('click', openNewAssetModal);
+el('js-na-cancel').addEventListener('click', closeNewAssetModal);
+el('js-na-ok').addEventListener('click', confirmNewAsset);
+MODAL_NA.addEventListener('click', e => { if (e.target === MODAL_NA) closeNewAssetModal(); });
+el('js-na-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmNewAsset(); if (e.key === 'Escape') closeNewAssetModal();
+});
 
 // ── Init ─────────────────────────────────────────────
 (async () => {

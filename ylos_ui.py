@@ -180,6 +180,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._get_asset(p[len("/api/asset/"):])
         elif p.startswith("/thumb/"):
             self._get_thumb(p[len("/thumb/"):])
+        elif p == "/favicon.ico":
+            self.send_response(204); self.end_headers()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -189,6 +191,10 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._post_open_blender()
         elif p == "/api/set-project":
             self._post_set_project()
+        elif p == "/api/create-project":
+            self._post_create_project()
+        elif p == "/api/create-asset":
+            self._post_create_asset()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -352,6 +358,69 @@ class YlosHandler(BaseHTTPRequestHandler):
 
         _write_active(str(project_dir))
         _json(self, 200, {"ok": True, "path": str(project_dir)})
+
+    def _post_create_project(self):
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "JSON invalide dans le body"})
+            return
+        name = body.get("name", "").strip()
+        if not name:
+            _json(self, 400, {"error": "Champ 'name' manquant"})
+            return
+        prod_type = body.get("prod_type", "FILM")
+        root = body.get("root") or None
+        try:
+            info = create_project.create(name, root=root, prod_type=prod_type)
+        except (ValueError, FileExistsError) as e:
+            _json(self, 400, {"error": str(e)})
+            return
+        except OSError as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _write_active(info["source"])
+        try:
+            manifest = create_project.read_manifest(info["source"])
+        except (OSError, ValueError):
+            manifest = {}
+        _json(self, 200, {"ok": True, "project_path": info["source"], "manifest": manifest})
+
+    def _post_create_asset(self):
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "JSON invalide dans le body"})
+            return
+        name = body.get("name", "").strip()
+        if not name:
+            _json(self, 400, {"error": "Champ 'name' manquant"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        entity_type = body.get("entity_type", "asset")
+        asset_type  = body.get("asset_type", "OTHER")
+        steps       = body.get("steps") or None
+        try:
+            info = create_project.create_asset(
+                project_dir, name,
+                entity_type=entity_type,
+                asset_type=asset_type,
+                steps=steps,
+            )
+        except (ValueError, FileExistsError) as e:
+            _json(self, 400, {"error": str(e)})
+            return
+        except OSError as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        try:
+            asset_manifest = json.loads(Path(info["manifest"]).read_text(encoding="utf-8"))
+            used_steps = asset_manifest.get("steps", [])
+            wip_path = str(Path(info["path"]) / used_steps[0] / "wip") if used_steps else None
+        except (OSError, json.JSONDecodeError):
+            wip_path = None
+        _json(self, 200, {"ok": True, "asset_path": info["path"], "wip_path": wip_path})
 
 
 # -------------------------------------------------------------------------------------
