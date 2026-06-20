@@ -83,10 +83,10 @@ def migrate_project_manifest(legacy):
     return {
         "schema_version": cp.SCHEMA_VERSION,
         "name": p.get("name") or legacy.get("name"),
-        "display_name": p.get("display_name") or p.get("name"),
-        "prod_type": p.get("prod_type", "FILM"),
+        "display_name": p.get("display_name") or p.get("name") or legacy.get("display_name"),
+        "prod_type": p.get("prod_type") or legacy.get("prod_type", "FILM"),
         "topology": cp.TOPOLOGY,
-        "created_utc": _iso(p.get("created")),
+        "created_utc": _iso(p.get("created") or legacy.get("created_utc")),
         "modified_utc": _now(),
         "env": {"root": f"${cp.ENV_ROOT}", "cache": f"${cp.ENV_CACHE}"},
         "structure": {"source": list(cp.SOURCE_TREE), "cache": list(cp.CACHE_TREE)},
@@ -242,7 +242,9 @@ def _snapshot(project_dir, backup_dir):
     targets += list(project_dir.glob("sets/*/manifest.json"))
     targets += list(project_dir.glob("shots/*/manifest.json"))
     targets += list(project_dir.glob("assets/*/asset_root.usd"))
+    targets += list(project_dir.glob("assets/*/asset_root.usda"))
     targets += list(project_dir.glob("sets/*/asset_root.usd"))
+    targets += list(project_dir.glob("sets/*/asset_root.usda"))
     for t in targets:
         if t.exists():
             rel = t.relative_to(project_dir)
