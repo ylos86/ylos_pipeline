@@ -187,7 +187,9 @@ class YlosHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path
-        if p == "/api/project":
+        if p in ("/", "/app.html"):
+            self._get_app_html()
+        elif p == "/api/project":
             self._get_project()
         elif p == "/api/assets":
             self._get_assets()
@@ -230,6 +232,18 @@ class YlosHandler(BaseHTTPRequestHandler):
         return _read_active()
 
     # --- GET handlers
+
+    def _get_app_html(self):
+        f = Path(__file__).parent / "app.html"
+        try:
+            data = f.read_bytes()
+        except OSError:
+            _json(self, 404, {"error": "app.html introuvable"}); return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _get_project(self):
         project_dir = self._active()

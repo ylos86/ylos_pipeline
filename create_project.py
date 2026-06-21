@@ -65,9 +65,9 @@ FALLBACK_ROOT = Path.home() / "Ylos" / "projects"
 FALLBACK_CACHE = Path.home() / "Ylos" / "cache"
 
 # --- Defauts pipeline (taxonomie des steps + assemblage USD) --------------------------
-DEFAULT_ASSET_STEPS = ["modeling", "uvs", "rigging", "lookdev", "fx"]
-DEFAULT_SHOT_STEPS = ["layout", "animation", "lighting", "fx", "render", "composite"]
-DEFAULT_SET_STEPS = ["modeling", "lookdev", "lighting"]
+DEFAULT_ASSET_STEPS = ["modeling", "rigging", "lookdev", "fx"]
+DEFAULT_SHOT_STEPS  = ["animation", "fx", "lighting", "comp"]
+DEFAULT_SET_STEPS   = ["layout", "lookdev", "lighting"]
 USD_ROOT_PRIM = "/ROOT"           # prim racine des stages d'ASSEMBLAGE (sets/shots).
                                   # Les assets s'ancrent sous /<NomAsset> (cf. usd-convention.md).
 
