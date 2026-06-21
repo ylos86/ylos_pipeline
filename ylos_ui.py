@@ -161,6 +161,16 @@ def _is_project(path: Path) -> bool:
     return (path / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME).is_file()
 
 
+def _is_user_volume(p: Path) -> bool:
+    try:
+        real = p.resolve()
+        return not (str(real) == '/' or
+                    str(real).startswith('/System/') or
+                    str(real).startswith('/private/'))
+    except Exception:
+        return False
+
+
 # -------------------------------------------------------------------------------------
 # Handler HTTP
 # -------------------------------------------------------------------------------------
@@ -316,14 +326,14 @@ class YlosHandler(BaseHTTPRequestHandler):
         raw    = parse_qs(parsed.query).get("path", [""])[0].strip()
 
         if not raw:
-            home = Path.home()
+            home = Path.home().resolve()
             dirs = [{"name": f"{home.name}  (~)", "path": str(home),
                      "is_project": _is_project(home)}]
             vol  = Path("/Volumes")
             if vol.is_dir():
                 try:
                     for v in sorted(vol.iterdir(), key=lambda x: x.name.lower()):
-                        if v.is_dir() and not v.name.startswith('.'):
+                        if v.is_dir() and not v.name.startswith('.') and _is_user_volume(v):
                             dirs.append({"name": v.name, "path": str(v),
                                          "is_project": _is_project(v)})
                 except PermissionError:
