@@ -838,6 +838,7 @@ el('js-pills-family').querySelectorAll('.pill').forEach(p =>
 
 // ── Browse ────────────────────────────────────────────
 function _browsePanelOutside(e) {
+  if (e.target.closest('#js-np-ok')) return;
   if (!e.target.closest('#js-np-browse-panel') &&
       !e.target.closest('#js-np-browse-btn') &&
       !e.target.closest('#js-np-root')) {
@@ -908,6 +909,9 @@ function closeNewProjectModal() {
 }
 
 async function confirmNewProject() {
+  console.log('[ylos] confirmNewProject called');
+  console.log('[ylos] name:', el('js-np-name').value.trim());
+  console.log('[ylos] root:', el('js-np-root').value.trim());
   const name = el('js-np-name').value.trim();
   const root = el('js-np-root').value.trim();
   if (!name) { el('js-np-err').textContent = 'Nom requis.'; return; }
@@ -920,6 +924,7 @@ async function confirmNewProject() {
       method: 'POST',
       body: JSON.stringify({ name, prod_type: el('js-np-prod-type').value, root }),
     });
+    console.log('[ylos] api response:', ok, JSON.stringify(data));
     if (ok) {
       closeNewProjectModal();
       S.assets = [];
