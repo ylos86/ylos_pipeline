@@ -242,6 +242,29 @@
     .modal-err { font-size: 12px; color: var(--red); min-height: 18px; margin-top: 8px; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
 
+    .root-field { display: flex; gap: 6px; align-items: center; }
+    .root-field input { flex: 1; min-width: 0; }
+
+    .browse-panel {
+      margin-top: 6px; border-radius: 7px;
+      border: 1px solid var(--border); background: var(--bg);
+      max-height: 220px; overflow-y: auto;
+    }
+    .browse-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 10px; font-size: 12px; color: var(--text-muted);
+      cursor: pointer; border-bottom: 1px solid var(--border);
+      transition: background .12s;
+    }
+    .browse-row:last-child { border-bottom: none; }
+    .browse-row:hover { background: var(--bg-3); color: var(--text); }
+    .browse-parent { color: var(--text-dim); font-style: italic; }
+    .badge-ylos {
+      font-size: 9px; font-weight: 700; flex-shrink: 0;
+      padding: 1px 6px; border-radius: 3px; letter-spacing: .5px;
+      background: #78350f20; color: #fbbf24; border: 1px solid #fbbf2440;
+    }
+
     /* ── Toast ───────────────────────────────────── */
     .toast {
       position: fixed; bottom: 22px; right: 22px; z-index: 2000;
@@ -394,7 +417,11 @@
     </div>
     <div class="field" style="margin-top:12px">
       <label>Dossier racine</label>
-      <input type="text" id="js-np-root" spellcheck="false" placeholder="~/Projets">
+      <div class="root-field">
+        <input type="text" id="js-np-root" spellcheck="false" placeholder="~/Projets">
+        <button class="btn btn-secondary" id="js-np-browse-btn" type="button">Parcourir</button>
+      </div>
+      <div class="browse-panel hidden" id="js-np-browse-panel"></div>
     </div>
     <div class="modal-err" id="js-np-err"></div>
     <div class="modal-actions">
@@ -423,13 +450,7 @@
     </div>
     <div class="field" style="margin-top:12px">
       <label>Type métier</label>
-      <select id="js-na-type" class="modal-select">
-        <option value="CHARACTER">CHARACTER</option>
-        <option value="PROP">PROP</option>
-        <option value="ENVIRONMENT">ENVIRONMENT</option>
-        <option value="VEHICLE">VEHICLE</option>
-        <option value="FX">FX</option>
-      </select>
+      <select id="js-na-type" class="modal-select"></select>
     </div>
     <div class="field" style="margin-top:12px">
       <label>Steps</label>
@@ -489,7 +510,20 @@ const TOAST        = el('js-toast');
 const MODAL_NP     = el('js-modal-new-project');
 const MODAL_NA     = el('js-modal-new-asset');
 
-const DEFAULT_STEPS = ['modeling', 'uvs', 'rigging', 'lookdev', 'fx'];
+const FAMILY_CONFIG = {
+  asset: {
+    types: ['CHARACTER', 'PROP', 'VEHICLE', 'CREATURE', 'FX_ELEMENT'],
+    steps: ['modeling', 'rigging', 'lookdev', 'fx'],
+  },
+  set: {
+    types: ['EXTERIOR', 'INTERIOR', 'HERO_SET', 'MODULAR_KIT'],
+    steps: ['layout', 'lookdev', 'lighting'],
+  },
+  shot: {
+    types: ['LAYOUT', 'ANIMATION', 'FX', 'LIGHTING', 'COMP'],
+    steps: ['animation', 'fx', 'lighting', 'comp'],
+  },
+};
 
 // ── API helper ──────────────────────────────────────
 async function api(path, opts = {}) {
@@ -797,15 +831,76 @@ el('js-pills-family').querySelectorAll('.pill').forEach(p =>
   })
 );
 
+// ── Browse ────────────────────────────────────────────
+function _browsePanelOutside(e) {
+  if (!e.target.closest('#js-np-browse-panel') &&
+      !e.target.closest('#js-np-browse-btn') &&
+      !e.target.closest('#js-np-root')) {
+    closeBrowsePanel();
+  }
+}
+
+function closeBrowsePanel() {
+  el('js-np-browse-panel').classList.add('hidden');
+  document.removeEventListener('mousedown', _browsePanelOutside);
+}
+
+function renderBrowsePanel(data) {
+  const panel = el('js-np-browse-panel');
+  let html = '';
+  if (data.parent !== null) {
+    html += `<div class="browse-row browse-parent" data-path="${esc(data.parent)}">↑ Dossier parent</div>`;
+  }
+  if (!data.dirs.length) {
+    html += `<div class="browse-row" style="color:var(--text-dim);cursor:default">Dossier vide</div>`;
+  } else {
+    html += data.dirs.map(d =>
+      `<div class="browse-row" data-path="${esc(d.path)}">
+         <span>${esc(d.name)}</span>
+         ${d.is_project ? '<span class="badge-ylos">ylos</span>' : ''}
+       </div>`
+    ).join('');
+  }
+  panel.innerHTML = html;
+  panel.classList.remove('hidden');
+  panel.querySelectorAll('[data-path]').forEach(row =>
+    row.addEventListener('click', () => {
+      const p = row.dataset.path;
+      el('js-np-root').value = p;
+      browseTo(p);
+    })
+  );
+  document.addEventListener('mousedown', _browsePanelOutside);
+}
+
+async function browseTo(path) {
+  const url = path
+    ? `${BASE}/api/browse?path=${encodeURIComponent(path)}`
+    : `${BASE}/api/browse`;
+  try {
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) { el('js-np-err').textContent = data.error || 'Erreur browse'; return; }
+    renderBrowsePanel(data);
+    if (data.path) el('js-np-root').value = data.path;
+  } catch {
+    el('js-np-err').textContent = 'Serveur non disponible';
+  }
+}
+
 // ── Modal nouveau projet ──────────────────────────────
 function openNewProjectModal() {
   el('js-np-name').value      = '';
   el('js-np-root').value      = '';
   el('js-np-err').textContent = '';
+  closeBrowsePanel();
   MODAL_NP.classList.remove('hidden');
   setTimeout(() => el('js-np-name').focus(), 40);
 }
-function closeNewProjectModal() { MODAL_NP.classList.add('hidden'); }
+function closeNewProjectModal() {
+  MODAL_NP.classList.add('hidden');
+  closeBrowsePanel();
+}
 
 async function confirmNewProject() {
   const name = el('js-np-name').value.trim();
@@ -837,12 +932,21 @@ async function confirmNewProject() {
 }
 
 // ── Modal nouvel asset ────────────────────────────────
+function rebuildAssetModal(family) {
+  const cfg = FAMILY_CONFIG[family] || FAMILY_CONFIG.asset;
+  el('js-na-type').innerHTML = cfg.types.map(t =>
+    `<option value="${t}">${t}</option>`
+  ).join('');
+  el('js-na-steps').innerHTML = cfg.steps.map(s =>
+    `<label class="step-check"><input type="checkbox" value="${s}" checked> ${s}</label>`
+  ).join('');
+}
+
 function openNewAssetModal() {
   el('js-na-name').value      = '';
   el('js-na-err').textContent = '';
-  el('js-na-steps').innerHTML = DEFAULT_STEPS.map(s =>
-    `<label class="step-check"><input type="checkbox" value="${s}" checked> ${s}</label>`
-  ).join('');
+  el('js-na-family').value    = 'asset';
+  rebuildAssetModal('asset');
   MODAL_NA.classList.remove('hidden');
   setTimeout(() => el('js-na-name').focus(), 40);
 }
@@ -883,6 +987,7 @@ async function confirmNewAsset() {
 
 el('js-btn-new-project').addEventListener('click', openNewProjectModal);
 el('js-np-cancel').addEventListener('click', closeNewProjectModal);
+el('js-np-browse-btn').addEventListener('click', () => browseTo(el('js-np-root').value.trim()));
 el('js-np-ok').addEventListener('click', confirmNewProject);
 MODAL_NP.addEventListener('click', e => { if (e.target === MODAL_NP) closeNewProjectModal(); });
 el('js-np-name').addEventListener('keydown', e => {
@@ -890,6 +995,7 @@ el('js-np-name').addEventListener('keydown', e => {
 });
 
 el('js-btn-new-asset').addEventListener('click', openNewAssetModal);
+el('js-na-family').addEventListener('change', e => rebuildAssetModal(e.target.value));
 el('js-na-cancel').addEventListener('click', closeNewAssetModal);
 el('js-na-ok').addEventListener('click', confirmNewAsset);
 MODAL_NA.addEventListener('click', e => { if (e.target === MODAL_NA) closeNewAssetModal(); });

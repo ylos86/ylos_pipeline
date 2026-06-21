@@ -25,6 +25,7 @@ import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 # create_project importé depuis le même dossier — logique unique, jamais dupliquée.
 _HERE = Path(__file__).resolve().parent
@@ -156,6 +157,10 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
     return None
 
 
+def _is_project(path: Path) -> bool:
+    return (path / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME).is_file()
+
+
 # -------------------------------------------------------------------------------------
 # Handler HTTP
 # -------------------------------------------------------------------------------------
@@ -182,6 +187,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._get_thumb(p[len("/thumb/"):])
         elif p == "/favicon.ico":
             self.send_response(204); self.end_headers()
+        elif p.startswith("/api/browse"):
+            self._get_browse()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -303,6 +310,46 @@ class YlosHandler(BaseHTTPRequestHandler):
         _cors(self)
         self.end_headers()
         self.wfile.write(data)
+
+    def _get_browse(self):
+        parsed = urlparse(self.path)
+        raw    = parse_qs(parsed.query).get("path", [""])[0].strip()
+
+        if not raw:
+            home = Path.home()
+            dirs = [{"name": f"{home.name}  (~)", "path": str(home),
+                     "is_project": _is_project(home)}]
+            vol  = Path("/Volumes")
+            if vol.is_dir():
+                try:
+                    for v in sorted(vol.iterdir(), key=lambda x: x.name.lower()):
+                        if v.is_dir() and not v.name.startswith('.'):
+                            dirs.append({"name": v.name, "path": str(v),
+                                         "is_project": _is_project(v)})
+                except PermissionError:
+                    pass
+            _json(self, 200, {"path": "", "parent": None, "dirs": dirs})
+            return
+
+        target = Path(raw).expanduser().resolve()
+        if not target.exists() or not target.is_dir():
+            _json(self, 400, {"error": f"Dossier introuvable : {target}"})
+            return
+        try:
+            entries = sorted(target.iterdir(), key=lambda p: p.name.lower())
+        except PermissionError:
+            _json(self, 403, {"error": f"Permission refusée : {target}"})
+            return
+
+        dirs = []
+        for entry in entries:
+            if not entry.is_dir() or entry.name.startswith('.'):
+                continue
+            dirs.append({"name": entry.name, "path": str(entry),
+                         "is_project": _is_project(entry)})
+
+        parent = str(target.parent) if target.parent != target else None
+        _json(self, 200, {"path": str(target), "parent": parent, "dirs": dirs})
 
     # --- POST handlers
 
