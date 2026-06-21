@@ -314,8 +314,8 @@
   </div>
   <div class="header-right">
     <span class="status-label" id="js-status-label">Connexion…</span>
-    <button class="btn btn-primary"   id="js-btn-new-project">+ Nouveau projet</button>
-    <button class="btn btn-secondary" id="js-btn-change">Changer projet</button>
+    <button class="btn btn-primary"   id="js-btn-new-project" onclick="openNewProjectModal()">+ Nouveau projet</button>
+    <button class="btn btn-secondary" id="js-btn-change" onclick="openModal()">Changer projet</button>
   </div>
 </header>
 
@@ -345,7 +345,7 @@
   <div class="toolbar-right">
     <span class="refresh-icon" id="js-refresh-icon"></span>
     <span class="asset-count" id="js-count"></span>
-    <button class="btn btn-primary" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px">+ Créer asset</button>
+    <button class="btn btn-primary" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ Créer asset</button>
     <select class="sort-select" id="js-sort">
       <option value="name-asc">Nom A → Z</option>
       <option value="name-desc">Nom Z → A</option>
@@ -365,7 +365,7 @@
     </svg>
     <h3>Aucun projet actif</h3>
     <p>Définis un projet pour afficher ses assets.</p>
-    <button class="btn btn-primary" id="js-btn-change-empty">Choisir un projet</button>
+    <button class="btn btn-primary" id="js-btn-change-empty" onclick="openModal()">Choisir un projet</button>
   </div>
 
   <div class="asset-grid hidden" id="js-grid"></div>
@@ -472,6 +472,7 @@
 <div class="toast" id="js-toast"></div>
 
 <script>
+console.log('[ylos] script start');
 'use strict';
 
 const BASE     = 'http://127.0.0.1:8765';
@@ -1007,6 +1008,7 @@ el('js-na-name').addEventListener('keydown', e => {
   if (e.key === 'Enter') confirmNewAsset(); if (e.key === 'Escape') closeNewAssetModal();
 });
 
+console.log('[ylos] bindings done');
 // ── Init ─────────────────────────────────────────────
 (async () => {
   await checkServer();
