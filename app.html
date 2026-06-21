@@ -212,7 +212,9 @@
       background: rgba(0,0,0,.65);
       display: flex; align-items: center; justify-content: center;
       backdrop-filter: blur(4px);
+      pointer-events: none;
     }
+    .modal-overlay:not(.hidden) { pointer-events: auto; }
     .modal {
       background: var(--bg-2); border: 1px solid var(--border-hi);
       border-radius: 12px; padding: 28px; width: 460px;
@@ -294,7 +296,7 @@
     }
     .step-check input[type=checkbox] { accent-color: var(--accent); }
 
-    .hidden { display: none !important; }
+    .hidden { display: none !important; pointer-events: none !important; }
   </style>
 </head>
 <body>
