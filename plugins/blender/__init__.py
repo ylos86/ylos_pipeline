@@ -17,7 +17,7 @@ import os
 import sys
 
 # Make create_project.py importable everywhere in the addon
-_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", ".."))
 
 from . import core
 from .ui import panel_pipeline, panel_asset_list

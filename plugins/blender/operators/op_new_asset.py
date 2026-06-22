@@ -9,7 +9,7 @@ from ..core.asset import (
 )
 from ..core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
 
 def _cp():

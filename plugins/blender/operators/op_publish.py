@@ -10,7 +10,7 @@ from ..core.asset import get_latest_publish_version, list_publish_versions
 from ..core.project import is_step_valid_for_context
 from ..core.scene_checker import get_asset_objects_for_publish
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
 
 def _cp():

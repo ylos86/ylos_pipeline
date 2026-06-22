@@ -6,7 +6,7 @@ from bpy.props import StringProperty, EnumProperty
 from ..core.project import apply_scene_preset, setup_scene_collections
 
 # Inject REPO_ROOT (where create_project.py lives) into sys.path
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
 
 def _cp():

@@ -13,7 +13,7 @@ _SET_STEPS   = [("modeling", "Mod"), ("lookdev", "LDv"), ("lighting", "Lgt")]
 
 _STEP_MAP = {"ASSET": _ASSET_STEPS, "SHOT": _SHOT_STEPS, "SET": _SET_STEPS}
 
-REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
 
 def _has_project(scene):
