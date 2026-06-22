@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +40,7 @@ import create_project  # noqa: E402
 
 YLOS_DIR = Path.home() / ".ylos"
 ACTIVE_FILE = YLOS_DIR / "active_project"
+RECENT_FILE = os.path.expanduser("~/.ylos/recent_projects")
 DEFAULT_PORT = 8765
 BLENDER_APP = Path("/Applications/Blender.app/Contents/MacOS/Blender")
 THUMB_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -73,6 +75,21 @@ def _read_active() -> Path | None:
 def _write_active(path: str) -> None:
     YLOS_DIR.mkdir(parents=True, exist_ok=True)
     ACTIVE_FILE.write_text(str(path) + "\n", encoding="utf-8")
+
+
+def _load_recent():
+    try:
+        return json.loads(open(RECENT_FILE).read())
+    except Exception:
+        return []
+
+
+def _push_recent(path):
+    recent = [p for p in _load_recent() if p != path]
+    recent.insert(0, os.path.abspath(path))
+    recent = recent[:10]
+    os.makedirs(os.path.dirname(RECENT_FILE), exist_ok=True)
+    open(RECENT_FILE, "w").write(json.dumps(recent, indent=2))
 
 
 def _read_asset_manifest(asset_dir: Path) -> dict | None:
@@ -201,6 +218,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             self.send_response(204); self.end_headers()
         elif p.startswith("/api/browse"):
             self._get_browse()
+        elif p == "/api/recent-projects":
+            self._get_recent_projects()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -375,6 +394,10 @@ class YlosHandler(BaseHTTPRequestHandler):
         parent = str(target.parent) if target.parent != target else None
         _json(self, 200, {"path": str(target), "parent": parent, "dirs": dirs})
 
+    def _get_recent_projects(self):
+        recent = [p for p in _load_recent() if os.path.isdir(p)]
+        _json(self, 200, recent)
+
     # --- POST handlers
 
     def _post_open_blender(self):
@@ -428,6 +451,7 @@ class YlosHandler(BaseHTTPRequestHandler):
             return
 
         _write_active(str(project_dir))
+        _push_recent(str(project_dir))
         _json(self, 200, {"ok": True, "path": str(project_dir)})
 
     def _post_create_project(self):
@@ -450,6 +474,7 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 500, {"error": str(e)})
             return
         _write_active(info["source"])
+        _push_recent(info["source"])
         try:
             manifest = create_project.read_manifest(info["source"])
         except (OSError, ValueError):

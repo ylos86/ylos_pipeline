@@ -299,6 +299,25 @@
     .step-check input[type=checkbox] { accent-color: var(--accent); }
 
     .hidden { display: none !important; pointer-events: none !important; }
+
+    /* ── Recent dropdown ─────────────────────────────── */
+    #js-recent-list {
+      position: absolute; top: calc(100% + 4px); left: 0; z-index: 500;
+      background: var(--bg-2); border: 1px solid var(--border-hi);
+      border-radius: 8px; list-style: none;
+      min-width: 260px; max-width: 440px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.5);
+      overflow: hidden;
+    }
+    #js-recent-list li {
+      padding: 8px 14px; font-size: 12px; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      transition: background .12s; color: var(--text-muted);
+    }
+    #js-recent-list li:last-child { border-bottom: none; }
+    #js-recent-list li:hover { background: var(--bg-hover); color: var(--text); }
+    #js-recent-list li .recent-basename { font-weight: 500; color: var(--text); }
   </style>
 </head>
 <body>
@@ -311,6 +330,10 @@
       <span class="status-dot" id="js-dot"></span>
       <span id="js-project-name">Aucun projet</span>
     </span>
+    <div id="js-recent-wrap" style="position:relative;display:inline-block">
+      <button id="js-recent-btn" class="btn btn-secondary hidden" type="button">Récents ▾</button>
+      <ul id="js-recent-list" hidden></ul>
+    </div>
   </div>
   <div class="header-right">
     <span class="status-label" id="js-status-label">Connexion…</span>
@@ -777,6 +800,7 @@ async function confirmModal() {
       S.assets = [];
       await checkServer();
       await loadAssets();
+      await loadRecent();
       toast('Projet changé', 'ok');
     } else {
       MODAL_ERR.textContent = data.error || 'Erreur inconnue';
@@ -930,6 +954,7 @@ async function confirmNewProject() {
       S.assets = [];
       await checkServer();
       await loadAssets();
+      await loadRecent();
       toast('Projet créé', 'ok');
     } else {
       el('js-np-err').textContent = data.error || 'Erreur inconnue';
@@ -1014,10 +1039,63 @@ el('js-na-name').addEventListener('keydown', e => {
 });
 
 console.log('[ylos] bindings done');
+// ── Recent projects ───────────────────────────────────
+async function loadRecent() {
+  try {
+    const { ok, data } = await api('/api/recent-projects');
+    const btn  = el('js-recent-btn');
+    const list = el('js-recent-list');
+    if (!ok || !Array.isArray(data) || !data.length) {
+      btn.classList.add('hidden');
+      return;
+    }
+    btn.classList.remove('hidden');
+    list.innerHTML = data.map(p => {
+      const base = p.split('/').pop();
+      return `<li title="${esc(p)}" data-path="${esc(p)}"><span class="recent-basename">${esc(base)}</span></li>`;
+    }).join('');
+    list.querySelectorAll('li').forEach(li =>
+      li.addEventListener('click', () => setProject(li.dataset.path))
+    );
+  } catch { /* serveur hors ligne */ }
+}
+
+async function setProject(path) {
+  el('js-recent-list').hidden = true;
+  try {
+    const { ok, data } = await api('/api/set-project', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    if (ok) {
+      S.assets = [];
+      await checkServer();
+      await loadAssets();
+      await loadRecent();
+      toast('Projet changé', 'ok');
+    } else {
+      toast(data.error || 'Erreur', 'err');
+    }
+  } catch {
+    toast('Serveur non disponible', 'err');
+  }
+}
+
+el('js-recent-btn').addEventListener('click', () => {
+  const list = el('js-recent-list');
+  list.hidden = !list.hidden;
+});
+
+document.addEventListener('mousedown', e => {
+  if (!e.target.closest('#js-recent-wrap'))
+    el('js-recent-list').hidden = true;
+});
+
 // ── Init ─────────────────────────────────────────────
 (async () => {
   await checkServer();
   await loadAssets();
+  await loadRecent();
   startPoll();
 })();
 </script>
