@@ -25,6 +25,7 @@ from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
     op_open_context, op_open_wip, op_switch_context,
     op_load_publish, op_asset_list, op_scene_check, op_popup,
+    op_export_glb,
 )
 
 _classes = (
@@ -49,6 +50,7 @@ _classes = (
     op_scene_check.YLOS_OT_AutoFix,
     op_scene_check.YLOS_OT_FixAll,
     op_popup.YLOS_OT_OpenPopup,
+    op_export_glb.YLOS_OT_ExportGLB,
     panel_pipeline.YLOS_PT_PipelinePanel,
     panel_pipeline.YLOS_PT_AssetPanel,
     panel_pipeline.YLOS_PT_SceneSettingsPanel,

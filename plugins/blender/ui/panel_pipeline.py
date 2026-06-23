@@ -183,7 +183,20 @@ class YLOS_PT_AssetPanel(bpy.types.Panel):
         pub_col.separator(factor=0.3)
         pub_row = pub_col.row(align=True)
         pub_row.scale_y = 1.2
-        pub_row.operator("ylos.publish", text="Publish Step", icon="EXPORT")
+
+        pipeline_target = "offline"
+        proj_json = os.path.join(scene.ylos_project_path, "_pipeline", "project.json")
+        try:
+            import json
+            with open(proj_json) as _f:
+                pipeline_target = json.load(_f).get("pipeline_target", "offline")
+        except Exception:
+            pass
+
+        if pipeline_target == "web":
+            pub_row.operator("ylos.export_glb", text="Export glTF", icon="EXPORT")
+        else:
+            pub_row.operator("ylos.publish", text="Publish Step", icon="EXPORT")
 
         pub_col.separator(factor=0.3)
         load_row = pub_col.row(align=True)
