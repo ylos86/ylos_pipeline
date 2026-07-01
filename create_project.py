@@ -33,6 +33,8 @@ Usage import (plugin DCC) :
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -93,6 +95,18 @@ USD_METERS_PER_UNIT = 1.0         # aligne sur scene.unit_scale
 ENTITY_DIR = {"asset": "assets", "set": "sets", "shot": "shots"}
 _DEFAULT_STEPS = {"asset": DEFAULT_ASSET_STEPS, "set": DEFAULT_SET_STEPS, "shot": DEFAULT_SHOT_STEPS}
 _STEPS_KEY = {"asset": "asset_steps", "set": "set_steps", "shot": "shot_steps"}
+
+# --- Publish LOP (Solaris) - version d'asset complete, hors taxonomie de steps -----------
+# Un publish LOP (cf. HDA ylos::publish) n'est PAS un step de pipeline (modeling/rigging/...) :
+# c'est un instantane complet du reseau LOP (layer USD + thumb). Vit dans son propre dossier
+# reserve, n'entre jamais dans la composition subLayers de asset_root.usda.
+ASSET_TYPES = ["CHARACTER", "PROP", "VEHICLE", "CREATURE", "FX_ELEMENT"]
+LOP_DIR_NAME = "lop"
+LOP_PUBLISH_DIR_NAME = "publish"
+LOP_STAGING_DIR_NAME = ".staging"
+LOP_THUMB_NAME = "thumb.png"
+LOP_PUBLISHES_KEY = "lop_publishes"
+_DIR_VER_RE = re.compile(r"_v(\d+)$")
 
 # Ordre de force des steps pour l'empilement subLayers (plus fort / downstream en premier).
 # USD : le premier sublayer de la liste est le plus fort.
@@ -201,6 +215,25 @@ def _ver(path):
     """Extrait le numéro de version d'un chemin de publish (ex 'step/publish/A_step_v002.usdc' -> 2)."""
     m = _VER_RE.search(str(path))
     return int(m.group(1)) if m else 0
+
+
+@contextlib.contextmanager
+def _manifest_lock(manifest_path):
+    """Verrou exclusif (fcntl.flock) le temps d'une section critique read-modify-write sur
+    un manifest.json. Le verrou vit dans un fichier '.lock' a cote du manifeste (jamais sur
+    le manifeste lui-meme) pour ne jamais interferer avec sa lecture/ecriture. Bloquant :
+    une seconde allocation concurrente attend la liberation plutot que de risquer une
+    collision de version ou un manifeste corrompu."""
+    manifest_path = Path(manifest_path)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = manifest_path.with_name(manifest_path.name + ".lock")
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 # --------------------------------------------------------------------------------------
@@ -494,49 +527,55 @@ def publish_asset(project_root, asset_name, step, source_file):
         )
 
     manifest_path = entity_dir / ASSET_MANIFEST_NAME
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    valid_steps = manifest.get("steps", [])
-    if step not in valid_steps:
-        raise ValueError(
-            f"Step '{step}' invalide pour '{asset_name}' (steps declares : {valid_steps})."
+    # Section critique : lecture manifeste -> allocation de version -> copie -> ecriture
+    # manifeste -> reconstruction asset_root.usda. Verrouillee de bout en bout (fcntl.flock)
+    # pour qu'un second publish concurrent ne puisse jamais lire un 'publishes' perime et
+    # entrer en collision sur le meme numero de version (cf. _manifest_lock).
+    with _manifest_lock(manifest_path):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        valid_steps = manifest.get("steps", [])
+        if step not in valid_steps:
+            raise ValueError(
+                f"Step '{step}' invalide pour '{asset_name}' (steps declares : {valid_steps})."
+            )
+
+        # Prochain numero de version
+        existing = manifest.get("publishes", {}).get(step, [])
+        next_ver = max((_ver(p) for p in existing), default=0) + 1
+
+        # Chemin cible versionne
+        ext = source_file.suffix
+        versioned_name = f"{asset_name}_{step}_v{next_ver:03d}{ext}"
+        publish_dir = entity_dir / step / "publish"
+        publish_dir.mkdir(parents=True, exist_ok=True)
+        target = publish_dir / versioned_name
+
+        if target.exists():
+            raise FileExistsError(
+                f"Version deja presente, non ecrasee : {target}"
+            )
+
+        shutil.copy2(source_file, target)
+
+        # Mettre a jour manifest.json
+        publishes = manifest.setdefault("publishes", {})
+        publishes.setdefault(step, [])
+        publishes[step].append(f"{step}/publish/{versioned_name}")
+        manifest["modified_utc"] = _now()
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
 
-    # Prochain numero de version
-    existing = manifest.get("publishes", {}).get(step, [])
-    next_ver = max((_ver(p) for p in existing), default=0) + 1
-
-    # Chemin cible versionne
-    ext = source_file.suffix
-    versioned_name = f"{asset_name}_{step}_v{next_ver:03d}{ext}"
-    publish_dir = entity_dir / step / "publish"
-    publish_dir.mkdir(parents=True, exist_ok=True)
-    target = publish_dir / versioned_name
-
-    if target.exists():
-        raise FileExistsError(
-            f"Version deja presente, non ecrasee : {target}"
-        )
-
-    shutil.copy2(source_file, target)
-
-    # Mettre a jour manifest.json
-    publishes = manifest.setdefault("publishes", {})
-    publishes.setdefault(step, [])
-    publishes[step].append(f"{step}/publish/{versioned_name}")
-    manifest["modified_utc"] = _now()
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-
-    # Reconstruire asset_root.usda (asset/set uniquement)
-    asset_root_path = None
-    entity_type = manifest.get("entity_type", "asset")
-    if entity_type in ("asset", "set"):
-        content = build_asset_root(manifest.get("name", asset_name),
-                                   _latest_from_publishes(publishes))
-        asset_root_path = entity_dir / ASSET_ROOT_NAME
-        asset_root_path.write_text(content, encoding="utf-8")
+        # Reconstruire asset_root.usda (asset/set uniquement)
+        asset_root_path = None
+        entity_type = manifest.get("entity_type", "asset")
+        if entity_type in ("asset", "set"):
+            content = build_asset_root(manifest.get("name", asset_name),
+                                       _latest_from_publishes(publishes))
+            asset_root_path = entity_dir / ASSET_ROOT_NAME
+            asset_root_path.write_text(content, encoding="utf-8")
 
     return {
         "name": asset_name,
@@ -545,6 +584,171 @@ def publish_asset(project_root, asset_name, step, source_file):
         "publish_path": str(target),
         "manifest": str(manifest_path),
         "asset_root": str(asset_root_path) if asset_root_path else None,
+    }
+
+
+# --------------------------------------------------------------------------------------
+# Publish LOP (Solaris) - version d'asset complete (layer USD + thumb), staging + replace
+# --------------------------------------------------------------------------------------
+
+def validate_publish_asset_name(asset_name, asset_type):
+    """Valide asset_name contre la convention TYPE_Asset_Variant (TYPE = asset_type).
+    Match par prefixe exact (et non un split('_') naif) car certains types contiennent deja
+    un underscore (FX_ELEMENT) : 'FX_ELEMENT_Drone_Default' a 4 segments '_', pas 3."""
+    if asset_type not in ASSET_TYPES:
+        raise ValueError(f"asset_type invalide : {asset_type!r} (attendu un de {ASSET_TYPES})")
+    prefix = f"{asset_type}_"
+    if not asset_name.startswith(prefix):
+        raise ValueError(
+            f"asset_name {asset_name!r} ne respecte pas la convention "
+            f"{asset_type}_Asset_Variant (prefixe attendu : {prefix!r})"
+        )
+    remainder = asset_name[len(prefix):]
+    parts = remainder.split("_")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(
+            f"asset_name {asset_name!r} invalide : attendu {asset_type}_Asset_Variant "
+            f"(ex: {asset_type}_Lina_Default)"
+        )
+    return True
+
+
+def _find_asset_entity(project_root, asset_name):
+    """Localise une entite ASSET deja creee (assets/<asset_name>/manifest.json). Un publish
+    LOP n'est jamais createur d'entite : create_asset() doit avoir ete appele avant."""
+    entity_dir = Path(project_root) / ENTITY_DIR["asset"] / asset_name
+    manifest_path = entity_dir / ASSET_MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Asset '{asset_name}' introuvable sous {entity_dir} "
+            f"(doit etre cree via create_asset() avant tout publish)."
+        )
+    return entity_dir, manifest_path
+
+
+def publish_version_from_dir(final_dir):
+    """Extrait le numero de version d'un final_dir retourne par allocate_publish_version()
+    (ex: 'CHARACTER_Lina_Default_lop_v003' -> 3). Distinct de _ver() : un final_dir est un
+    nom de repertoire sans extension (le numero termine le nom), _ver() attend un nom de
+    fichier versionne avec extension (cf. publish_asset)."""
+    m = _DIR_VER_RE.search(Path(final_dir).name)
+    if not m:
+        raise ValueError(f"final_dir ne contient pas de suffixe de version : {final_dir!r}")
+    return int(m.group(1))
+
+
+def allocate_publish_version(project_root, asset_name, asset_type, comment=None):
+    """Reserve atomiquement (fcntl.flock) le prochain numero de version de publish LOP pour
+    un asset existant, et cree un repertoire de staging vide. Ne touche ni au layer USD ni
+    au thumbnail : l'appelant (callback HDA) les ecrit dans staging_dir, puis appelle
+    finalize_publish_version() pour committer (os.replace atomique, meme filesystem que
+    staging_dir car les deux vivent sous entity_dir/lop/) et finaliser le manifeste.
+
+    Retourne (staging_dir, final_dir) en pathlib.Path. staging_dir existe deja (vide) ;
+    final_dir n'existe pas encore (c'est la cible du futur replace).
+    """
+    validate_publish_asset_name(asset_name, asset_type)
+
+    project_root = Path(project_root)
+    entity_dir, manifest_path = _find_asset_entity(project_root, asset_name)
+
+    with _manifest_lock(manifest_path):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        declared_type = manifest.get("type")
+        if declared_type != asset_type:
+            raise ValueError(
+                f"asset_type {asset_type!r} ne correspond pas au type declare de "
+                f"'{asset_name}' dans manifest.json ({declared_type!r})."
+            )
+
+        existing = manifest.setdefault(LOP_PUBLISHES_KEY, [])
+        next_ver = max((e.get("version", 0) for e in existing), default=0) + 1
+
+        versioned_name = f"{asset_name}_lop_v{next_ver:03d}"
+        publish_root = entity_dir / LOP_DIR_NAME / LOP_PUBLISH_DIR_NAME
+        staging_root = entity_dir / LOP_DIR_NAME / LOP_STAGING_DIR_NAME
+        final_dir = publish_root / versioned_name
+        staging_dir = staging_root / f"{versioned_name}.staging-{os.getpid()}"
+
+        if final_dir.exists():
+            raise FileExistsError(f"Version deja presente, non ecrasee : {final_dir}")
+
+        # publish_root doit exister pour que le futur os.replace() ait un parent valide ;
+        # final_dir lui-meme ne doit PAS exister (c'est la cible du replace).
+        publish_root.mkdir(parents=True, exist_ok=True)
+        staging_dir.mkdir(parents=True, exist_ok=False)
+
+        # Reservation : entree 'pending' pour bloquer toute reattribution de ce numero tant
+        # que finalize_publish_version() n'a pas commit (sinon deux publishes concurrents
+        # pourraient tous deux calculer le meme next_ver).
+        existing.append({
+            "version": next_ver,
+            "status": "pending",
+            "comment": comment or "",
+            "reserved_utc": _now(),
+        })
+        manifest["modified_utc"] = _now()
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+    return staging_dir, final_dir
+
+
+def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, version,
+                             comment=None):
+    """Commit atomique d'un publish LOP prealablement reserve par allocate_publish_version() :
+    os.replace(staging_dir, final_dir) - point de commit unique pour TOUT ce que le staging
+    contient (layer USD + thumb.png) - puis mise a jour du manifeste sous flock (entree
+    'pending' -> 'complete'). A appeler une fois que le callback HDA a ecrit le layer et le
+    thumbnail dans staging_dir.
+
+    Retourne {name, version, final_dir, manifest}.
+    """
+    project_root = Path(project_root)
+    entity_dir, manifest_path = _find_asset_entity(project_root, asset_name)
+    staging_dir = Path(staging_dir)
+    final_dir = Path(final_dir)
+
+    if not staging_dir.is_dir():
+        raise FileNotFoundError(f"staging_dir introuvable : {staging_dir}")
+
+    os.replace(staging_dir, final_dir)
+
+    with _manifest_lock(manifest_path):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        existing = manifest.setdefault(LOP_PUBLISHES_KEY, [])
+        entry = next((e for e in existing if e.get("version") == version), None)
+        if entry is None:
+            raise ValueError(
+                f"Aucune reservation 'pending' trouvee pour la version {version} de "
+                f"'{asset_name}' (allocate_publish_version() a-t-il ete appele ?)."
+            )
+        entry["status"] = "complete"
+        # Decouverte des fichiers reellement ecrits plutot qu'une extension supposee : en
+        # licence Apprentice, Houdini ecrit '.usdnc' (watermarke) et non '.usd' (cf. contexte
+        # hython/licence). Se fier au disque evite un manifeste qui pointe vers un fichier
+        # inexistant selon la licence de la machine qui a publie.
+        produced = sorted(p.name for p in final_dir.iterdir() if p.is_file())
+        thumbs = [n for n in produced if n == LOP_THUMB_NAME]
+        layers = [n for n in produced if n != LOP_THUMB_NAME]
+        rel_dir = f"{LOP_DIR_NAME}/{LOP_PUBLISH_DIR_NAME}/{final_dir.name}"
+        entry["layer"] = f"{rel_dir}/{layers[0]}" if layers else None
+        entry["thumb"] = f"{rel_dir}/{thumbs[0]}" if thumbs else None
+        entry["published_utc"] = _now()
+        if comment:
+            entry["comment"] = comment
+        manifest["modified_utc"] = _now()
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+    return {
+        "name": asset_name,
+        "version": version,
+        "final_dir": str(final_dir),
+        "manifest": str(manifest_path),
     }
 
 

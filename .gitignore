@@ -10,3 +10,7 @@ files003.zip
 
 # Reglages locaux Claude Code (overrides machine, non partages)
 .claude/settings.local.json
+
+# Backups auto de sauvegarde .hdanc (Houdini en cree un nouveau a chaque overwrite du meme
+# fichier) : bruit, regenerable via tools/houdini/build_publish_hda.py.
+plugins/houdini/otls/backup/

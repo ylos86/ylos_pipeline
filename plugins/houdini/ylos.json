@@ -1,0 +1,13 @@
+{
+    "env": [
+        {
+            "YLOS_REPO": "$HOME/Desktop/Claude/YlosPipeline"
+        },
+        {
+            "HOUDINI_OTLSCAN_PATH": {
+                "value": "$YLOS_REPO/plugins/houdini/otls",
+                "method": "append"
+            }
+        }
+    ]
+}
