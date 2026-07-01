@@ -146,6 +146,7 @@ def _build_parm_template_group(cp):
 
     g.append(hou.StringParmTemplate(
         "asset_type", "Asset Type", 1,
+        default_value=(cp.ASSET_TYPES[0],),
         menu_items=list(cp.ASSET_TYPES),
         menu_labels=list(cp.ASSET_TYPES),
     ))
