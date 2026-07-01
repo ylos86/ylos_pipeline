@@ -7,6 +7,13 @@ de **gestion de production + pipeline d'assets**, scalable et améliorable, dest
 Blender). On construit depuis zéro **en anticipant ces consommateurs futurs**, pas
 seulement le workflow humain immédiat.
 
+## Branches
+`main` est désormais la branche de travail unique (ex-`ui-pipeline`, promue le 2026-07-01 :
+`ui-pipeline` et l'ancien `main` avaient des historiques Git sans ancêtre commun, donc la
+promotion a été un `reset --hard` + force-push, pas un fast-forward). L'ancien addon Blender
+standalone (v0.1.1 → v0.2.7, historique pré-monorepo) est archivé sous
+`legacy/standalone-addon-v0.2.7`, conservé pour référence mais plus actif.
+
 ## Environnement
 - **Machine** : MacBook Pro M2 Max, 64 Go, **macOS uniquement** (Apple Silicon).
   Toute dépendance native doit tourner sur arm64. Pas de solution Windows-only.
