@@ -105,6 +105,9 @@ LOP_DIR_NAME = "lop"
 LOP_PUBLISH_DIR_NAME = "publish"
 LOP_STAGING_DIR_NAME = ".staging"
 LOP_THUMB_NAME = "thumb.png"
+LOP_LAYER_EXTENSIONS = (".usd", ".usdc", ".usda", ".usdnc")  # .usdnc = watermark Apprentice,
+                                                              # jamais suppose a l'avance (cf.
+                                                              # gotcha extensions, LOP HDA)
 LOP_PUBLISHES_KEY = "lop_publishes"
 _DIR_VER_RE = re.compile(r"_v(\d+)$")
 
@@ -218,15 +221,18 @@ def _ver(path):
 
 
 @contextlib.contextmanager
-def _manifest_lock(manifest_path):
+def acquire_lock(path):
     """Verrou exclusif (fcntl.flock) le temps d'une section critique read-modify-write sur
-    un manifest.json. Le verrou vit dans un fichier '.lock' a cote du manifeste (jamais sur
-    le manifeste lui-meme) pour ne jamais interferer avec sa lecture/ecriture. Bloquant :
-    une seconde allocation concurrente attend la liberation plutot que de risquer une
-    collision de version ou un manifeste corrompu."""
-    manifest_path = Path(manifest_path)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = manifest_path.with_name(manifest_path.name + ".lock")
+    'path' (typiquement un manifest.json, mais generique - pas specifique aux manifestes).
+    Le verrou vit dans un fichier '.lock' a cote de 'path' (jamais sur 'path' lui-meme) pour
+    ne jamais interferer avec sa lecture/ecriture. Bloquant : un second appel concurrent
+    attend la liberation plutot que de risquer une collision (ex: version, manifeste corrompu).
+
+    Point de centralisation UNIQUE pour fcntl.flock dans ce module (cf. CLAUDE.md : advisory,
+    POSIX-only, non fiable sur NFS/SMB - a faire evoluer ici seul si le stockage change de tier)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -531,8 +537,8 @@ def publish_asset(project_root, asset_name, step, source_file):
     # Section critique : lecture manifeste -> allocation de version -> copie -> ecriture
     # manifeste -> reconstruction asset_root.usda. Verrouillee de bout en bout (fcntl.flock)
     # pour qu'un second publish concurrent ne puisse jamais lire un 'publishes' perime et
-    # entrer en collision sur le meme numero de version (cf. _manifest_lock).
-    with _manifest_lock(manifest_path):
+    # entrer en collision sur le meme numero de version (cf. acquire_lock).
+    with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         valid_steps = manifest.get("steps", [])
@@ -652,7 +658,7 @@ def allocate_publish_version(project_root, asset_name, asset_type, comment=None)
     project_root = Path(project_root)
     entity_dir, manifest_path = _find_asset_entity(project_root, asset_name)
 
-    with _manifest_lock(manifest_path):
+    with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
         declared_type = manifest.get("type")
@@ -696,13 +702,43 @@ def allocate_publish_version(project_root, asset_name, asset_type, comment=None)
     return staging_dir, final_dir
 
 
+def _missing_artifacts(staging_dir, expected_artifacts):
+    """Verifie que chaque entree de expected_artifacts existe et est non-vide dans staging_dir.
+    Une entree avec un '.' est un nom exact (ex: 'thumb.png'). Une entree sans '.' est un stem
+    de layer USD : matchee contre LOP_LAYER_EXTENSIONS (jamais d'extension supposee a l'avance -
+    licence Apprentice ecrit '.usdnc', licence commerciale '.usd'/'.usdc'/'.usda').
+
+    Retourne la liste des entrees manquantes/vides (liste vide = tout est present)."""
+    missing = []
+    for artifact in expected_artifacts:
+        if "." in artifact:
+            candidate = staging_dir / artifact
+            if not candidate.is_file() or candidate.stat().st_size == 0:
+                missing.append(artifact)
+        else:
+            matches = [
+                staging_dir / f"{artifact}{ext}" for ext in LOP_LAYER_EXTENSIONS
+                if (staging_dir / f"{artifact}{ext}").is_file()
+                and (staging_dir / f"{artifact}{ext}").stat().st_size > 0
+            ]
+            if not matches:
+                missing.append(artifact)
+    return missing
+
+
 def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, version,
-                             comment=None):
+                             expected_artifacts, comment=None):
     """Commit atomique d'un publish LOP prealablement reserve par allocate_publish_version() :
     os.replace(staging_dir, final_dir) - point de commit unique pour TOUT ce que le staging
     contient (layer USD + thumb.png) - puis mise a jour du manifeste sous flock (entree
     'pending' -> 'complete'). A appeler une fois que le callback HDA a ecrit le layer et le
     thumbnail dans staging_dir.
+
+    expected_artifacts : liste de noms requis dans staging_dir avant le commit (ex:
+    ['CHARACTER_Lina_Default_lop_v003', 'thumb.png'] - le layer par son stem, resolu contre les
+    extensions USD connues ; le thumb par son nom exact). Le thumbnail est REQUIS pour un publish
+    LOP. Si un artefact manque ou est vide : leve ValueError, ne touche PAS staging_dir, n'appelle
+    PAS os.replace, n'ecrit RIEN au manifeste (la reservation reste 'pending').
 
     Retourne {name, version, final_dir, manifest}.
     """
@@ -714,9 +750,16 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
     if not staging_dir.is_dir():
         raise FileNotFoundError(f"staging_dir introuvable : {staging_dir}")
 
+    missing = _missing_artifacts(staging_dir, expected_artifacts)
+    if missing:
+        raise ValueError(
+            f"Publish incomplet pour '{asset_name}' v{version:03d} - artefact(s) manquant(s) ou "
+            f"vide(s) dans {staging_dir} : {missing}. staging_dir preserve, rien commit."
+        )
+
     os.replace(staging_dir, final_dir)
 
-    with _manifest_lock(manifest_path):
+    with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         existing = manifest.setdefault(LOP_PUBLISHES_KEY, [])
         entry = next((e for e in existing if e.get("version") == version), None)

@@ -18,10 +18,12 @@ Usage :
     hython /chemin/absolu/vers/tools/houdini/test_publish_hda_e2e.py
 """
 
+import json
 import os
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 import hou
 
@@ -38,6 +40,73 @@ ASSET_NAME = "CHARACTER_Test_Default"
 def fail(msg):
     print("[FAIL] {}".format(msg))
     sys.exit(1)
+
+
+def test_finalize_rejects_missing_thumb():
+    """finalize_publish_version() doit refuser de committer si le thumbnail manque du staging -
+    contrat de completude (cf. bug staging_dir orphelin : thumb.png ecrit ~4s apres l'os.replace
+    en session GUI Houdini, husk/usdrender_rop asynchrone). Pur create_project.py, pas besoin de
+    hou/HDA - reproduit juste l'etat d'un staging_dir incomplet a la main."""
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+    import create_project as cp
+
+    tmp_base = tempfile.mkdtemp(prefix="ylos_finalize_contract_")
+    try:
+        info = cp.create(
+            "FinalizeContractTest",
+            root=os.path.join(tmp_base, "projects"),
+            cache=os.path.join(tmp_base, "cache"),
+        )
+        project_source = info["source"]
+        asset_name = "CHARACTER_ContractTest_Default"
+        cp.create_asset(project_source, asset_name, entity_type="asset", asset_type="CHARACTER")
+
+        staging_dir, final_dir = cp.allocate_publish_version(
+            project_source, asset_name, "CHARACTER", comment="finalize contract test"
+        )
+        version = cp.publish_version_from_dir(final_dir)
+
+        # Ecrit SEULEMENT le layer, jamais le thumb - simule exactement le staging_dir capture
+        # par le bug (render du thumb pas encore termine au moment du finalize).
+        layer_stem = "{}_lop_v{:03d}".format(asset_name, version)
+        (staging_dir / (layer_stem + ".usd")).write_text("#usda 1.0\n", encoding="utf-8")
+
+        expected_artifacts = [layer_stem, cp.LOP_THUMB_NAME]
+
+        raised = False
+        try:
+            cp.finalize_publish_version(
+                project_source, asset_name, staging_dir, final_dir, version,
+                expected_artifacts, comment="finalize contract test"
+            )
+        except ValueError:
+            raised = True
+
+        if not raised:
+            fail("finalize_publish_version() n'a PAS leve alors que thumb.png manquait du staging")
+        if not staging_dir.is_dir():
+            fail("staging_dir a disparu alors que le finalize aurait du echouer avant tout replace")
+        if final_dir.exists():
+            fail("final_dir existe alors que le finalize aurait du echouer avant tout replace")
+
+        entity_manifest_path = (
+            Path(project_source) / "assets" / asset_name / cp.ASSET_MANIFEST_NAME
+        )
+        entity_manifest = json.loads(entity_manifest_path.read_text(encoding="utf-8"))
+        entry = next(
+            e for e in entity_manifest[cp.LOP_PUBLISHES_KEY] if e["version"] == version
+        )
+        if entry["status"] != "pending":
+            fail(
+                "l'entree de version est passee a {!r} alors que le finalize a echoue - "
+                "attendu 'pending' (jamais commit)".format(entry["status"])
+            )
+
+        print("[ok] finalize_publish_version() rejette bien un staging_dir sans thumb")
+        print("[PASS] test_finalize_rejects_missing_thumb")
+    finally:
+        shutil.rmtree(tmp_base, ignore_errors=True)
 
 
 def main():
@@ -166,4 +235,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # Contrat de completude d'abord : rapide, pas de rendu Houdini reel, feedback immediat.
+    # Puis l'e2e complet avec le vrai HDA/rendu. Fail-fast (cf. fail()) : si le premier
+    # echoue, le second ne se lance pas.
+    test_finalize_rejects_missing_thumb()
     main()

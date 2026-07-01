@@ -78,8 +78,35 @@ build_publish_hda.py`) :
    rediriger vers un dossier temporaire jetable (`tempfile.mkdtemp`, nettoyé après le render)
    pour ne jamais le laisser polluer `staging_dir` ou le repo.
 
-Extensions de fichier Apprentice (`.usdnc`/`.hdanc`) — toujours découvrir sur disque après
-écriture, jamais supposer `.usd`/`.hda` en dur (cf. `finalize_publish_version()`).
+4. Extensions de fichier Apprentice (`.usdnc`/`.hdanc`) — toujours découvrir sur disque après
+   écriture, jamais supposer `.usd`/`.hda` en dur (cf. `finalize_publish_version()`).
+
+5. `node.render()` (Python, `hou.RopNode`) sur un `usdrender_rop` **ne bloque pas** en session
+   GUI : husk est soumis en arrière-plan (intégré à la boucle d'évènements Qt), `render()` rend
+   la main avant la fin réelle du rendu — non reproductible en `hython` headless (bloque
+   naturellement, pas de boucle Qt). Bug réel observé : `thumb.png` écrit ~4s après que
+   `finalize_publish_version()` ait déjà fait son `os.replace()`, atterrissant dans un
+   `staging_dir` orphelin recréé par husk. Trouvé par énumération réelle de `node.parms()`
+   (jamais par la doc) : le toggle **`soho_foreground`** ("Wait for Render to Complete", hérité
+   de l'héritage Mantra du node, défaut `False`) force le blocage. Posé à `1` sur `thumb_rop`
+   dans `build_publish_hda.py`. `publish_rop` (type `usd_rop`, pas `usdrender_rop`) n'a pas ce
+   problème — sérialisation de layer in-process, pas de `husk` séparé.
+
+Filet de sécurité indépendant de ce fix : `finalize_publish_version()` exige un paramètre
+`expected_artifacts` et refuse tout `os.replace()` si un artefact déclaré manque ou est vide
+dans `staging_dir` (thumbnail **requis** pour un publish LOP) — protège même si un futur cas
+async imprévu réapparaît.
+
+## Verrouillage (fcntl.flock)
+`acquire_lock(path)` (`create_project.py`) est le **seul** point du module qui touche
+`fcntl.flock` — verrou exclusif sur un fichier `.lock` sibling de `path`, utilisé par
+`publish_asset()`, `allocate_publish_version()`, `finalize_publish_version()`. Contrainte
+connue : `flock` est **advisory** (n'empêche rien si un process ignore le verrou), **non
+fiable sur NFS/SMB** (sémantique de lock réseau inconsistante selon l'implémentation serveur),
+**POSIX-only** (pas de portage Windows direct, `msvcrt.locking` a une API différente). Tout le
+stockage actuel est local (cf. section Stockage 3 tiers) donc pas un problème aujourd'hui — mais
+si un tier réseau ou un portage Windows devient réel, `acquire_lock()` est le seul endroit à
+faire évoluer.
 
 ## Décisions tranchées (2026-06-14)
 1. **Design cible : hybride.** Garder les principes verrouillés, absorber le modèle métier

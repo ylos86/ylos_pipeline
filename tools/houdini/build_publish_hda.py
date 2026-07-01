@@ -38,8 +38,19 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import datetime
 
 import hou
+
+
+def _log(msg):
+    # Instrumentation temporaire pour valider en session GUI reelle que le render du thumb
+    # bloque bien avant finalize (cf. bug staging_dir orphelin, timing async usdrender_rop).
+    # print(flush=True), pas le module logging : diagnostic ponctuel, visible sans config,
+    # dans le terminal qui a lance Houdini.
+    print("[ylos.publish] {} {}".format(
+        datetime.now().isoformat(timespec="milliseconds"), msg
+    ), flush=True)
 
 
 def _repo_root(node):
@@ -81,9 +92,11 @@ def publish(kwargs):
         )
         version = cp.publish_version_from_dir(final_dir)
 
-        layer_path = os.path.join(
-            str(staging_dir), "{}_lop_v{:03d}.usd".format(asset_name, version)
-        )
+        # layer_stem : nom demande au ROP (savepath), PAS garanti etre le nom reellement ecrit
+        # sur disque (licence Apprentice reecrit en '.usdnc') - cf. finalize_publish_version /
+        # LOP_LAYER_EXTENSIONS, qui resout le stem contre les extensions USD connues.
+        layer_stem = "{}_lop_v{:03d}".format(asset_name, version)
+        layer_path = os.path.join(str(staging_dir), layer_stem + ".usd")
         thumb_path = os.path.join(str(staging_dir), cp.LOP_THUMB_NAME)
 
         # Configure Layer : marque le save path calcule depuis staging_dir. Le ROP USD
@@ -106,15 +119,22 @@ def publish(kwargs):
             )
 
             publish_rop = node.node("publish_rop")
+            _log("render start: publish_rop (layer)")
             publish_rop.render()
+            _log("render end:   publish_rop (layer)")
 
             thumb_rop = node.node("thumb_rop")
+            _log("render start: thumb_rop")
             thumb_rop.render()
+            _log("render end:   thumb_rop")
         finally:
             shutil.rmtree(scratch_dir, ignore_errors=True)
 
+        expected_artifacts = [layer_stem, cp.LOP_THUMB_NAME]
+        _log("finalize call: expected_artifacts={}".format(expected_artifacts))
         result = cp.finalize_publish_version(
-            project_root, asset_name, staging_dir, final_dir, version, comment=comment
+            project_root, asset_name, staging_dir, final_dir, version,
+            expected_artifacts, comment=comment
         )
 
         status_parm.set("OK - v{:03d} - {}".format(version, result["final_dir"]))
@@ -245,6 +265,14 @@ def build():
     thumb_rop.parm("override_res").set("specific")
     thumb_rop.parm("res_user1").set(THUMB_RES)
     thumb_rop.parm("res_user2").set(THUMB_RES)
+    # 'soho_foreground' ("Wait for Render to Complete", herite de l'heritage Mantra du node) :
+    # trouve par enumeration reelle de node.parms() via hython (Houdini 21.0.631), pas suppose
+    # depuis la doc. Sans lui, node.render() en session GUI rend la main des que husk est
+    # SOUMIS (pas termine) : le thumb.png arrive plusieurs secondes apres le publish, dans un
+    # staging_dir deja renomme/orphelin (bug reproductible en GUI uniquement, jamais en hython
+    # headless ou render() bloque naturellement). publish_rop (type usd_rop, pas usdrender_rop)
+    # n'a pas cet effet : c'est une serialisation de layer in-process, pas un husk separe.
+    thumb_rop.parm("soho_foreground").set(1)
 
     subnet.layoutChildren()
 
