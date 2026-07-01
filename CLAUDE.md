@@ -50,6 +50,30 @@ Contrats figés : `project.schema.json`, `asset.schema.json`, `docs/usd-conventi
 (Incrément 3) ; retirer le `~/Desktop/create_project.py` mort (Incrément 4) ; vérifier
 l'up-axis Blender↔USD à l'usage.
 
+## LOP HDA gotchas
+Vérifié empiriquement pendant le build de `ylos::publish` (cf. `tools/houdini/
+build_publish_hda.py`) :
+
+1. Une instance de HDA verrouillée refuse l'écriture directe sur les paramètres de ses
+   noeuds internes (`hou.PermissionError`). Contournement : promouvoir les paramètres au
+   niveau du noeud HDA, les relier aux noeuds internes via `chs("../_param_name")` posé au
+   build, jamais écrire directement sur un noeud interne depuis le callback.
+
+2. `hou.HDADefinition.save()` sans l'argument `template_node=` ne remonte PAS l'état live du
+   noeud source dans la définition sauvegardée — les expressions posées via `setExpression()`
+   sont silencieusement perdues au rechargement. Toujours appeler
+   `hda_def.save(otl_path, template_node=hda_node)`.
+
+3. Sur un ROP USD, `savestyle='separate'` échoue (`hou.OperationFailed`) dès qu'un noeud
+   amont produit un layer anonyme sans savepath explicite. La combinaison qui marche :
+   `savestyle='flattenimplicitlayers'` + `errorsavingimplicitpaths=0`. Effet de bord : ce
+   mode écrit aussi un petit layer racine de stitching sur le paramètre `lopoutput` — le
+   rediriger vers un dossier temporaire jetable (`tempfile.mkdtemp`, nettoyé après le render)
+   pour ne jamais le laisser polluer `staging_dir` ou le repo.
+
+Extensions de fichier Apprentice (`.usdnc`/`.hdanc`) — toujours découvrir sur disque après
+écriture, jamais supposer `.usd`/`.hda` en dur (cf. `finalize_publish_version()`).
+
 ## Décisions tranchées (2026-06-14)
 1. **Design cible : hybride.** Garder les principes verrouillés, absorber le modèle métier
    des projets réels (USD, `scene`, steps, manifeste par asset). Schéma `1.0.0` → `2.0.0`.
