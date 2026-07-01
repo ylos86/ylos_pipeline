@@ -46,8 +46,13 @@ def _repo_root(node):
     # os.path.realpath sur le chemin de definition HDA (via l'API hou, pas __file__) :
     # un module embarque n'a pas de __file__ fiable, et meme s'il en avait un, le meme
     # fix symlink que Blender s'applique.
+    # otl_path = REPO/plugins/houdini/otls/ylos_publish.hdanc -> 4 dirname() pour REPO
+    # (1 pour le nom de fichier + 3 pour otls/houdini/plugins). Bug reel observe en GUI :
+    # avec 3 dirname() on atterrit sur REPO/plugins (pas de create_project.py dedans),
+    # ModuleNotFoundError. Masque en hython car le cwd du shell etait deja REPO (fallback
+    # d'import via sys.path[0]='' qui cachait le bug) - jamais fiable, corrige ici.
     otl_path = os.path.realpath(node.type().definition().libraryFilePath())
-    return os.path.dirname(os.path.dirname(os.path.dirname(otl_path)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(otl_path))))
 
 
 def _cp(node):
