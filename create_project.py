@@ -21,6 +21,8 @@ Usage CLI :
     python create_project.py project "mon_projet" --root /Volumes/EXT/3D --cache ~/cache --force
     python create_project.py asset  "/Volumes/EXT/3D/mon_projet" "Lina" --type CHARACTER
     python create_project.py asset  "<projet>" "decor" --entity-type set --steps modeling,lookdev
+    python create_project.py clean-staging "<projet>"            # dry-run (rapport seul)
+    python create_project.py clean-staging "<projet>" --apply    # supprime les orphelins
 
 Usage import (plugin DCC) :
     import create_project
@@ -904,6 +906,109 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
 
 
 # --------------------------------------------------------------------------------------
+# Sweep des allocations orphelines - un staging_dir ne survit sur disque QUE si
+# finalize_publish_version() n'a jamais ete appele (elle le consomme via os.replace) :
+# un staging_dir present = allocation abandonnee (crash, kill -9...) OU publish en cours
+# (process encore vivant). Distingue les deux via le PID encode dans le nom du dossier
+# (cf. allocate_publish_version : '<versioned_name>.staging-<pid>').
+# --------------------------------------------------------------------------------------
+
+_STAGING_PID_RE = re.compile(r"\.staging-(\d+)$")
+
+
+def _staging_pid(dirname):
+    """Extrait le PID depuis un nom de staging_dir. None si le nom ne matche pas le motif
+    (defensif - un staging_dir mal nomme n'est jamais touche par clean_stale_staging)."""
+    m = _STAGING_PID_RE.search(dirname)
+    return int(m.group(1)) if m else None
+
+
+def _pid_alive(pid):
+    """True si un process avec ce PID existe (kill(pid, 0), pas un vrai signal)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # le process existe, on n'a juste pas le droit de le signaler
+    return True
+
+
+def clean_stale_staging(project_root, dry_run=False):
+    """Balaie tous les staging_dirs (entity_dir/<kind>/.staging/*, LOP ou step) du projet.
+
+    Supprime (sauf dry_run=True) ceux dont le PID createur n'est plus vivant - jamais un
+    staging_dir dont le process tourne encore (publish potentiellement en cours). Rapporte
+    separement (jamais de suppression, meme sans dry_run) les entrees manifest.json restees
+    'status': 'pending' sans staging_dir correspondant sur disque - une incoherence a
+    investiguer manuellement (le manifeste n'est pas une donnee jetable comme staging_dir ;
+    cf. CLAUDE.md sur project.json comme contrat).
+
+    Retourne {"removed_staging": [str, ...], "pending_without_staging": [
+        {"entity", "kind", "version", "manifest"}, ...]}.
+    """
+    project_root = Path(project_root)
+    removed = []
+    pending_without_staging = []
+
+    for family in ENTITY_DIR.values():
+        family_dir = project_root / family
+        if not family_dir.is_dir():
+            continue
+        for entity_dir in sorted(family_dir.iterdir()):
+            if not entity_dir.is_dir():
+                continue
+            manifest_path = entity_dir / ASSET_MANIFEST_NAME
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            # 1. Staging orphelins : scan de chaque sous-arbre <kind>/.staging/.
+            for kind_dir in sorted(entity_dir.iterdir()):
+                if not kind_dir.is_dir():
+                    continue
+                staging_root = kind_dir / LOP_STAGING_DIR_NAME
+                if not staging_root.is_dir():
+                    continue
+                for staging_dir in sorted(staging_root.iterdir()):
+                    if not staging_dir.is_dir():
+                        continue
+                    pid = _staging_pid(staging_dir.name)
+                    if pid is not None and _pid_alive(pid):
+                        continue  # publish potentiellement en cours - jamais touche
+                    removed.append(str(staging_dir))
+                    if not dry_run:
+                        shutil.rmtree(staging_dir)
+
+            # 2. Rapport (jamais de suppression) : entrees 'pending' sans staging au disque -
+            #    calcule apres le sweep ci-dessus, donc reflete l'etat post-purge en un seul
+            #    appel (une entree juste orpheline-purgee apparait ici immediatement).
+            all_entries = [("lop", e) for e in manifest.get(LOP_PUBLISHES_KEY, [])]
+            for step, entries in manifest.get(STEP_PUBLISHES_KEY, {}).items():
+                all_entries += [(step, e) for e in entries]
+
+            for kind, entry in all_entries:
+                if entry.get("status") != "pending":
+                    continue
+                version = entry.get("version")
+                versioned_name = f"{entity_dir.name}_{kind}_v{version:03d}"
+                staging_root = entity_dir / (LOP_DIR_NAME if kind == "lop" else kind) / LOP_STAGING_DIR_NAME
+                matches = list(staging_root.glob(f"{versioned_name}.staging-*")) if staging_root.is_dir() else []
+                if not matches:
+                    pending_without_staging.append({
+                        "entity": entity_dir.name,
+                        "kind": kind,
+                        "version": version,
+                        "manifest": str(manifest_path),
+                    })
+
+    return {"removed_staging": removed, "pending_without_staging": pending_without_staging}
+
+
+# --------------------------------------------------------------------------------------
 # Consommation web (sync vers un projet Three.js) - le projet web ne lit JAMAIS la
 # structure du pipeline, uniquement public/assets/assets.json (cf. CLAUDE.md).
 # --------------------------------------------------------------------------------------
@@ -1041,6 +1146,13 @@ def _cli(argv=None):
     pub.add_argument("step", help="Step de publication (ex: modeling, lookdev)")
     pub.add_argument("file", help="Fichier source a publier (.usda ou .usdc)")
 
+    pcs = sub.add_parser("clean-staging",
+                         help="Purge les staging_dirs orphelins (process mort) + rapporte "
+                              "les entrees manifest 'pending' sans staging correspondant.")
+    pcs.add_argument("project", help="Chemin du projet existant")
+    pcs.add_argument("--apply", action="store_true",
+                     help="Supprime reellement (defaut : dry-run, rapporte sans rien supprimer)")
+
     args = p.parse_args(argv)
 
     try:
@@ -1060,13 +1172,24 @@ def _cli(argv=None):
             print(f"  manifeste : {info['manifest']}")
             if info["asset_root"]:
                 print(f"  asset_root: {info['asset_root']}")
-        else:  # publish
+        elif args.cmd == "publish":
             info = publish_asset(args.project, args.asset, args.step, args.file)
             print(f"[ok] publish {info['name']} / {info['step']} v{info['version']:03d}")
             print(f"  publish   : {info['publish_path']}")
             print(f"  manifeste : {info['manifest']}")
             if info["asset_root"]:
                 print(f"  asset_root: {info['asset_root']}")
+        else:  # clean-staging
+            info = clean_stale_staging(args.project, dry_run=not args.apply)
+            verb = "supprime(s)" if args.apply else "a supprimer (dry-run - passer --apply pour executer)"
+            print(f"[ok] {len(info['removed_staging'])} staging_dir(s) {verb}")
+            for path in info["removed_staging"]:
+                print(f"  - {path}")
+            if info["pending_without_staging"]:
+                print(f"[rapport] {len(info['pending_without_staging'])} entree(s) manifest "
+                      f"'pending' sans staging correspondant (non modifiees) :")
+                for e in info["pending_without_staging"]:
+                    print(f"  - {e['entity']} / {e['kind']} v{e['version']:03d}  ({e['manifest']})")
     except (ValueError, FileExistsError, FileNotFoundError) as e:
         sys.stderr.write(f"[erreur] {e}\n")
         return 1

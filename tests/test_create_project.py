@@ -254,5 +254,55 @@ class TestSyncWebAssets(TempProjectTestCase):
         self.assertTrue(foreign.is_file())
 
 
+class TestCleanStaleStaging(TempProjectTestCase):
+    """Sweep des allocations orphelines : clean_stale_staging()."""
+
+    def setUp(self):
+        super().setUp()
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+
+    def _allocate_with_pid(self, step, pid):
+        """Allocate un staging_dir puis renomme son suffixe PID (simule un process mort ou
+        un autre process vivant, sans avoir a en forker un reel)."""
+        staging, final = cp.allocate_publish_version(self.project, "PROP_Tente_Default", comment="", kind=step)
+        renamed = staging.with_name(staging.name.rsplit("-", 1)[0] + f"-{pid}")
+        staging.rename(renamed)
+        return renamed, final
+
+    def test_dry_run_reports_without_deleting(self):
+        dead_dir, _ = self._allocate_with_pid("modeling", 999999)  # PID quasi-certainement mort
+        report = cp.clean_stale_staging(self.project, dry_run=True)
+        self.assertIn(str(dead_dir), report["removed_staging"])
+        self.assertTrue(dead_dir.is_dir())  # dry-run : rien supprime
+
+    def test_live_pid_never_removed(self):
+        import os
+        live_dir, _ = self._allocate_with_pid("lookdev", os.getpid())
+        report = cp.clean_stale_staging(self.project)
+        self.assertNotIn(str(live_dir), report["removed_staging"])
+        self.assertTrue(live_dir.is_dir())
+
+    def test_dead_pid_removed_and_reported_as_pending_without_staging(self):
+        dead_dir, _ = self._allocate_with_pid("modeling", 999999)
+        report = cp.clean_stale_staging(self.project)
+        self.assertIn(str(dead_dir), report["removed_staging"])
+        self.assertFalse(dead_dir.exists())
+
+        kinds = [(e["kind"], e["version"]) for e in report["pending_without_staging"]]
+        self.assertIn(("modeling", 1), kinds)
+
+        # Le manifeste n'est jamais modifie par le sweep (entree reste 'pending').
+        manifest = json.loads(
+            (Path(self.project) / "assets" / "PROP_Tente_Default" / "manifest.json").read_text()
+        )
+        self.assertEqual(manifest["step_publishes"]["modeling"][0]["status"], "pending")
+
+    def test_finalized_publish_has_no_leftover_staging(self):
+        self._publish_step("PROP_Tente_Default", "modeling", ext="usd")
+        report = cp.clean_stale_staging(self.project)
+        self.assertEqual(report["removed_staging"], [])
+        self.assertEqual(report["pending_without_staging"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

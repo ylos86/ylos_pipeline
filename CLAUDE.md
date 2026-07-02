@@ -14,6 +14,12 @@ promotion a été un `reset --hard` + force-push, pas un fast-forward). L'ancien
 standalone (v0.1.1 → v0.2.7, historique pré-monorepo) est archivé sous
 `legacy/standalone-addon-v0.2.7`, conservé pour référence mais plus actif.
 
+`origin/v0.4-monorepo` (rewrite monorepo orphelin, `ylos_core/`, tip `d6964a3` — cf. verdict
+C1-C7 plus bas) a été renommée `legacy/v0.4-monorepo` le 2026-07-02 (push du nouveau nom +
+suppression de l'ancien sur le remote, même tip) : ses correctifs utiles (C1, C3) sont
+absorbés sur `main`, le reste est hors scope/non pertinent. Conservée pour référence, plus
+active.
+
 ## Environnement
 - **Machine** : MacBook Pro M2 Max, 64 Go, **macOS uniquement** (Apple Silicon).
   Toute dépendance native doit tourner sur arm64. Pas de solution Windows-only.
@@ -112,6 +118,18 @@ laissé intact). **Le projet web ne lit jamais la structure du pipeline, uniquem
 {step, version}}}` — le `step` est requis car un asset peut avoir des publishes GLB
 indépendants par step. Exposé côté `ylos_ui.py` : `POST /api/set-web-target`,
 `POST /api/sync-web` ; bouton "Sync Web" dans `app.html`.
+
+### Sweep des allocations orphelines (`clean_stale_staging`)
+`create_project.py::clean_stale_staging(project_root, dry_run=False)` — un `staging_dir`
+(`entity_dir/<kind>/.staging/*`) ne survit sur disque QUE si `finalize_publish_version()`
+n'a jamais été appelée (elle le consomme via `os.replace`). Distingue allocation abandonnée
+(process mort) de publish en cours via le PID encodé dans le nom du dossier
+(`<versioned_name>.staging-<pid>`, `os.kill(pid, 0)`) — ne touche jamais un staging dont le
+process est vivant. Rapporte séparément (jamais de suppression, même hors dry-run) les
+entrées manifeste `"status": "pending"` sans staging correspondant — investigation
+manuelle, le manifeste n'est pas une donnée jetable comme `staging_dir`. CLI : `clean-staging
+<projet> [--apply]` (dry-run par défaut, cohérent avec le reste du module — rien de
+destructif sans confirmation explicite).
 
 ### Branche orpheline `v0.4-monorepo` (verdict archivé, 2026-07-02)
 Rewrite monorepo complet (`ylos_core/`, historique disjoint de `main`) contenant un commit
