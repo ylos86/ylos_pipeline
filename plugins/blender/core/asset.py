@@ -21,12 +21,18 @@ from .project import (
 ASSET_TYPE_PREFIXES = {
     "PROP":        "PROP",
     "CHARACTER":   "CHAR",
+    "VEHICLE":     "VEH",
+    "CREATURE":    "CREA",
+    "FX_ELEMENT":  "FX",
     "ENVIRONMENT": "ENV",
 }
 
 ASSET_TYPE_PARENT_COL = {
     "PROP":        "COL_ENV_Props",
     "CHARACTER":   "COL_CHAR",
+    "VEHICLE":     "COL_ENV_Props",
+    "CREATURE":    "COL_CHAR",
+    "FX_ELEMENT":  "COL_ENV_Props",
     "ENVIRONMENT": "COL_ENV",
 }
 
@@ -39,17 +45,10 @@ def sanitize_entity_name(raw: str) -> str:
     return name
 
 
-def validate_entity_name(name: str) -> tuple:
-    if not name:
-        return False, "Name cannot be empty."
-    if len(name) < 2:
-        return False, "Name must be at least 2 characters."
-    if not name[0].isupper():
-        return (
-            False,
-            "Name must start with an uppercase letter (PascalCase). Got: '" + name + "'",
-        )
-    return True, ""
+# NOTE: the naming-convention gate (TYPE_Nom_Variant) lives in create_project.py
+# (validate_entity_name) - single source of truth, called by op_new_asset.py before
+# create_asset(). sanitize_entity_name() above is a pure input-cleanup helper, orthogonal
+# to that gate (kept here since it's UI-input specific, not a pipeline contract).
 
 
 # ---------------------------------------------------------------------------

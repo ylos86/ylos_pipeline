@@ -4,7 +4,7 @@ import os
 import sys
 from bpy.props import StringProperty, EnumProperty, BoolVectorProperty
 from ..core.asset import (
-    sanitize_entity_name, validate_entity_name,
+    sanitize_entity_name,
     ASSET_TYPE_PARENT_COL, invalidate_entity_cache,
 )
 from ..core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
@@ -104,7 +104,9 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
 
     entity_name: StringProperty(
         name="Name",
-        description="PascalCase. Spaces and hyphens are removed automatically.",
+        description="Base name only (PascalCase, spaces/hyphens removed automatically). "
+                    "The full entity name is composed as TYPE_Name_Default to match the "
+                    "pipeline convention (cf. create_project.validate_entity_name).",
         default="",
     )
 
@@ -118,19 +120,58 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         default="ASSET",
     )
 
+    # Sous-type par famille - mirrors create_project.py's ASSET_TYPES/SET_TYPES/SHOT_TYPES
+    # (single source of truth for the naming convention, cf. validate_entity_name).
     asset_type: EnumProperty(
         name="Asset Type",
         items=[
-            ("PROP",        "Prop",        "Hard-surface object, furniture, tool, vehicle..."),
-            ("CHARACTER",   "Character",   "Biped, creature, hero, NPC..."),
-            ("ENVIRONMENT", "Environment", "Terrain piece, modular kit, vegetation..."),
+            ("CHARACTER",  "Character",  "Biped, creature, hero, NPC..."),
+            ("PROP",       "Prop",       "Hard-surface object, furniture, tool..."),
+            ("VEHICLE",    "Vehicle",    "Car, ship, aircraft..."),
+            ("CREATURE",   "Creature",   "Non-humanoid creature"),
+            ("FX_ELEMENT", "FX Element", "Reusable FX asset (debris, particles rig...)"),
         ],
         default="PROP",
+    )
+    set_type: EnumProperty(
+        name="Set Type",
+        items=[
+            ("EXTERIOR",    "Exterior",    "Outdoor set"),
+            ("INTERIOR",    "Interior",    "Indoor set"),
+            ("HERO_SET",    "Hero Set",    "Main, camera-ready set"),
+            ("MODULAR_KIT", "Modular Kit", "Reusable modular set pieces"),
+        ],
+        default="EXTERIOR",
+    )
+    shot_type: EnumProperty(
+        name="Shot Type",
+        items=[
+            ("LAYOUT",    "Layout",    "Layout pass"),
+            ("ANIMATION", "Animation", "Animation pass"),
+            ("FX",        "FX",        "FX pass"),
+            ("LIGHTING",  "Lighting",  "Lighting pass"),
+            ("COMP",      "Comp",      "Composite pass"),
+        ],
+        default="LAYOUT",
     )
 
     asset_steps: BoolVectorProperty(name="Asset Steps", size=4, default=(True, True, True, True))
     shot_steps:  BoolVectorProperty(name="Shot Steps",  size=6, default=(True, True, True, True, True, True))
     set_steps:   BoolVectorProperty(name="Set Steps",   size=3, default=(True, True, True))
+
+    def _sub_type(self):
+        if self.context_type == "ASSET":
+            return self.asset_type
+        elif self.context_type == "SHOT":
+            return self.shot_type
+        return self.set_type
+
+    def _full_name(self, sub_type):
+        clean = sanitize_entity_name(self.entity_name)
+        if not clean:
+            return "", clean
+        base = clean[:1].upper() + clean[1:]
+        return f"{sub_type}_{base}_Default", clean
 
     def invoke(self, context, event):
         self.context_type = context.scene.ylos_context_type
@@ -144,26 +185,36 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         layout.prop(self, "context_type")
         if self.context_type == "ASSET":
             layout.prop(self, "asset_type")
+        elif self.context_type == "SHOT":
+            layout.prop(self, "shot_type")
+        else:
+            layout.prop(self, "set_type")
         layout.prop(self, "entity_name")
 
-        raw   = self.entity_name
-        clean = sanitize_entity_name(raw)
-        valid, err_msg = validate_entity_name(clean) if clean else (False, "")
+        sub_type = self._sub_type()
+        full_name, clean = self._full_name(sub_type)
 
-        if raw and clean != raw:
+        valid, err_msg = True, ""
+        if full_name:
+            try:
+                _cp().validate_entity_name(full_name, self.context_type.lower(), sub_type)
+            except ValueError as e:
+                valid, err_msg = False, str(e)
+
+        if full_name:
             row = layout.row()
-            row.alert = True
-            row.label(text="Will be saved as: '" + clean + "'", icon="INFO")
+            row.alert = not valid
+            row.label(text="Will be created as: '" + full_name + "'", icon="INFO")
 
-        if raw and not valid:
+        if self.entity_name and not valid:
             row = layout.row()
             row.alert = True
             row.label(text=err_msg, icon="ERROR")
 
-        if clean and valid:
-            col_target = _col_target_label(self.asset_type, self.context_type)
+        if full_name and valid:
+            col_target = _col_target_label(sub_type, self.context_type)
             layout.label(
-                text="Collection: " + clean + "  ->  " + col_target,
+                text="Collection: " + full_name + "  ->  " + col_target,
                 icon="OUTLINER_COLLECTION",
             )
 
@@ -192,24 +243,27 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
             self.report({"ERROR"}, "No active project. Create or load a project first.")
             return {"CANCELLED"}
 
-        clean = sanitize_entity_name(self.entity_name)
-        valid, err_msg = validate_entity_name(clean)
-        if not valid:
-            self.report({"ERROR"}, "Invalid name: " + err_msg)
+        sub_type = self._sub_type()
+        full_name, clean = self._full_name(sub_type)
+        if not full_name:
+            self.report({"ERROR"}, "Name cannot be empty.")
             return {"CANCELLED"}
 
-        entity_name  = clean
+        try:
+            _cp().validate_entity_name(full_name, self.context_type.lower(), sub_type)
+        except ValueError as e:
+            self.report({"ERROR"}, "Invalid name: " + str(e))
+            return {"CANCELLED"}
+
+        entity_name  = full_name
         context_type = self.context_type
 
         if context_type == "ASSET":
             steps = [s for i, s in enumerate(ASSET_STEPS) if self.asset_steps[i]]
-            a_type = self.asset_type
         elif context_type == "SHOT":
             steps = [s for i, s in enumerate(SHOT_STEPS) if self.shot_steps[i]]
-            a_type = "OTHER"
         else:
             steps = [s for i, s in enumerate(SET_STEPS) if self.set_steps[i]]
-            a_type = "OTHER"
 
         try:
             cp = _cp()
@@ -217,7 +271,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
                 project_path,
                 entity_name,
                 entity_type=context_type.lower(),
-                asset_type=a_type,
+                asset_type=sub_type,
                 steps=steps,
             )
         except FileExistsError as e:
@@ -235,7 +289,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         invalidate_entity_cache(project_path)
 
         _, parent_display = _create_entity_collection(
-            entity_name, self.asset_type if context_type == "ASSET" else "PROP",
+            entity_name, sub_type if context_type == "ASSET" else "PROP",
             context_type, scene,
         )
 

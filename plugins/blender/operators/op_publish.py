@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-# Exports current step to USD via create_project.publish_asset() (single source of truth).
+# Exports current step to USD via create_project.py's two-phase contract (allocate_publish_
+# version/finalize_publish_version, kind=<step>) - single source of truth, thumbnail required.
 
 import bpy
 import os
 import sys
-import tempfile
 from bpy.props import BoolProperty, EnumProperty
 from ..core.asset import get_latest_publish_version, list_publish_versions
 from ..core.project import is_step_valid_for_context
 from ..core.scene_checker import get_asset_objects_for_publish
+from ..core.thumbnails import render_publish_thumbnail
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -20,29 +21,18 @@ def _cp():
     return create_project
 
 
-def _usd_export(filepath: str, context,
-                asset_name: str = "", step: str = "",
-                allow_full_scene: bool = False) -> tuple:
+def _fallback_objects(scene):
+    """Objets pour le thumbnail quand aucun objet d'asset n'a ete resolu (fallback
+    full-scene) - le thumbnail est requis meme dans ce cas."""
+    return [o for o in scene.objects if o.type in ("MESH", "ARMATURE", "CURVE") and not o.hide_get()]
+
+
+def _usd_export(filepath: str, context, objects: list) -> tuple:
     """
-    Export USD for the current asset.
-    Returns (success, error_message, method_used).
+    Export USD to an exact filepath (staging_dir target, cf. execute()).
+    Returns (success, error_message).
     """
-    scene   = context.scene
-    objects = []
-    method  = "full scene"
-
-    if asset_name:
-        objects, method = get_asset_objects_for_publish(scene, asset_name, step)
-
-    if asset_name and not objects and not allow_full_scene:
-        return (
-            False,
-            (f"No objects resolved for asset '{asset_name}' (step '{step}'). "
-             f"Expected a collection named '{asset_name}' or objects named "
-             f"GEO_{asset_name}_*. Aborting to avoid publishing the full scene."),
-            "none",
-        )
-
+    scene = context.scene
     prev_selected = [o for o in scene.objects if o.select_get()]
     prev_active   = context.view_layer.objects.active
 
@@ -55,15 +45,15 @@ def _usd_export(filepath: str, context,
             context.view_layer.objects.active = objects[0]
             try:
                 bpy.ops.wm.usd_export(filepath=filepath, selected_objects_only=True)
-                return True, "", method
+                return True, ""
             except Exception as e:
-                return False, str(e), method
+                return False, str(e)
 
         try:
             bpy.ops.wm.usd_export(filepath=filepath)
-            return True, "", "full scene"
+            return True, ""
         except Exception as e:
-            return False, str(e), "full scene"
+            return False, str(e)
 
     finally:
         for o in scene.objects:
@@ -163,40 +153,66 @@ class YLOS_OT_Publish(bpy.types.Operator):
             )
             return {"CANCELLED"}
 
-        # Export USD to a temp file, then publish via create_project.py
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".usd")
-        os.close(tmp_fd)
+        objects = []
+        if asset_name:
+            objects, method = get_asset_objects_for_publish(scene, asset_name, step)
+        else:
+            method = "full scene"
 
-        try:
-            ok, err, method = _usd_export(
-                tmp_path, context, asset_name, step,
-                allow_full_scene=self.allow_full_scene,
+        if asset_name and not objects and not self.allow_full_scene:
+            self.report(
+                {"ERROR"},
+                f"USD export aborted: no objects resolved for asset '{asset_name}' (step "
+                f"'{step}'). Expected a collection named '{asset_name}' or objects named "
+                f"GEO_{asset_name}_*.",
             )
-            if not ok:
-                self.report({"ERROR"}, f"USD export failed: {err}")
-                return {"CANCELLED"}
+            return {"CANCELLED"}
 
-            cp   = _cp()
-            info = cp.publish_asset(project_path, asset_name, step, tmp_path)
-
+        cp = _cp()
+        try:
+            staging_dir, final_dir = cp.allocate_publish_version(
+                project_path, asset_name, comment="", kind=step,
+            )
         except Exception as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
 
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        version = cp.publish_version_from_dir(final_dir)
+        stem = f"{asset_name}_{step}_v{version:03d}"
+        usd_path = os.path.join(str(staging_dir), stem + ".usd")
 
-        pub_path = info["publish_path"]
+        ok, err = _usd_export(usd_path, context, objects)
+        if not ok:
+            self.report(
+                {"ERROR"},
+                f"USD export failed: {err} (staging preserved: {staging_dir})",
+            )
+            return {"CANCELLED"}
+
+        thumb_objects = objects or _fallback_objects(scene)
+        thumb = render_publish_thumbnail(thumb_objects, str(staging_dir))
+        if not thumb:
+            self.report(
+                {"WARNING"},
+                f"Thumbnail render failed - publish will be rejected (staging preserved: {staging_dir})",
+            )
+
+        try:
+            info = cp.finalize_publish_version(
+                project_path, asset_name, staging_dir, final_dir, version,
+                expected_artifacts=[stem, "thumb.png"],
+            )
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+        pub_path = os.path.join(info["final_dir"], stem + ".usd")
         scene.ylos_current_step = step
 
         self.report(
             {"INFO"},
             f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}]",
         )
-
-        if info.get("asset_root"):
-            self.report({"INFO"}, f"asset_root.usda updated: {os.path.basename(info['asset_root'])}")
 
         if self.load_after:
             try:

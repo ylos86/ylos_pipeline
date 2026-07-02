@@ -55,7 +55,73 @@ Contrats figés : `project.schema.json`, `asset.schema.json`, `docs/usd-conventi
 
 **Reste :** migrer les projets réels existants (`YLOS__TEST`, `Pachamama`) vers 2.0
 (Incrément 3) ; retirer le `~/Desktop/create_project.py` mort (Incrément 4) ; vérifier
-l'up-axis Blender↔USD à l'usage.
+l'up-axis Blender↔USD à l'usage ; TODO `validate_texture_paths_relative` (anti chemin
+absolu dans les textures USD) le jour où un chemin de publish lookdev/texture existera.
+
+### Validation de nommage — point unique (2026-07-02)
+`create_asset()` valide désormais le nom **à la création**, pour les trois familles
+(asset/set/shot), via `validate_entity_name(name, entity_type, sub_type)` — même fonction
+que l'alias historique `validate_publish_asset_name` (asset uniquement, contrat Houdini
+inchangé). Convention `TYPE_Nom_Variant` : `ASSET_TYPES`/`SET_TYPES`/`SHOT_TYPES` dans
+`create_project.py` (miroir exact de `app.html::FAMILY_CONFIG`, seule source déjà décidée
+pour set/shot). Message d'erreur toujours avec suggestion (nom capitalisé + `_Default`) et
+liste des types valides — même message partout (web UI, Blender, CLI) car même fonction.
+Couvre tous les entrants : web UI (`ylos_ui.py::_post_create_asset`), Blender
+(`op_new_asset.py`, qui composait auparavant un nom PascalCase via un validateur local
+dupliqué dans `core/asset.py` — supprimé, il passe maintenant par
+`create_project.validate_entity_name`), CLI, futur.
+
+### Contrat deux-phases généralisé (allocate/finalize, `kind`)
+`allocate_publish_version()`/`finalize_publish_version()` ne sont plus spécifiques au
+publish LOP Houdini : un paramètre `kind` sélectionne le sous-arbre
+(`entity_dir/<kind>/{publish,.staging}/`) et la clé manifeste — `kind="lop"` (défaut, pour
+compat Houdini) écrit dans `lop_publishes` (liste plate, clé `"layer"` inchangée) ; tout
+autre `kind` (un nom de step, ex `"modeling"`) écrit dans `step_publishes[step]` (clé
+`"artifact"`). `finalize_publish_version()` retrouve `kind` depuis la structure de
+`final_dir` — signature inchangée, aucun appelant Houdini existant à toucher. Adopté par
+tous les bridges Blender (`op_publish.py` USD, `op_export_glb.py` GLB) : plus aucun
+publish en écriture directe, **thumbnail requis partout** (`_missing_artifacts` refuse le
+commit si `thumb.png` manque, `staging_dir` reste intact pour audit/retry). L'ancien
+`publish_asset()` (écriture directe, pas de thumbnail garanti) est déprécié
+(`DeprecationWarning`), conservé, plus aucun appelant dans ce repo.
+
+### Thumbnail Blender headless
+`plugins/blender/core/thumbnails.py::render_publish_thumbnail()` — scène/caméra/world
+temporaires, rendu EEVEE réel (256×256, cadrage trois-quarts auto sur la bbox), purgés en
+`try/finally` strict. **Jamais `bpy.ops.render.opengl`** (exige un contexte fenêtré, casse
+le headless). Distinct de `generate_thumbnail()` (preview WIP viewport, usage différent,
+conservée telle quelle).
+
+### Écritures atomiques + rechargement addon propre
+`create_project.py::_atomic_write_text()`/`_atomic_write_json()` (motif `tmp` +
+`os.replace()`, à côté de `acquire_lock`) : tous les écrivains de `project.json`,
+`manifest.json`, `asset_root.usda` sont passés dessus — protège contre un fichier
+tronqué si le process crashe mi-écriture (`acquire_lock` protège la concurrence
+inter-process, pas un crash ; les deux sont complémentaires). Côté addon,
+`plugins/blender/__init__.py` purge `create_project` de `sys.modules` au `register()` et à
+l'`unregister()`, pour qu'un disable → edit → enable dans la même session Blender recharge
+le vrai fichier plutôt qu'une version en cache.
+
+### Sync web (`sync_web_assets`)
+`create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB
+**pinnés** (`project.json["web"]["pinned_assets"]`, jamais "latest") vers
+`{web_project_dir}/public/assets/`, génère `assets.json` (sha256, écriture atomique), et
+fait le ménage en miroir (vieilles versions d'assets connus retirées, tout fichier étranger
+laissé intact). **Le projet web ne lit jamais la structure du pipeline, uniquement
+`assets.json`.** Schéma `project.json["web"]` : `{target_dir, pinned_assets: {<asset>:
+{step, version}}}` — le `step` est requis car un asset peut avoir des publishes GLB
+indépendants par step. Exposé côté `ylos_ui.py` : `POST /api/set-web-target`,
+`POST /api/sync-web` ; bouton "Sync Web" dans `app.html`.
+
+### Branche orpheline `v0.4-monorepo` (verdict archivé, 2026-07-02)
+Rewrite monorepo complet (`ylos_core/`, historique disjoint de `main`) contenant un commit
+"correctifs v0.3.1 (C1-C7)". Verdict : C1 (écritures atomiques) et C3 (purge
+`sys.modules`) étaient de vrais trous côté `main` → absorbés ci-dessus. C2 (immutabilité
+publish) déjà équivalent sur `main` (échec explicite plutôt qu'auto-retry). C4
+(`step_owners`, multi-DCC), C6 (harness de build/vendoring) et C7
+(`validate_texture_paths_relative`) sont hors scope actuel (fonctionnalités jamais
+adoptées par `main`, pas des régressions). C5 (ASCII-only) non pertinent (convention
+propre à l'autre branche, `main` autorise l'UTF-8/français dans les libellés UI).
 
 ## LOP HDA gotchas
 Vérifié empiriquement pendant le build de `ylos::publish` (cf. `tools/houdini/
@@ -94,8 +160,8 @@ build_publish_hda.py`) :
 
 Filet de sécurité indépendant de ce fix : `finalize_publish_version()` exige un paramètre
 `expected_artifacts` et refuse tout `os.replace()` si un artefact déclaré manque ou est vide
-dans `staging_dir` (thumbnail **requis** pour un publish LOP) — protège même si un futur cas
-async imprévu réapparaît.
+dans `staging_dir` (thumbnail **requis**, LOP et tout autre `kind` — cf. section "Contrat
+deux-phases généralisé" plus bas) — protège même si un futur cas async imprévu réapparaît.
 
 ## Verrouillage (fcntl.flock)
 `acquire_lock(path)` (`create_project.py`) est le **seul** point du module qui touche

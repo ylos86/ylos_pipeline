@@ -2,7 +2,6 @@
 import bpy
 import os
 import sys
-import tempfile
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -10,10 +9,11 @@ REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", ".."
 class YLOS_OT_ExportGLB(bpy.types.Operator):
     bl_idname  = "ylos.export_glb"
     bl_label   = "Export glTF"
-    bl_description = "Exporte l'asset courant en .glb et publie via create_project.py"
+    bl_description = "Exporte l'asset courant en .glb via le contrat deux-phases (allocate/finalize)"
 
     def execute(self, context):
         from ..core import _parse_wip_path, _get_active_project
+        from ..core.thumbnails import render_publish_thumbnail
 
         if REPO_ROOT not in sys.path:
             sys.path.insert(0, REPO_ROOT)
@@ -27,12 +27,21 @@ class YLOS_OT_ExportGLB(bpy.types.Operator):
             self.report({'ERROR'}, "Contexte incomplet — sauvegarde le fichier d'abord.")
             return {'CANCELLED'}
 
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".glb")
-        os.close(tmp_fd)
+        try:
+            staging_dir, final_dir = cp.allocate_publish_version(
+                project_root, asset_name, comment="", kind=step,
+            )
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+        version = cp.publish_version_from_dir(final_dir)
+        stem = f"{asset_name}_{step}_v{version:03d}"
+        glb_path = os.path.join(str(staging_dir), stem + ".glb")
 
         try:
             bpy.ops.export_scene.gltf(
-                filepath=tmp_path,
+                filepath=glb_path,
                 export_format='GLB',
                 export_selected=False,
                 export_apply=True,
@@ -43,32 +52,32 @@ class YLOS_OT_ExportGLB(bpy.types.Operator):
                 export_cameras=False,
                 export_lights=False,
             )
+        except Exception as e:
+            self.report({'ERROR'}, f"glTF export failed: {e} (staging preserved: {staging_dir})")
+            return {'CANCELLED'}
 
-            info        = cp.publish_asset(project_root, asset_name, step, tmp_path)
-            publish_dir = os.path.dirname(info["publish_path"])
-
-            # Thumbnail — generate_thumbnail retourne "" en cas d'échec, ne lève pas
-            from ..core.thumbnails import generate_thumbnail
-            thumb_src = generate_thumbnail(filepath, context)
-            if thumb_src:
-                import shutil
-                try:
-                    shutil.copy2(thumb_src, os.path.join(publish_dir, "thumb.png"))
-                except Exception as e:
-                    self.report({'WARNING'}, f"Export OK — copie thumb échouée : {e}")
-            else:
-                self.report({'WARNING'}, "Export OK — thumb échoué (viewport render)")
-
+        objects = [
+            o for o in context.scene.objects
+            if o.type in ("MESH", "ARMATURE", "CURVE") and not o.hide_get()
+        ]
+        thumb = render_publish_thumbnail(objects, str(staging_dir))
+        if not thumb:
             self.report(
-                {'INFO'},
-                f"{asset_name} / {step} / v{info['version']:03d} — glb exporté ✓",
+                {'WARNING'},
+                f"Thumbnail render failed - publish will be rejected (staging preserved: {staging_dir})",
             )
-            return {'FINISHED'}
 
+        try:
+            info = cp.finalize_publish_version(
+                project_root, asset_name, staging_dir, final_dir, version,
+                expected_artifacts=[stem, "thumb.png"],
+            )
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
 
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        self.report(
+            {'INFO'},
+            f"{asset_name} / {step} / v{info['version']:03d} — glb exporté ✓",
+        )
+        return {'FINISHED'}

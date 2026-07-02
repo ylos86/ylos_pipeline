@@ -99,6 +99,35 @@
     "status": {
       "type": "string",
       "description": "Etat minimal. Le suivi de production reel (deadlines, client) n'est PAS gere ici (production != pipeline)."
+    },
+    "pipeline_target": {
+      "type": "string",
+      "enum": ["offline", "web"],
+      "description": "Mode d'export privilegie cote plugin Blender (panel_pipeline.py) : 'offline' -> bouton Publish Step (USD, allocate/finalize kind=step) ; 'web' -> bouton Export glTF (GLB, meme contrat, destine a sync_web_assets). N'affecte aucune logique de create_project.py, purement une preference d'UI DCC. Defaut 'offline' si absent."
+    },
+    "web": {
+      "type": "object",
+      "description": "Consommation web (sync_web_assets vers un projet Three.js). Le projet web ne lit JAMAIS la structure du pipeline, uniquement public/assets/assets.json genere par sync_web_assets().",
+      "additionalProperties": false,
+      "properties": {
+        "target_dir": {
+          "type": ["string", "null"],
+          "description": "Chemin du projet Three.js cible (racine, sync_web_assets y ecrit public/assets/). null = pas encore configure."
+        },
+        "pinned_assets": {
+          "type": "object",
+          "description": "Versions figees pour le web, jamais 'latest' - relit a chaque sync. Cle = nom d'entite (asset/set), valeur = {step, version} (le step est requis pour localiser le GLB sans ambiguite, cf. allocate_publish_version/kind).",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["step", "version"],
+            "additionalProperties": false,
+            "properties": {
+              "step": {"type": "string"},
+              "version": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
     }
   }
 }

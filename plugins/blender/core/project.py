@@ -229,12 +229,17 @@ def register_properties():
         ],
         default="ASSET",
     )
+    # Mirrors create_project.py's ASSET_TYPES (single source of truth for the naming
+    # convention, cf. validate_entity_name) - kept in sync with op_new_asset.py's
+    # asset_type EnumProperty.
     bpy.types.Scene.ylos_asset_type = bpy.props.EnumProperty(
         name="Asset Type",
         items=[
-            ("PROP",        "Prop",        "Hard-surface object, furniture, tool, vehicle..."),
-            ("CHARACTER",   "Character",   "Biped, creature, hero, NPC..."),
-            ("ENVIRONMENT", "Environment", "Terrain piece, modular kit, vegetation..."),
+            ("CHARACTER",  "Character",  "Biped, creature, hero, NPC..."),
+            ("PROP",       "Prop",       "Hard-surface object, furniture, tool..."),
+            ("VEHICLE",    "Vehicle",    "Car, ship, aircraft..."),
+            ("CREATURE",   "Creature",   "Non-humanoid creature"),
+            ("FX_ELEMENT", "FX Element", "Reusable FX asset (debris, particles rig...)"),
         ],
         default="PROP",
     )

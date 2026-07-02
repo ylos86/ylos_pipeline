@@ -369,6 +369,7 @@
     <span class="refresh-icon" id="js-refresh-icon"></span>
     <span class="asset-count" id="js-count"></span>
     <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ Créer asset</button>
+    <button class="btn btn-secondary" type="button" id="js-btn-sync-web" style="font-size:12px;padding:5px 12px" onclick="openWebSyncModal()">Sync Web</button>
     <select class="sort-select" id="js-sort">
       <option value="name-asc">Nom A → Z</option>
       <option value="name-desc">Nom Z → A</option>
@@ -454,6 +455,25 @@
     <div class="modal-actions">
       <button class="btn btn-ghost"   type="button" id="js-np-cancel">Annuler</button>
       <button class="btn btn-primary" type="button" id="js-np-ok">Créer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal sync web ───────────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal-web-sync">
+  <div class="modal">
+    <h2>Synchroniser vers le projet web</h2>
+    <p class="subtitle">Copie les GLB pinnés (project.json → web.pinned_assets) vers
+      <code>public/assets/</code> du projet Three.js cible.</p>
+    <div class="field">
+      <label>Dossier du projet web (racine)</label>
+      <input type="text" id="js-ws-target" spellcheck="false"
+             placeholder="~/Projects/mon-site-three">
+    </div>
+    <div class="modal-err" id="js-ws-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-ws-cancel">Annuler</button>
+      <button class="btn btn-primary" type="button" id="js-ws-ok">Synchroniser</button>
     </div>
   </div>
 </div>
@@ -1019,6 +1039,54 @@ async function confirmNewAsset() {
     btn.disabled = false; btn.textContent = 'Créer';
   }
 }
+
+// ── Sync web ────────────────────────────────────────
+const MODAL_WS = el('js-modal-web-sync');
+
+function openWebSyncModal() {
+  el('js-ws-target').value = S.project?.web?.target_dir || '';
+  el('js-ws-err').textContent = '';
+  MODAL_WS.classList.remove('hidden');
+  setTimeout(() => el('js-ws-target').focus(), 40);
+}
+function closeWebSyncModal() { MODAL_WS.classList.add('hidden'); }
+
+async function confirmWebSync() {
+  const targetDir = el('js-ws-target').value.trim();
+  if (!targetDir) { el('js-ws-err').textContent = 'Dossier requis.'; return; }
+  el('js-ws-err').textContent = '';
+  const btn = el('js-ws-ok');
+  btn.disabled = true; btn.textContent = 'Synchronisation…';
+  try {
+    const set = await api('/api/set-web-target', {
+      method: 'POST',
+      body: JSON.stringify({ target_dir: targetDir }),
+    });
+    if (!set.ok) { el('js-ws-err').textContent = set.data.error || 'Erreur inconnue'; return; }
+
+    const { ok, data } = await api('/api/sync-web', { method: 'POST' });
+    if (ok) {
+      closeWebSyncModal();
+      const n = Object.keys(data.synced || {}).length;
+      const warn = (data.warnings || []).length;
+      toast(`Sync web : ${n} asset${n !== 1 ? 's' : ''}${warn ? `, ${warn} avertissement(s)` : ''}`,
+            (n === 0 && warn > 0) ? 'err' : 'ok');
+    } else {
+      el('js-ws-err').textContent = data.error || 'Erreur inconnue';
+    }
+  } catch {
+    el('js-ws-err').textContent = 'Serveur non disponible';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Synchroniser';
+  }
+}
+
+el('js-ws-cancel').addEventListener('click', closeWebSyncModal);
+el('js-ws-ok').addEventListener('click', confirmWebSync);
+MODAL_WS.addEventListener('click', e => { if (e.target === MODAL_WS) closeWebSyncModal(); });
+el('js-ws-target').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmWebSync(); if (e.key === 'Escape') closeWebSyncModal();
+});
 
 el('js-btn-new-project').addEventListener('click', openNewProjectModal);
 el('js-np-cancel').addEventListener('click', closeNewProjectModal);

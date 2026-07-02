@@ -29,6 +29,9 @@ _STEP_MAP = {
 _TYPE_ICONS = {
     "PROP":        "MESH_CUBE",
     "CHARACTER":   "ARMATURE_DATA",
+    "VEHICLE":     "AUTO",
+    "CREATURE":    "OUTLINER_OB_ARMATURE",
+    "FX_ELEMENT":  "PARTICLES",
     "ENVIRONMENT": "WORLD",
     "SHOT":        "SEQUENCE",
     "SET":         "PACKAGE",

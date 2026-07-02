@@ -14,7 +14,9 @@ Endpoints:
     GET  /api/asset/<name>     détail + toutes les versions par step
     POST /api/open-blender     {path} ouvre Blender.app (non-bloquant)
     POST /api/set-project      {path} définit le projet actif
-    GET  /thumb/<asset>/<file> fichier statique depuis publish/
+    POST /api/set-web-target   {target_dir} persiste project.json["web"]["target_dir"]
+    POST /api/sync-web         sync_web_assets() vers web.target_dir (assets pinnés)
+    GET  /thumb/<asset>/<rest> fichier statique depuis <step>/publish/ (LOP ou deux-phases)
 """
 from __future__ import annotations
 
@@ -107,9 +109,31 @@ def _last_publish(paths: list[str]) -> str | None:
     return max(paths, key=create_project._ver) if paths else None
 
 
-def _find_thumb(asset_dir: Path, asset_name: str) -> str | None:
-    """Cherche la première image dans n'importe quel <step>/publish/.
-    Retourne '<asset_name>/<filename>' → URL /thumb/<asset>/<file>."""
+def _latest_step_publish_thumb(manifest: dict) -> str | None:
+    """Cherche le thumb du publish 'complete' le plus recent dans manifest['step_publishes']
+    (contrat deux-phases generalise, cf. create_project.finalize_publish_version — kind=step).
+    Retourne le chemin relatif a l'entite (ex 'modeling/publish/Asset_modeling_v003/thumb.png'),
+    ou None si aucun publish de ce type n'existe (projet/asset legacy)."""
+    best = None  # (version, thumb_rel_path)
+    for entries in manifest.get("step_publishes", {}).values():
+        for e in entries:
+            if e.get("status") != "complete" or not e.get("thumb"):
+                continue
+            if best is None or e["version"] > best[0]:
+                best = (e["version"], e["thumb"])
+    return best[1] if best else None
+
+
+def _find_thumb(asset_dir: Path, asset_name: str, manifest: dict | None = None) -> str | None:
+    """Retourne '<asset_name>/<chemin relatif depuis asset_dir>' → URL /thumb/<asset>/<rest>.
+    Priorite au contrat deux-phases (manifest['step_publishes'], thumb toujours present et
+    localise sans scan disque) ; repli sur un scan plat de <step>/publish/ pour les assets/
+    projets legacy (publish_asset(), sans thumbnail garanti)."""
+    if manifest is not None:
+        rel = _latest_step_publish_thumb(manifest)
+        if rel and (asset_dir / rel).is_file():
+            return f"{asset_name}/{rel}"
+
     for step_dir in sorted(asset_dir.iterdir()):
         if not step_dir.is_dir():
             continue
@@ -117,9 +141,26 @@ def _find_thumb(asset_dir: Path, asset_name: str) -> str | None:
         if not pub.is_dir():
             continue
         for f in sorted(pub.iterdir()):
-            if f.suffix.lower() in THUMB_EXTS:
-                return f"{asset_name}/{f.name}"
+            if f.is_file() and f.suffix.lower() in THUMB_EXTS:
+                return f"{asset_name}/{step_dir.name}/publish/{f.name}"
     return None
+
+
+def _last_versions(manifest: dict) -> dict:
+    """Dernier chemin publie (relatif a l'entite, contenant 'vNNN' - contrat consomme tel
+    quel par app.html::verNum/openBlender) par step. Contrat deux-phases en priorite
+    (manifest['step_publishes'], entree 'complete' de version max -> son 'artifact') puis
+    repli sur l'ancien format a plat (manifest['publishes'], liste de chemins -
+    publish_asset() legacy)."""
+    result: dict = {}
+    for step, entries in manifest.get("step_publishes", {}).items():
+        complete = [e for e in entries if e.get("status") == "complete" and e.get("artifact")]
+        if complete:
+            result[step] = max(complete, key=lambda e: e["version"])["artifact"]
+    for step, paths in manifest.get("publishes", {}).items():
+        if paths and step not in result:
+            result[step] = _last_publish(paths)
+    return result
 
 
 def _list_assets(project_dir: Path) -> list[dict]:
@@ -134,19 +175,14 @@ def _list_assets(project_dir: Path) -> list[dict]:
             manifest = _read_asset_manifest(asset_dir)
             if manifest is None:
                 continue
-            publishes = manifest.get("publishes", {})
-            thumb = _find_thumb(asset_dir, asset_dir.name)
+            thumb = _find_thumb(asset_dir, asset_dir.name, manifest)
             result.append({
                 "name": asset_dir.name,
                 "family": family,
                 "entity_type": manifest.get("entity_type"),
                 "type": manifest.get("type"),
                 "steps": manifest.get("steps", []),
-                "last_versions": {
-                    step: _last_publish(paths)
-                    for step, paths in publishes.items()
-                    if paths
-                },
+                "last_versions": _last_versions(manifest),
                 "thumb": f"/thumb/{thumb}" if thumb else None,
             })
     return result
@@ -168,6 +204,7 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
             "type": manifest.get("type"),
             "steps": manifest.get("steps", []),
             "publishes": manifest.get("publishes", {}),
+            "step_publishes": manifest.get("step_publishes", {}),
             "created_utc": manifest.get("created_utc"),
             "modified_utc": manifest.get("modified_utc"),
         }
@@ -233,6 +270,10 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._post_create_project()
         elif p == "/api/create-asset":
             self._post_create_asset()
+        elif p == "/api/set-web-target":
+            self._post_set_web_target()
+        elif p == "/api/sync-web":
+            self._post_sync_web()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -309,36 +350,31 @@ class YlosHandler(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers()
             return
 
-        # rel = "<asset>/<filename>" — exactement deux segments
+        # rel = "<asset>/<chemin relatif depuis asset_dir>" - le second segment peut
+        # maintenant contenir des '/' (publishes deux-phases en dossier par version, ex
+        # 'modeling/publish/Asset_modeling_v003/thumb.png'), pas seulement un nom de
+        # fichier plat (ancien contrat). La garde de securite est ".." + containment
+        # (resolve().relative_to()) ci-dessous, pas l'absence de '/'.
         parts = rel.lstrip("/").split("/", 1)
         if len(parts) != 2:
             self.send_response(400); self.end_headers()
             return
-        asset_name, filename = parts
+        asset_name, sub_path = parts
 
-        # Interdire toute traversée dans le filename
-        if ".." in filename or "/" in filename or "\\" in filename:
+        if ".." in Path(sub_path).parts or "\\" in sub_path:
             self.send_response(400); self.end_headers()
             return
 
-        # Cherche <filename> dans n'importe quel <step>/publish/ de l'asset
         file_path: Path | None = None
         for family in ("assets", "sets"):
             asset_dir = project_dir / family / asset_name
-            if not asset_dir.is_dir():
-                continue
-            for step_dir in asset_dir.iterdir():
-                if not step_dir.is_dir():
-                    continue
-                candidate = step_dir / "publish" / filename
-                if candidate.is_file():
-                    try:
-                        candidate.resolve().relative_to(project_dir.resolve())
-                        file_path = candidate
-                    except ValueError:
-                        pass
-                    break
-            if file_path:
+            candidate = asset_dir / sub_path
+            if candidate.is_file():
+                try:
+                    candidate.resolve().relative_to(project_dir.resolve())
+                    file_path = candidate
+                except ValueError:
+                    pass
                 break
 
         if file_path is None:
@@ -517,6 +553,52 @@ class YlosHandler(BaseHTTPRequestHandler):
         except (OSError, json.JSONDecodeError):
             wip_path = None
         _json(self, 200, {"ok": True, "asset_path": info["path"], "wip_path": wip_path})
+
+    def _post_set_web_target(self):
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "JSON invalide dans le body"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        target_dir = (body.get("target_dir") or "").strip() or None
+        try:
+            manifest = create_project.read_manifest(project_dir)
+        except (OSError, ValueError) as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
+        web["target_dir"] = target_dir
+        manifest["modified_utc"] = create_project._now()
+        try:
+            create_project.write_manifest(project_dir / create_project.PIPELINE_DIR, manifest)
+        except OSError as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _json(self, 200, {"ok": True, "target_dir": target_dir})
+
+    def _post_sync_web(self):
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        try:
+            manifest = create_project.read_manifest(project_dir)
+        except (OSError, ValueError) as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        target_dir = manifest.get("web", {}).get("target_dir")
+        if not target_dir:
+            _json(self, 400, {"error": "web.target_dir non configure - POST /api/set-web-target d'abord"})
+            return
+        try:
+            result = create_project.sync_web_assets(project_dir, target_dir)
+        except (OSError, ValueError) as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _json(self, 200, {"ok": True, **result})
 
 
 # -------------------------------------------------------------------------------------

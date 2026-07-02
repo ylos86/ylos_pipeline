@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -101,14 +102,28 @@ _STEPS_KEY = {"asset": "asset_steps", "set": "set_steps", "shot": "shot_steps"}
 # c'est un instantane complet du reseau LOP (layer USD + thumb). Vit dans son propre dossier
 # reserve, n'entre jamais dans la composition subLayers de asset_root.usda.
 ASSET_TYPES = ["CHARACTER", "PROP", "VEHICLE", "CREATURE", "FX_ELEMENT"]
+
+# Sous-types par famille, convention de nommage TYPE_Nom_Variant (cf. validate_entity_name).
+# SET_TYPES/SHOT_TYPES miroitent app.html::FAMILY_CONFIG (seule source deja decidee pour
+# ces deux familles - create_project.py etait le seul endroit qui ne les connaissait pas).
+SET_TYPES = ["EXTERIOR", "INTERIOR", "HERO_SET", "MODULAR_KIT"]
+SHOT_TYPES = ["LAYOUT", "ANIMATION", "FX", "LIGHTING", "COMP"]
+_TYPES_BY_ENTITY = {"asset": ASSET_TYPES, "set": SET_TYPES, "shot": SHOT_TYPES}
 LOP_DIR_NAME = "lop"
 LOP_PUBLISH_DIR_NAME = "publish"
 LOP_STAGING_DIR_NAME = ".staging"
 LOP_THUMB_NAME = "thumb.png"
-LOP_LAYER_EXTENSIONS = (".usd", ".usdc", ".usda", ".usdnc")  # .usdnc = watermark Apprentice,
-                                                              # jamais suppose a l'avance (cf.
-                                                              # gotcha extensions, LOP HDA)
+PUBLISH_ARTIFACT_EXTENSIONS = (".usd", ".usdc", ".usda", ".usdnc", ".glb")  # .usdnc =
+                                                              # watermark Apprentice, jamais
+                                                              # suppose a l'avance (cf. gotcha
+                                                              # extensions, LOP HDA) ; .glb =
+                                                              # bridge Blender/Three.js
 LOP_PUBLISHES_KEY = "lop_publishes"
+# Publishes DCC par step (Blender USD/GLB...), generalisation du contrat deux-phases LOP a
+# tout 'kind' != 'lop' (cf. allocate_publish_version). {step: [version-entry, ...]} - cle
+# distincte de 'publishes' (liste de chemins, ecrite par publish_asset() legacy) pour ne
+# jamais melanger les deux formes d'entree dans la meme liste.
+STEP_PUBLISHES_KEY = "step_publishes"
 _DIR_VER_RE = re.compile(r"_v(\d+)$")
 
 # Ordre de force des steps pour l'empilement subLayers (plus fort / downstream en premier).
@@ -242,6 +257,23 @@ def acquire_lock(path):
         os.close(fd)
 
 
+def _atomic_write_text(path, content, encoding="utf-8"):
+    """Ecrit 'content' dans 'path' de facon atomique (tmp + os.replace, meme motif que
+    finalize_publish_version() utilise deja pour le rename staging->final). Protege contre
+    un fichier tronque/corrompu si le process crashe pendant l'ecriture - acquire_lock()
+    protege la concurrence entre process, pas un crash mi-ecriture ; les deux sont
+    complementaires."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(content, encoding=encoding)
+    os.replace(tmp, path)
+
+
+def _atomic_write_json(path, data, indent=2):
+    """Serialise 'data' en JSON et l'ecrit via _atomic_write_text (cf. sa docstring)."""
+    _atomic_write_text(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
+
+
 # --------------------------------------------------------------------------------------
 # Manifeste projet (project.json) - contrat lisible par machine
 # --------------------------------------------------------------------------------------
@@ -284,7 +316,7 @@ def build_manifest(name, display_name=None, prod_type="FILM"):
 
 def write_manifest(config_dir, manifest):
     path = config_dir / MANIFEST_NAME
-    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _atomic_write_json(path, manifest)
     return path
 
 
@@ -460,6 +492,10 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
     if entity_type not in ENTITY_DIR:
         raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
     _validate_segment(name)
+    # Validation de nommage a la creation - point unique (cf. validate_entity_name) : couvre
+    # web UI, Blender, CLI, futur. _validate_segment protege le chemin, ceci protege la
+    # convention metier TYPE_Nom_Variant.
+    validate_entity_name(name, entity_type, asset_type)
 
     if steps is None:
         steps = _project_steps(project_dir, entity_type)
@@ -480,15 +516,13 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
     # 2. manifeste d'entite
     manifest = build_asset_manifest(name, entity_type, asset_type, steps)
     manifest_path = entity_dir / ASSET_MANIFEST_NAME
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    _atomic_write_json(manifest_path, manifest)
 
     # 3. stub d'assemblage USD (asset/set ; un shot compose differemment)
     asset_root_path = None
     if entity_type in ("asset", "set"):
         asset_root_path = entity_dir / ASSET_ROOT_NAME
-        asset_root_path.write_text(asset_root_usda(name), encoding="utf-8")
+        _atomic_write_text(asset_root_path, asset_root_usda(name))
 
     return {
         "name": name,
@@ -504,7 +538,14 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
 # --------------------------------------------------------------------------------------
 
 def publish_asset(project_root, asset_name, step, source_file):
-    """Publie source_file dans <asset>/<step>/publish/ avec versioning automatique.
+    """DEPRECIE - publie source_file dans <asset>/<step>/publish/ avec versioning
+    automatique, en ecriture directe (pas de staging, pas de thumbnail requis).
+
+    Remplace par le contrat deux-phases allocate_publish_version()/finalize_publish_version()
+    (kind=<step>), adopte par tous les bridges DCC (Houdini LOP, Blender USD/GLB) - garantit
+    un thumbnail et un commit atomique via staging_dir. Conserve pour compatibilite
+    (aucun appelant restant dans ce repo depuis la migration Blender), ne pas utiliser pour
+    du nouveau code.
 
     - Scanne manifest.publishes[step] pour determiner la prochaine version (v001, v002...).
     - Copie source_file -> <step>/publish/<asset>_<step>_v<NNN><ext> (jamais d'ecrasement).
@@ -514,6 +555,14 @@ def publish_asset(project_root, asset_name, step, source_file):
     Retourne {name, step, version, publish_path, manifest, asset_root}.
     Non-destructif : leve FileExistsError si la version cible existe deja.
     """
+    import warnings
+    warnings.warn(
+        "publish_asset() est deprecie - utiliser allocate_publish_version()/"
+        "finalize_publish_version() (kind=<step>), le contrat deux-phases avec thumbnail "
+        "requis adopte par tous les bridges DCC.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     project_root = Path(project_root)
     source_file = Path(source_file)
 
@@ -570,9 +619,7 @@ def publish_asset(project_root, asset_name, step, source_file):
         publishes.setdefault(step, [])
         publishes[step].append(f"{step}/publish/{versioned_name}")
         manifest["modified_utc"] = _now()
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        _atomic_write_json(manifest_path, manifest)
 
         # Reconstruire asset_root.usda (asset/set uniquement)
         asset_root_path = None
@@ -581,7 +628,7 @@ def publish_asset(project_root, asset_name, step, source_file):
             content = build_asset_root(manifest.get("name", asset_name),
                                        _latest_from_publishes(publishes))
             asset_root_path = entity_dir / ASSET_ROOT_NAME
-            asset_root_path.write_text(content, encoding="utf-8")
+            _atomic_write_text(asset_root_path, content)
 
     return {
         "name": asset_name,
@@ -597,39 +644,65 @@ def publish_asset(project_root, asset_name, step, source_file):
 # Publish LOP (Solaris) - version d'asset complete (layer USD + thumb), staging + replace
 # --------------------------------------------------------------------------------------
 
-def validate_publish_asset_name(asset_name, asset_type):
-    """Valide asset_name contre la convention TYPE_Asset_Variant (TYPE = asset_type).
-    Match par prefixe exact (et non un split('_') naif) car certains types contiennent deja
-    un underscore (FX_ELEMENT) : 'FX_ELEMENT_Drone_Default' a 4 segments '_', pas 3."""
-    if asset_type not in ASSET_TYPES:
-        raise ValueError(f"asset_type invalide : {asset_type!r} (attendu un de {ASSET_TYPES})")
-    prefix = f"{asset_type}_"
-    if not asset_name.startswith(prefix):
+def _suggested_entity_name(name, sub_type):
+    """Propose un nom conforme a partir d'un nom brut invalide : capitalise, retire un
+    eventuel prefixe existant (mal forme), variant 'Default' par defaut."""
+    base = name.split("_")[-1] if "_" in name else name
+    base = base[:1].upper() + base[1:] if base else base
+    return f"{sub_type}_{base}_Default"
+
+
+def validate_entity_name(name, entity_type, sub_type):
+    """Valide 'name' contre la convention TYPE_Nom_Variant (TYPE = sub_type, restreint a la
+    liste valide pour 'entity_type' - asset/set/shot, cf. _TYPES_BY_ENTITY). Match par
+    prefixe exact (et non un split('_') naif) car certains types contiennent deja un
+    underscore (FX_ELEMENT) : 'FX_ELEMENT_Drone_Default' a 4 segments '_', pas 3.
+
+    Point unique de validation nommage, appele par create_asset() a la creation (couvre web
+    UI, Blender, CLI, futur) - et par allocate_publish_version() au publish LOP (contrat
+    historique inchange, cf. validate_publish_asset_name)."""
+    valid_types = _TYPES_BY_ENTITY.get(entity_type)
+    if valid_types is None:
+        raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
+    if sub_type not in valid_types:
         raise ValueError(
-            f"asset_name {asset_name!r} ne respecte pas la convention "
-            f"{asset_type}_Asset_Variant (prefixe attendu : {prefix!r})"
+            f"type invalide : {sub_type!r} (attendu un de {valid_types} pour entity_type={entity_type!r})"
         )
-    remainder = asset_name[len(prefix):]
-    parts = remainder.split("_")
-    if len(parts) != 2 or not all(parts):
+    prefix = f"{sub_type}_"
+    valid = False
+    if name.startswith(prefix):
+        remainder = name[len(prefix):]
+        parts = remainder.split("_")
+        valid = len(parts) == 2 and all(parts)
+    if not valid:
+        suggestion = _suggested_entity_name(name, sub_type)
         raise ValueError(
-            f"asset_name {asset_name!r} invalide : attendu {asset_type}_Asset_Variant "
-            f"(ex: {asset_type}_Lina_Default)"
+            f"{name!r} invalide - suggestion : {suggestion!r}. "
+            f"Convention : TYPE_Nom_Variant, familles valides : {', '.join(valid_types)}."
         )
     return True
 
 
+def validate_publish_asset_name(asset_name, asset_type):
+    """Alias historique de validate_entity_name(asset_name, 'asset', asset_type) - conserve
+    pour compatibilite (Houdini HDA, tests, allocate_publish_version)."""
+    return validate_entity_name(asset_name, "asset", asset_type)
+
+
 def _find_asset_entity(project_root, asset_name):
-    """Localise une entite ASSET deja creee (assets/<asset_name>/manifest.json). Un publish
-    LOP n'est jamais createur d'entite : create_asset() doit avoir ete appele avant."""
-    entity_dir = Path(project_root) / ENTITY_DIR["asset"] / asset_name
-    manifest_path = entity_dir / ASSET_MANIFEST_NAME
-    if not manifest_path.is_file():
-        raise FileNotFoundError(
-            f"Asset '{asset_name}' introuvable sous {entity_dir} "
-            f"(doit etre cree via create_asset() avant tout publish)."
-        )
-    return entity_dir, manifest_path
+    """Localise une entite deja creee (assets|sets|shots/<name>/manifest.json), quelle que
+    soit sa famille (meme scan que publish_asset()). Un publish (LOP ou par step) n'est
+    jamais createur d'entite : create_asset() doit avoir ete appele avant."""
+    project_root = Path(project_root)
+    for family in ENTITY_DIR.values():
+        candidate = project_root / family / asset_name
+        manifest_path = candidate / ASSET_MANIFEST_NAME
+        if manifest_path.is_file():
+            return candidate, manifest_path
+    raise FileNotFoundError(
+        f"Entite '{asset_name}' introuvable sous {project_root} (assets/, sets/, shots/) "
+        f"(doit etre creee via create_asset() avant tout publish)."
+    )
 
 
 def publish_version_from_dir(final_dir):
@@ -643,17 +716,43 @@ def publish_version_from_dir(final_dir):
     return int(m.group(1))
 
 
-def allocate_publish_version(project_root, asset_name, asset_type, comment=None):
-    """Reserve atomiquement (fcntl.flock) le prochain numero de version de publish LOP pour
-    un asset existant, et cree un repertoire de staging vide. Ne touche ni au layer USD ni
-    au thumbnail : l'appelant (callback HDA) les ecrit dans staging_dir, puis appelle
+def _publish_dirs(entity_dir, kind):
+    """Sous-arbre de publish pour 'kind' : 'lop' (whole-asset LOP Houdini, historique) ou un
+    nom de step (Blender/DCC par step, ex 'modeling') - reutilise entity_dir/<step> deja
+    scaffolde par create_asset() (wip/, publish/). Retourne (publish_root, staging_root)."""
+    base = entity_dir / (LOP_DIR_NAME if kind == "lop" else kind)
+    return base / LOP_PUBLISH_DIR_NAME, base / LOP_STAGING_DIR_NAME
+
+
+def _publish_entries(manifest, kind):
+    """Liste des entrees de version pour 'kind' dans le manifeste (creee si absente).
+    kind='lop' -> manifest[LOP_PUBLISHES_KEY] (liste plate, contrat historique inchange).
+    Tout autre kind -> manifest[STEP_PUBLISHES_KEY][kind] (dict step -> liste, memes
+    entrees) - cle distincte pour ne jamais collisionner avec 'publishes' (legacy)."""
+    if kind == "lop":
+        return manifest.setdefault(LOP_PUBLISHES_KEY, [])
+    return manifest.setdefault(STEP_PUBLISHES_KEY, {}).setdefault(kind, [])
+
+
+def allocate_publish_version(project_root, asset_name, asset_type=None, comment=None, kind="lop"):
+    """Reserve atomiquement (fcntl.flock) le prochain numero de version de publish pour un
+    asset existant, et cree un repertoire de staging vide. Ne touche a aucun artefact :
+    l'appelant (callback HDA ou operateur Blender) les ecrit dans staging_dir, puis appelle
     finalize_publish_version() pour committer (os.replace atomique, meme filesystem que
-    staging_dir car les deux vivent sous entity_dir/lop/) et finaliser le manifeste.
+    staging_dir car les deux vivent sous entity_dir/<kind>/) et finaliser le manifeste.
+
+    'kind' (mot-cle, defaut 'lop' pour compatibilite Houdini) : 'lop' pour un publish LOP
+    (instantane complet, hors taxonomie de steps - contrat historique inchange, 'asset_type'
+    requis + valide via validate_publish_asset_name) ; ou un nom de step (ex 'modeling',
+    'lookdev') pour un publish DCC par step (Blender USD/GLB...) - le nommage est deja
+    garanti par create_asset() (cf. validate_entity_name), pas de revalidation ici et
+    'asset_type' est ignore.
 
     Retourne (staging_dir, final_dir) en pathlib.Path. staging_dir existe deja (vide) ;
     final_dir n'existe pas encore (c'est la cible du futur replace).
     """
-    validate_publish_asset_name(asset_name, asset_type)
+    if kind == "lop":
+        validate_publish_asset_name(asset_name, asset_type)
 
     project_root = Path(project_root)
     entity_dir, manifest_path = _find_asset_entity(project_root, asset_name)
@@ -661,19 +760,19 @@ def allocate_publish_version(project_root, asset_name, asset_type, comment=None)
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-        declared_type = manifest.get("type")
-        if declared_type != asset_type:
-            raise ValueError(
-                f"asset_type {asset_type!r} ne correspond pas au type declare de "
-                f"'{asset_name}' dans manifest.json ({declared_type!r})."
-            )
+        if kind == "lop":
+            declared_type = manifest.get("type")
+            if declared_type != asset_type:
+                raise ValueError(
+                    f"asset_type {asset_type!r} ne correspond pas au type declare de "
+                    f"'{asset_name}' dans manifest.json ({declared_type!r})."
+                )
 
-        existing = manifest.setdefault(LOP_PUBLISHES_KEY, [])
+        existing = _publish_entries(manifest, kind)
         next_ver = max((e.get("version", 0) for e in existing), default=0) + 1
 
-        versioned_name = f"{asset_name}_lop_v{next_ver:03d}"
-        publish_root = entity_dir / LOP_DIR_NAME / LOP_PUBLISH_DIR_NAME
-        staging_root = entity_dir / LOP_DIR_NAME / LOP_STAGING_DIR_NAME
+        versioned_name = f"{asset_name}_{kind}_v{next_ver:03d}"
+        publish_root, staging_root = _publish_dirs(entity_dir, kind)
         final_dir = publish_root / versioned_name
         staging_dir = staging_root / f"{versioned_name}.staging-{os.getpid()}"
 
@@ -695,9 +794,7 @@ def allocate_publish_version(project_root, asset_name, asset_type, comment=None)
             "reserved_utc": _now(),
         })
         manifest["modified_utc"] = _now()
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        _atomic_write_json(manifest_path, manifest)
 
     return staging_dir, final_dir
 
@@ -705,8 +802,9 @@ def allocate_publish_version(project_root, asset_name, asset_type, comment=None)
 def _missing_artifacts(staging_dir, expected_artifacts):
     """Verifie que chaque entree de expected_artifacts existe et est non-vide dans staging_dir.
     Une entree avec un '.' est un nom exact (ex: 'thumb.png'). Une entree sans '.' est un stem
-    de layer USD : matchee contre LOP_LAYER_EXTENSIONS (jamais d'extension supposee a l'avance -
-    licence Apprentice ecrit '.usdnc', licence commerciale '.usd'/'.usdc'/'.usda').
+    d'artefact (layer USD ou GLB) : matchee contre PUBLISH_ARTIFACT_EXTENSIONS (jamais
+    d'extension supposee a l'avance - licence Apprentice ecrit '.usdnc', licence commerciale
+    '.usd'/'.usdc'/'.usda', bridge Blender ecrit '.glb').
 
     Retourne la liste des entrees manquantes/vides (liste vide = tout est present)."""
     missing = []
@@ -717,7 +815,7 @@ def _missing_artifacts(staging_dir, expected_artifacts):
                 missing.append(artifact)
         else:
             matches = [
-                staging_dir / f"{artifact}{ext}" for ext in LOP_LAYER_EXTENSIONS
+                staging_dir / f"{artifact}{ext}" for ext in PUBLISH_ARTIFACT_EXTENSIONS
                 if (staging_dir / f"{artifact}{ext}").is_file()
                 and (staging_dir / f"{artifact}{ext}").stat().st_size > 0
             ]
@@ -728,17 +826,23 @@ def _missing_artifacts(staging_dir, expected_artifacts):
 
 def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, version,
                              expected_artifacts, comment=None):
-    """Commit atomique d'un publish LOP prealablement reserve par allocate_publish_version() :
+    """Commit atomique d'un publish prealablement reserve par allocate_publish_version() :
     os.replace(staging_dir, final_dir) - point de commit unique pour TOUT ce que le staging
-    contient (layer USD + thumb.png) - puis mise a jour du manifeste sous flock (entree
-    'pending' -> 'complete'). A appeler une fois que le callback HDA a ecrit le layer et le
-    thumbnail dans staging_dir.
+    contient (artefact + thumb.png) - puis mise a jour du manifeste sous flock (entree
+    'pending' -> 'complete'). A appeler une fois que l'appelant (callback HDA, operateur
+    Blender) a ecrit l'artefact et le thumbnail dans staging_dir.
+
+    'kind' (lop ou nom de step) n'est PAS un parametre separe : il est retrouve depuis la
+    structure de final_dir (entity_dir/<kind>/publish/<versioned_name>, cf.
+    allocate_publish_version/_publish_dirs) - signature inchangee pour ne pas casser les
+    appelants existants (build_publish_hda.py, test_publish_hda_e2e.py).
 
     expected_artifacts : liste de noms requis dans staging_dir avant le commit (ex:
-    ['CHARACTER_Lina_Default_lop_v003', 'thumb.png'] - le layer par son stem, resolu contre les
-    extensions USD connues ; le thumb par son nom exact). Le thumbnail est REQUIS pour un publish
-    LOP. Si un artefact manque ou est vide : leve ValueError, ne touche PAS staging_dir, n'appelle
-    PAS os.replace, n'ecrit RIEN au manifeste (la reservation reste 'pending').
+    ['CHARACTER_Lina_Default_lop_v003', 'thumb.png'] - l'artefact par son stem, resolu contre
+    les extensions connues (PUBLISH_ARTIFACT_EXTENSIONS) ; le thumb par son nom exact). Le
+    thumbnail est REQUIS partout. Si un artefact manque ou est vide : leve ValueError, ne
+    touche PAS staging_dir, n'appelle PAS os.replace, n'ecrit RIEN au manifeste (la
+    reservation reste 'pending').
 
     Retourne {name, version, final_dir, manifest}.
     """
@@ -757,11 +861,14 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
             f"vide(s) dans {staging_dir} : {missing}. staging_dir preserve, rien commit."
         )
 
+    kind_dirname = final_dir.parent.parent.name
+    kind = "lop" if kind_dirname == LOP_DIR_NAME else kind_dirname
+
     os.replace(staging_dir, final_dir)
 
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        existing = manifest.setdefault(LOP_PUBLISHES_KEY, [])
+        existing = _publish_entries(manifest, kind)
         entry = next((e for e in existing if e.get("version") == version), None)
         if entry is None:
             raise ValueError(
@@ -772,20 +879,21 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         # Decouverte des fichiers reellement ecrits plutot qu'une extension supposee : en
         # licence Apprentice, Houdini ecrit '.usdnc' (watermarke) et non '.usd' (cf. contexte
         # hython/licence). Se fier au disque evite un manifeste qui pointe vers un fichier
-        # inexistant selon la licence de la machine qui a publie.
+        # inexistant selon la licence/le DCC qui a publie.
         produced = sorted(p.name for p in final_dir.iterdir() if p.is_file())
         thumbs = [n for n in produced if n == LOP_THUMB_NAME]
-        layers = [n for n in produced if n != LOP_THUMB_NAME]
-        rel_dir = f"{LOP_DIR_NAME}/{LOP_PUBLISH_DIR_NAME}/{final_dir.name}"
-        entry["layer"] = f"{rel_dir}/{layers[0]}" if layers else None
+        artifacts = [n for n in produced if n != LOP_THUMB_NAME]
+        rel_dir = f"{kind_dirname}/{LOP_PUBLISH_DIR_NAME}/{final_dir.name}"
+        # 'layer' conserve pour kind='lop' (contrat lu par tools/houdini/*.py) ; 'artifact'
+        # pour tout le reste (generique - USD ou GLB selon le DCC appelant).
+        artifact_key = "layer" if kind == "lop" else "artifact"
+        entry[artifact_key] = f"{rel_dir}/{artifacts[0]}" if artifacts else None
         entry["thumb"] = f"{rel_dir}/{thumbs[0]}" if thumbs else None
         entry["published_utc"] = _now()
         if comment:
             entry["comment"] = comment
         manifest["modified_utc"] = _now()
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        _atomic_write_json(manifest_path, manifest)
 
     return {
         "name": asset_name,
@@ -793,6 +901,109 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         "final_dir": str(final_dir),
         "manifest": str(manifest_path),
     }
+
+
+# --------------------------------------------------------------------------------------
+# Consommation web (sync vers un projet Three.js) - le projet web ne lit JAMAIS la
+# structure du pipeline, uniquement public/assets/assets.json (cf. CLAUDE.md).
+# --------------------------------------------------------------------------------------
+
+WEB_ASSETS_DIRNAME = "assets"
+_SYNCED_GLB_RE = re.compile(r"_v(\d+)\.glb$")
+
+
+def _known_entity_names(project_root):
+    """Noms de toutes les entites existantes du projet (assets/sets/shots), utilise par
+    sync_web_assets() pour ne jamais toucher un fichier de public/assets/ qui ne correspond
+    a aucune entite connue (cf. sa docstring)."""
+    project_root = Path(project_root)
+    names = set()
+    for family in ENTITY_DIR.values():
+        family_dir = project_root / family
+        if not family_dir.is_dir():
+            continue
+        for d in family_dir.iterdir():
+            if d.is_dir() and (d / ASSET_MANIFEST_NAME).is_file():
+                names.add(d.name)
+    return names
+
+
+def sync_web_assets(project_root, web_project_dir):
+    """Synchronise les GLB PINNES (project.json['web']['pinned_assets'], jamais 'latest')
+    vers {web_project_dir}/public/assets/. Le projet web est un consommateur passif : il ne
+    lit jamais la structure du pipeline, uniquement assets.json genere ici.
+
+    pinned_assets : {"<asset_name>": {"step": <step>, "version": <int>}} - le step est
+    necessaire pour localiser le GLB sans ambiguite (un asset peut avoir des publishes GLB
+    independants par step, cf. allocate_publish_version/kind).
+
+    Comportement (miroir) :
+      1. Copie chaque GLB pinne vers <ASSET_NAME>_v<VERSION:03d>.glb (cache-busting).
+      2. Genere assets.json ({"assets": {...}, "generated": <ISO>}), sha256 par asset,
+         ecrit atomiquement (_atomic_write_json).
+      3. Supprime les <ASSET>_v*.glb d'assets CONNUS (cf. _known_entity_names) dont la
+         version ne correspond plus au pin courant (ou dont l'asset n'est plus pinne du
+         tout). Un fichier qui ne correspond a aucune entite connue n'est jamais touche.
+
+    Retourne {"assets_dir", "synced", "warnings"} - 'warnings' liste les pins non
+    resolus (asset/GLB introuvable) sans faire echouer le reste de la synchronisation.
+    """
+    project_root = Path(project_root)
+    web_project_dir = Path(web_project_dir)
+    manifest = read_manifest(project_root)
+    pinned = manifest.get("web", {}).get("pinned_assets", {})
+
+    assets_dir = web_project_dir / "public" / WEB_ASSETS_DIRNAME
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    known_names = _known_entity_names(project_root)
+    synced = {}
+    warnings = []
+    wanted_filenames = {}  # asset_name -> nom de fichier actuellement pinne
+
+    for asset_name, pin in pinned.items():
+        step = pin.get("step")
+        version = pin.get("version")
+        if not step or not isinstance(version, int):
+            warnings.append(f"Pin invalide pour {asset_name!r} : {pin!r}")
+            continue
+        try:
+            entity_dir, _ = _find_asset_entity(project_root, asset_name)
+        except FileNotFoundError:
+            warnings.append(f"Asset pinne introuvable : {asset_name!r}")
+            continue
+
+        stem = f"{asset_name}_{step}_v{version:03d}"
+        src = entity_dir / step / LOP_PUBLISH_DIR_NAME / stem / f"{stem}.glb"
+        if not src.is_file():
+            warnings.append(f"GLB pinne introuvable pour {asset_name!r} : {src}")
+            continue
+
+        dest_filename = f"{asset_name}_v{version:03d}.glb"
+        shutil.copy2(src, assets_dir / dest_filename)
+        synced[asset_name] = {
+            "file": dest_filename,
+            "version": version,
+            "sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
+        }
+        wanted_filenames[asset_name] = dest_filename
+
+    # Miroir : purge les vieilles versions (ou les assets retires du pin) d'entites connues.
+    for f in list(assets_dir.iterdir()):
+        if not f.is_file() or f.suffix != ".glb":
+            continue
+        m = _SYNCED_GLB_RE.search(f.name)
+        if not m:
+            continue
+        candidate_name = f.name[: m.start()]
+        if candidate_name not in known_names:
+            continue  # fichier etranger a une entite connue - jamais touche
+        if wanted_filenames.get(candidate_name) != f.name:
+            f.unlink()
+
+    _atomic_write_json(assets_dir / "assets.json", {"assets": synced, "generated": _now()})
+
+    return {"assets_dir": str(assets_dir), "synced": synced, "warnings": warnings}
 
 
 # --------------------------------------------------------------------------------------
@@ -817,7 +1028,10 @@ def _cli(argv=None):
     pa.add_argument("--entity-type", default="asset", choices=["asset", "set", "shot"],
                     help="Famille de l'entite (defaut asset)")
     pa.add_argument("--type", dest="asset_type", default="OTHER",
-                    help="Sous-type metier (CHARACTER, ENVIRONMENT, PROP... ; defaut OTHER)")
+                    help="Sous-type metier - requis pour respecter la convention TYPE_Nom_Variant "
+                         "(asset: CHARACTER/PROP/VEHICLE/CREATURE/FX_ELEMENT, set: EXTERIOR/INTERIOR/"
+                         "HERO_SET/MODULAR_KIT, shot: LAYOUT/ANIMATION/FX/LIGHTING/COMP ; defaut OTHER, "
+                         "toujours invalide - create_asset() explique la convention si omis)")
     pa.add_argument("--steps", help="Steps separes par virgules (defaut : pipeline du projet)")
     pa.add_argument("--force", action="store_true", help="Passer outre si l'entite existe")
 

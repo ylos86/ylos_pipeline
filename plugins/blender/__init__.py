@@ -19,6 +19,17 @@ import sys
 # Make create_project.py importable everywhere in the addon
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", ".."))
 
+
+def _purge_create_project_module():
+    """Purge 'create_project' de sys.modules si present. Defensif au register() (module
+    stale d'une session precedente / d'un autre chemin) et systematique a l'unregister()
+    (pour qu'un disable -> edit -> enable dans la meme session Blender recharge le vrai
+    fichier plutot que la version en cache - meme classe de bug que la purge ylos_core de
+    la branche v0.4-monorepo, adaptee au module unique de main, sans vendoring)."""
+    for key in list(sys.modules):
+        if key == "create_project":
+            del sys.modules[key]
+
 from . import core
 from .ui import panel_pipeline, panel_asset_list
 from .operators import (
@@ -73,6 +84,7 @@ def _draw_header_button(self, context):
 
 
 def register():
+    _purge_create_project_module()
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
 
@@ -112,6 +124,8 @@ def unregister():
 
     from .core.thumbnails import clear_previews
     clear_previews()
+
+    _purge_create_project_module()
 
 
 if __name__ == "__main__":
