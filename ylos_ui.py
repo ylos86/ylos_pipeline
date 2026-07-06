@@ -3,7 +3,15 @@
 ylos_ui.py — Serveur HTTP local stdlib-only pour l'UI Ylos Prod.
 
 Gère le projet actif via ~/.ylos/active_project (chemin absolu, une ligne).
-CORS activé pour les pages file:// (app.html local).
+
+Politique d'origine (anti drive-by localhost) : toute requête portant un header Origin
+non listé dans YlosHandler.allowed_origins (127.0.0.1/localhost sur le port actif) est
+rejetée en 403 AVANT tout traitement — CORS seul ne suffit pas, une "simple request"
+(GET, POST text/plain) déclenche ses effets de bord serveur même si le navigateur bloque
+la lecture de la réponse. 'Origin: null' (file://, mais aussi iframe sandboxée d'un site
+hostile) est rejeté : app.html se consomme via http://127.0.0.1:<port>/, plus en file://.
+Les requêtes SANS Origin (curl, navigation directe) passent — ce ne sont pas des
+requêtes cross-site émises par un navigateur.
 
 Usage:
     python3 ylos_ui.py [--project /chemin] [--port 8765]
@@ -51,10 +59,23 @@ THUMB_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 # Utilitaires
 # -------------------------------------------------------------------------------------
 
+def _allowed_origins(port: int) -> frozenset[str]:
+    """Origines de confiance = le serveur lui-même. app.html::BASE pointe sur 127.0.0.1 ;
+    'localhost' couvre le cas où la page est ouverte via http://localhost:<port>/ (origine
+    différente de 127.0.0.1 pour le navigateur, même serveur en pratique)."""
+    return frozenset({f"http://127.0.0.1:{port}", f"http://localhost:{port}"})
+
+
 def _cors(handler: BaseHTTPRequestHandler) -> None:
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    """Headers CORS uniquement pour une origine de confiance, écho de l'origine exacte
+    (jamais '*'). Sans Origin ou origine inconnue : aucun header CORS — le refus effectif
+    (403) est fait en amont par _origin_ok(), ceci n'est que la moitié 'lecture navigateur'."""
+    origin = handler.headers.get("Origin")
+    if origin and origin in handler.allowed_origins:
+        handler.send_header("Access-Control-Allow-Origin", origin)
+        handler.send_header("Vary", "Origin")
+        handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        handler.send_header("Access-Control-Allow-Headers", "Content-Type")
 
 
 def _json(handler: BaseHTTPRequestHandler, code: int, data: object) -> None:
@@ -231,15 +252,35 @@ def _is_user_volume(p: Path) -> bool:
 
 class YlosHandler(BaseHTTPRequestHandler):
 
+    # Recalculé dans main() depuis le port réel (--port). Défaut posé ici pour que le
+    # handler reste utilisable importé tel quel (tests, port par défaut).
+    allowed_origins = _allowed_origins(DEFAULT_PORT)
+
     def log_message(self, fmt, *args):
         print(f"[ylos] {self.command} {self.path} → {args[1] if len(args) > 1 else ''}")
 
+    def _origin_ok(self) -> bool:
+        """Garde anti drive-by : à appeler AVANT tout traitement (GET/POST/OPTIONS).
+        Origin absent = pas une requête cross-site navigateur -> ok. Origin présent :
+        seulement s'il est de confiance ('null' inclus dans le rejet, cf. docstring module)."""
+        origin = self.headers.get("Origin")
+        return origin is None or origin in self.allowed_origins
+
+    def _reject_origin(self) -> None:
+        _json(self, 403, {"error": "Origine non autorisée"})
+
     def do_OPTIONS(self):
+        if not self._origin_ok():
+            self._reject_origin()
+            return
         self.send_response(204)
         _cors(self)
         self.end_headers()
 
     def do_GET(self):
+        if not self._origin_ok():
+            self._reject_origin()
+            return
         p = self.path
         if p in ("/", "/app.html"):
             self._get_app_html()
@@ -261,6 +302,9 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 404, {"error": "endpoint introuvable"})
 
     def do_POST(self):
+        if not self._origin_ok():
+            self._reject_origin()
+            return
         p = self.path
         if p == "/api/open-blender":
             self._post_open_blender()
@@ -627,6 +671,7 @@ def main() -> None:
     if active:
         print(f"[ylos] projet courant : {active}")
 
+    YlosHandler.allowed_origins = _allowed_origins(args.port)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), YlosHandler)
     print(f"[ylos] http://127.0.0.1:{args.port}  (Ctrl-C pour arrêter)")
     try:
