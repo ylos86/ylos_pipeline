@@ -518,7 +518,13 @@
 console.log('[ylos] script start');
 'use strict';
 
-const BASE     = 'http://127.0.0.1:8765';
+// Servie par ylos_ui.py : même origine que la page (suit --port automatiquement).
+// Fallback 8765 seulement si la page n'est pas servie en http (ouverture directe du
+// fichier — non supporté par la garde d'origine, cf. ylos_ui.py, mais on ne casse pas
+// l'URL pour autant).
+const BASE     = location.protocol.startsWith('http')
+  ? location.origin
+  : 'http://127.0.0.1:8765';
 const POLL_MS  = 30_000;
 const TYPE_COLORS = {
   CHARACTER: '#60a5fa', PROP: '#fb923c', SET: '#34d399',
@@ -558,7 +564,11 @@ const TOAST        = el('js-toast');
 const MODAL_NP     = el('js-modal-new-project');
 const MODAL_NA     = el('js-modal-new-asset');
 
-const FAMILY_CONFIG = {
+// Fallback HORS-LIGNE uniquement. La source de vérité est le serveur (/api/config ←
+// create_project.py, logique unique) : rechargée au boot et à chaque changement de
+// projet (les steps dépendent du pipeline du projet actif). Ne pas éditer les valeurs
+// ici sans raison — serveur joignable, elles sont écrasées.
+let FAMILY_CONFIG = {
   asset: {
     types: ['CHARACTER', 'PROP', 'VEHICLE', 'CREATURE', 'FX_ELEMENT'],
     steps: ['modeling', 'rigging', 'lookdev', 'fx'],
@@ -572,6 +582,13 @@ const FAMILY_CONFIG = {
     steps: ['animation', 'fx', 'lighting', 'comp'],
   },
 };
+
+async function loadConfig() {
+  try {
+    const { ok, data } = await api('/api/config');
+    if (ok && data.families) FAMILY_CONFIG = data.families;
+  } catch { /* hors-ligne : le fallback local ci-dessus reste en place */ }
+}
 
 // ── API helper ──────────────────────────────────────
 async function api(path, opts = {}) {
@@ -973,6 +990,7 @@ async function confirmNewProject() {
       closeNewProjectModal();
       S.assets = [];
       await checkServer();
+      await loadConfig();
       await loadAssets();
       await loadRecent();
       toast('Projet créé', 'ok');
@@ -1138,6 +1156,7 @@ async function setProject(path) {
     if (ok) {
       S.assets = [];
       await checkServer();
+      await loadConfig();
       await loadAssets();
       await loadRecent();
       toast('Projet changé', 'ok');
@@ -1162,6 +1181,7 @@ document.addEventListener('mousedown', e => {
 // ── Init ─────────────────────────────────────────────
 (async () => {
   await checkServer();
+  await loadConfig();
   await loadAssets();
   await loadRecent();
   startPoll();

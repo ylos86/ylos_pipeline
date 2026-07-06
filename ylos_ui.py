@@ -18,6 +18,8 @@ Usage:
 
 Endpoints:
     GET  /api/project          retourne project.json du projet actif
+    GET  /api/config           types/steps par famille (source unique : create_project.py,
+                               steps surchargés par le pipeline du projet actif)
     GET  /api/assets           liste assets/* sets/* (manifest + dernière version + thumb)
     GET  /api/asset/<name>     détail + toutes les versions par step
     POST /api/open-blender     {path} ouvre Blender.app (non-bloquant)
@@ -31,7 +33,6 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
-import os
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,7 +51,7 @@ import create_project  # noqa: E402
 
 YLOS_DIR = Path.home() / ".ylos"
 ACTIVE_FILE = YLOS_DIR / "active_project"
-RECENT_FILE = os.path.expanduser("~/.ylos/recent_projects")
+RECENT_FILE = YLOS_DIR / "recent_projects"
 DEFAULT_PORT = 8765
 BLENDER_APP = Path("/Applications/Blender.app/Contents/MacOS/Blender")
 THUMB_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -100,19 +101,20 @@ def _write_active(path: str) -> None:
     ACTIVE_FILE.write_text(str(path) + "\n", encoding="utf-8")
 
 
-def _load_recent():
+def _load_recent() -> list[str]:
     try:
-        return json.loads(open(RECENT_FILE).read())
-    except Exception:
+        data = json.loads(Path(RECENT_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return []
+    return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
 
 
-def _push_recent(path):
+def _push_recent(path: str) -> None:
+    path = str(Path(path).expanduser().resolve())
     recent = [p for p in _load_recent() if p != path]
-    recent.insert(0, os.path.abspath(path))
-    recent = recent[:10]
-    os.makedirs(os.path.dirname(RECENT_FILE), exist_ok=True)
-    open(RECENT_FILE, "w").write(json.dumps(recent, indent=2))
+    recent.insert(0, path)
+    YLOS_DIR.mkdir(parents=True, exist_ok=True)
+    create_project._atomic_write_json(RECENT_FILE, recent[:10])
 
 
 def _read_asset_manifest(asset_dir: Path) -> dict | None:
@@ -286,6 +288,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._get_app_html()
         elif p == "/api/project":
             self._get_project()
+        elif p == "/api/config":
+            self._get_config()
         elif p == "/api/assets":
             self._get_assets()
         elif p.startswith("/api/asset/"):
@@ -349,6 +353,34 @@ class YlosHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _get_config(self):
+        """Types et steps par famille, consommés par app.html (remplace son ancien
+        FAMILY_CONFIG codé en dur — logique unique, cf. CLAUDE.md principe 5). Les types
+        viennent du module (seule source que la validation connaît) ; les steps du
+        pipeline du projet actif si lisible, sinon des défauts du module — même
+        résolution que create_project._project_steps, donc le modal 'nouvel asset'
+        propose exactement ce que create_asset() fera."""
+        families = {
+            "asset": {"types": list(create_project.ASSET_TYPES),
+                      "steps": list(create_project.DEFAULT_ASSET_STEPS)},
+            "set":   {"types": list(create_project.SET_TYPES),
+                      "steps": list(create_project.DEFAULT_SET_STEPS)},
+            "shot":  {"types": list(create_project.SHOT_TYPES),
+                      "steps": list(create_project.DEFAULT_SHOT_STEPS)},
+        }
+        project_dir = self._active()
+        if project_dir is not None:
+            try:
+                pipeline = create_project.read_manifest(project_dir).get("pipeline", {})
+            except (OSError, ValueError, json.JSONDecodeError):
+                pipeline = {}
+            for family, key in (("asset", "asset_steps"), ("set", "set_steps"),
+                                ("shot", "shot_steps")):
+                steps = pipeline.get(key)
+                if steps:
+                    families[family]["steps"] = list(steps)
+        _json(self, 200, {"families": families})
+
     def _get_project(self):
         project_dir = self._active()
         if project_dir is None:
@@ -399,15 +431,18 @@ class YlosHandler(BaseHTTPRequestHandler):
         # 'modeling/publish/Asset_modeling_v003/thumb.png'), pas seulement un nom de
         # fichier plat (ancien contrat). La garde de securite est ".." + containment
         # (resolve().relative_to()) ci-dessous, pas l'absence de '/'.
-        parts = rel.lstrip("/").split("/", 1)
+        rel = rel.lstrip("/")
+        # '..' interdit sur TOUT le chemin (asset_name compris : '/thumb/../_pipeline/...'
+        # resterait dans le projet grâce au containment, mais servirait des fichiers hors
+        # contrat thumb — manifestes, etc.).
+        if ".." in Path(rel).parts or "\\" in rel:
+            self.send_response(400); self.end_headers()
+            return
+        parts = rel.split("/", 1)
         if len(parts) != 2:
             self.send_response(400); self.end_headers()
             return
         asset_name, sub_path = parts
-
-        if ".." in Path(sub_path).parts or "\\" in sub_path:
-            self.send_response(400); self.end_headers()
-            return
 
         file_path: Path | None = None
         for family in ("assets", "sets"):
@@ -475,7 +510,7 @@ class YlosHandler(BaseHTTPRequestHandler):
         _json(self, 200, {"path": str(target), "parent": parent, "dirs": dirs})
 
     def _get_recent_projects(self):
-        recent = [p for p in _load_recent() if os.path.isdir(p)]
+        recent = [p for p in _load_recent() if Path(p).is_dir()]
         _json(self, 200, recent)
 
     # --- POST handlers
@@ -608,17 +643,18 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 404, {"error": "Aucun projet actif"})
             return
         target_dir = (body.get("target_dir") or "").strip() or None
+        # Read-modify-write de project.json sous flock : le serveur est multi-thread
+        # (ThreadingHTTPServer) et d'autres process (plugins DCC) écrivent le même
+        # manifeste — même discipline que create_project (cf. acquire_lock).
+        manifest_path = project_dir / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME
         try:
-            manifest = create_project.read_manifest(project_dir)
+            with create_project.acquire_lock(manifest_path):
+                manifest = create_project.read_manifest(project_dir)
+                web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
+                web["target_dir"] = target_dir
+                manifest["modified_utc"] = create_project._now()
+                create_project.write_manifest(project_dir / create_project.PIPELINE_DIR, manifest)
         except (OSError, ValueError) as e:
-            _json(self, 500, {"error": str(e)})
-            return
-        web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
-        web["target_dir"] = target_dir
-        manifest["modified_utc"] = create_project._now()
-        try:
-            create_project.write_manifest(project_dir / create_project.PIPELINE_DIR, manifest)
-        except OSError as e:
             _json(self, 500, {"error": str(e)})
             return
         _json(self, 200, {"ok": True, "target_dir": target_dir})

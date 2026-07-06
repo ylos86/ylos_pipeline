@@ -71,8 +71,9 @@ L'ex-Incrément 3 (migrer les projets existants) est **abandonné** — décisio
 (asset/set/shot), via `validate_entity_name(name, entity_type, sub_type)` — même fonction
 que l'alias historique `validate_publish_asset_name` (asset uniquement, contrat Houdini
 inchangé). Convention `TYPE_Nom_Variant` : `ASSET_TYPES`/`SET_TYPES`/`SHOT_TYPES` dans
-`create_project.py` (miroir exact de `app.html::FAMILY_CONFIG`, seule source déjà décidée
-pour set/shot). Message d'erreur toujours avec suggestion (nom capitalisé + `_Default`) et
+`create_project.py` — **seule source** : depuis 2026-07-06, `app.html` les récupère via
+`GET /api/config` (`FAMILY_CONFIG` n'y est plus qu'un fallback hors-ligne, cf. section
+UI plus bas). Message d'erreur toujours avec suggestion (nom capitalisé + `_Default`) et
 liste des types valides — même message partout (web UI, Blender, CLI) car même fonction.
 Couvre tous les entrants : web UI (`ylos_ui.py::_post_create_asset`), Blender
 (`op_new_asset.py`, qui composait auparavant un nom PascalCase via un validateur local
@@ -135,6 +136,24 @@ laissé intact). **Le projet web ne lit jamais la structure du pipeline, uniquem
 {step, version}}}` — le `step` est requis car un asset peut avoir des publishes GLB
 indépendants par step. Exposé côté `ylos_ui.py` : `POST /api/set-web-target`,
 `POST /api/sync-web` ; bouton "Sync Web" dans `app.html`.
+
+### UI web : source unique de config + durcissements (2026-07-06)
+- `GET /api/config` (`ylos_ui.py::_get_config`) : types (`ASSET_TYPES`/`SET_TYPES`/
+  `SHOT_TYPES`, jamais surchargés — contrat de validation) + steps par famille (pipeline
+  du projet actif si lisible, sinon défauts du module — même résolution que
+  `create_project._project_steps`, donc le modal « nouvel asset » propose exactement ce
+  que `create_asset()` fera). `app.html::loadConfig()` recharge au boot, au changement et
+  à la création de projet ; son `FAMILY_CONFIG` n'est plus qu'un fallback hors-ligne.
+- `app.html::BASE` n'est plus codé en dur sur `:8765` : `location.origin` quand la page
+  est servie en http (suit `--port`), fallback 8765 sinon.
+- `/thumb/` : `..` interdit sur **tout** le chemin, `asset_name` compris (avant :
+  seulement le sous-chemin — `/thumb/../_pipeline/project.json` restait dans le projet
+  grâce au containment mais servait des fichiers hors contrat thumb).
+- `_post_set_web_target` : read-modify-write de `project.json` sous `acquire_lock`
+  (serveur multi-thread + plugins DCC écrivent le même manifeste).
+- `_load_recent`/`_push_recent` : pathlib + écriture atomique + excepts ciblés (alignés
+  sur les conventions du module).
+- Tests : `tests/test_ylos_ui.py` (garde d'origine, `/api/config`, traversal `/thumb/`).
 
 ### Sweep des allocations orphelines (`clean_stale_staging`)
 `create_project.py::clean_stale_staging(project_root, dry_run=False)` — un `staging_dir`

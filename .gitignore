@@ -14,3 +14,6 @@ files003.zip
 # Backups auto de sauvegarde .hdanc (Houdini en cree un nouveau a chaque overwrite du meme
 # fichier) : bruit, regenerable via tools/houdini/build_publish_hda.py.
 plugins/houdini/otls/backup/
+
+# Config de lancement locale Claude Code (chemin absolu machine)
+.claude/launch.json
