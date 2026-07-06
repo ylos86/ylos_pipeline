@@ -7,9 +7,16 @@ Garanties :
   - Non destructif : snapshot des fichiers texte modifies (project.json, manifests,
     asset_root) dans <projet>/_migration_backup/ + journal des renommages (rename_log.json).
   - Les publishes ne sont JAMAIS re-serialises : on corrige seulement l'extension selon le
-    format reel (magic-byte : #usda -> .usda, PXR-USDC -> .usdc).
+    format reel (magic-byte : #usda -> .usda, PXR-USDC -> .usdc) et, si l'entite est
+    renommee, le prefixe de nom (jamais le contenu).
   - asset_root recompose en references-sous-/<Asset> (cible </root>), car les publishes
     Blender authorent /root. Repare les assets dont le defaultPrim pointait un prim vide.
+  - Conformite de nommage : les entites sont renommees a la convention TYPE_Nom_Variant
+    (cf. create_project.validate_entity_name - la validation n'existant qu'a la creation,
+    une entite legacy la contourne... jusqu'au premier publish LOP, qui echouerait en
+    silence). Type invalide pour la famille (ex ENVIRONMENT, absent d'ASSET_TYPES) ->
+    pas de renommage possible : l'entite est migree telle quelle et SIGNALEE (warning
+    actionnable, --type-override), jamais un mur silencieux au publish.
 
 NE traite PAS (hors perimetre, signale) :
   - L'axe Z->Y des publishes Blender (decision : script Blender import/export dedie).
@@ -17,6 +24,7 @@ NE traite PAS (hors perimetre, signale) :
 
 Usage :
     python migrate_to_2.0.py /chemin/projet [--dry-run] [--no-backup]
+                            [--type-override NOM=TYPE]...
 """
 
 from __future__ import annotations
@@ -191,7 +199,42 @@ def recompose_asset_root(entity_dir, name, steps, rename_log, dry):
 # Entite (asset/set/shot)
 # --------------------------------------------------------------------------------------
 
-def migrate_entity(entity_dir, type_overrides, rename_log, dry):
+def _conform_name(name, sub_type):
+    """Nom conforme TYPE_Nom_Variant depuis un nom legacy : retire un eventuel prefixe
+    type deja present (mal variante), camel-case les segments restants, variant 'Default'.
+    'lecube' -> 'PROP_Lecube_Default' ; 'le_cube' -> 'PROP_LeCube_Default'. Distinct de
+    cp._suggested_entity_name (concu pour un message d'erreur, ne garde que le dernier
+    segment) : ici on renomme reellement, on ne perd aucun segment du nom d'origine."""
+    base = name[len(sub_type) + 1:] if name.startswith(f"{sub_type}_") else name
+    camel = "".join(s[:1].upper() + s[1:] for s in base.split("_") if s)
+    return f"{sub_type}_{camel}_Default"
+
+
+def rename_publish_stems(entity_dir, steps, old_name, new_name, rename_log, dry):
+    """Renomme le prefixe des fichiers de publish '{old_name}_*' -> '{new_name}_*', pour que
+    l'arbre reste coherent avec le nouveau nom d'entite. Manifest.publishes et asset_root
+    sont recomposes depuis le disque APRES ce renommage (cf. migrate_entity), donc pointent
+    d'office sur les nouveaux noms. Les wip/ ne sont volontairement PAS touches : la
+    detection de version Blender est agnostique au nom (VERSION_PATTERN, '_vNNN.blend'),
+    la continuite de versions est donc conservee sans y toucher - le prochain save WIP
+    prendra le nouveau nom a version+1."""
+    prefix = f"{old_name}_"
+    for step in steps:
+        pub = entity_dir / step / "publish"
+        if not pub.is_dir():
+            continue
+        for f in sorted(pub.iterdir()):
+            if not f.is_file() or not f.name.startswith(prefix):
+                continue
+            target = f.with_name(f"{new_name}_{f.name[len(prefix):]}")
+            if target.exists():
+                continue  # jamais d'ecrasement (improbable : meme stem deja conforme)
+            rename_log.append({"from": str(f), "to": str(target)})
+            if not dry:
+                f.rename(target)
+
+
+def migrate_entity(entity_dir, type_overrides, rename_log, warnings, dry):
     mpath = entity_dir / "manifest.json"
     if not mpath.is_file():
         return None
@@ -202,19 +245,58 @@ def migrate_entity(entity_dir, type_overrides, rename_log, dry):
     entity_type = m.get("entity_type")
     if entity_type not in _FAMILIES:
         entity_type = "asset"
-    asset_type = m.get("type", "OTHER")
+    # Override explicite (CLI / defauts) prioritaire sur le type legacy - c'est une
+    # decision utilisateur, le type legacy est souvent errone ('type' valait la famille).
+    asset_type = type_overrides.get(name, m.get("type", "OTHER"))
     if asset_type in _FAMILIES:          # 'type' valait une famille -> sous-type errone
-        asset_type = type_overrides.get(name, "OTHER")
+        asset_type = "OTHER"
+
+    # Conformite TYPE_Nom_Variant (cf. docstring module). Type invalide pour la famille ->
+    # renommage impossible, entite migree telle quelle + warning actionnable. Type valide
+    # mais nom non conforme -> renommage reel (dossier + stems de publish + manifeste).
+    new_name = name
+    valid_types = cp._TYPES_BY_ENTITY[entity_type]
+    if asset_type not in valid_types:
+        warnings.append(
+            f"'{name}' ({entity_type}) : type {asset_type!r} invalide "
+            f"(valides : {', '.join(valid_types)}) - entite migree SANS renommage, tout "
+            f"publish LOP echouera en l'etat. Trancher via --type-override {name}=TYPE "
+            f"et relancer la migration."
+        )
+    else:
+        try:
+            cp.validate_entity_name(name, entity_type, asset_type)
+        except ValueError:
+            candidate = _conform_name(name, asset_type)
+            cp.validate_entity_name(candidate, entity_type, asset_type)  # garantie contrat
+            if (entity_dir.parent / candidate).exists():
+                warnings.append(
+                    f"'{name}' : cible de renommage deja prise "
+                    f"({entity_dir.parent / candidate}) - non renomme, a resoudre a la main."
+                )
+            else:
+                new_name = candidate
 
     normalize_publish_exts(entity_dir, steps, rename_log, dry)
 
+    if new_name != name:
+        rename_publish_stems(entity_dir, steps, name, new_name, rename_log, dry)
+        target_dir = entity_dir.parent / new_name
+        rename_log.append({"from": str(entity_dir), "to": str(target_dir), "entity": True})
+        if not dry:
+            entity_dir.rename(target_dir)
+            entity_dir = target_dir
+            mpath = entity_dir / "manifest.json"
+        # dry-run : entity_dir reste l'ancien chemin (les scans ci-dessous lisent l'etat
+        # reel du disque ; le rapport de renommage fait foi pour l'etat projete).
+
     asset_root = None
     if entity_type in ("asset", "set"):
-        asset_root = recompose_asset_root(entity_dir, name, steps, rename_log, dry)
+        asset_root = recompose_asset_root(entity_dir, new_name, steps, rename_log, dry)
 
     new_manifest = {
         "schema_version": cp.SCHEMA_VERSION,
-        "name": name,
+        "name": new_name,
         "entity_type": entity_type,
         "type": asset_type,
         "steps": steps,
@@ -226,8 +308,11 @@ def migrate_entity(entity_dir, type_overrides, rename_log, dry):
         mpath.write_text(
             json.dumps(new_manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
-    return {"name": name, "entity_type": entity_type, "type": asset_type,
+    info = {"name": new_name, "entity_type": entity_type, "type": asset_type,
             "steps": steps, "asset_root": asset_root}
+    if new_name != name:
+        info["renamed_from"] = name
+    return info
 
 
 # --------------------------------------------------------------------------------------
@@ -287,7 +372,8 @@ def migrate(project_dir, dry=False, backup=True, type_overrides=None):
         if not base.is_dir():
             continue
         for entity_dir in sorted(p for p in base.iterdir() if p.is_dir()):
-            info = migrate_entity(entity_dir, type_overrides, rename_log, dry)
+            info = migrate_entity(entity_dir, type_overrides, rename_log,
+                                  report["warnings"], dry)
             if info:
                 report["entities"].append(info)
     report["renames"] = rename_log
@@ -319,15 +405,33 @@ def _cli(argv=None):
     p.add_argument("project", help="Chemin du projet a migrer")
     p.add_argument("--dry-run", action="store_true", help="Rapport sans rien modifier")
     p.add_argument("--no-backup", action="store_true", help="Ne pas snapshotter (deconseille)")
+    p.add_argument("--type-override", action="append", default=[], metavar="NOM=TYPE",
+                   help="Force le sous-type d'une entite legacy (ex: montains=PROP). "
+                        "Repetable. Prioritaire sur le type du manifeste legacy et sur les "
+                        "defauts du script - c'est la reponse attendue au warning 'type "
+                        "invalide' (le renommage a la convention en depend).")
     args = p.parse_args(argv)
+
+    overrides = dict(TYPE_OVERRIDES_DEFAULT)
+    for spec in args.type_override:
+        key, sep, value = spec.partition("=")
+        if not sep or not key.strip() or not value.strip():
+            sys.stderr.write(f"[erreur] --type-override attend NOM=TYPE, recu : {spec!r}\n")
+            return 1
+        overrides[key.strip()] = value.strip()
+
     try:
-        report = migrate(args.project, dry=args.dry_run, backup=not args.no_backup)
+        report = migrate(args.project, dry=args.dry_run, backup=not args.no_backup,
+                         type_overrides=overrides)
     except (FileNotFoundError, ValueError) as e:
         sys.stderr.write(f"[erreur] {e}\n")
         return 1
     mode = "DRY-RUN" if args.dry_run else "applique"
     print(f"[ok] migration {mode} : {report['project']}")
     print(f"  entites : {len(report['entities'])}  |  renommages : {len(report['renames'])}")
+    for e in report["entities"]:
+        if "renamed_from" in e:
+            print(f"  [renomme] {e['renamed_from']} -> {e['name']}  ({e['type']})")
     for w in report["warnings"]:
         print(f"  [warn] {w}")
     return 0

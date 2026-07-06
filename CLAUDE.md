@@ -59,10 +59,12 @@ deux sous-commandes / fonctions :
 Contrats figés : `project.schema.json`, `asset.schema.json`, `docs/usd-convention.md`,
 `docs/migration-1.0-to-2.0.md`. Validé end-to-end (arbre + JSON conformes aux schémas).
 
-**Reste :** migrer les projets réels existants (`YLOS__TEST`, `Pachamama`) vers 2.0
-(Incrément 3) ; retirer le `~/Desktop/create_project.py` mort (Incrément 4) ; vérifier
+**Reste :** retirer le `~/Desktop/create_project.py` mort (Incrément 4) ; vérifier
 l'up-axis Blender↔USD à l'usage ; TODO `validate_texture_paths_relative` (anti chemin
 absolu dans les textures USD) le jour où un chemin de publish lookdev/texture existera.
+L'ex-Incrément 3 (migrer les projets existants) est **abandonné** — décision 2026-07-06 :
+`YLOS__TEST` et `Pachamama` ne sont que des projets de test, pas de données à préserver ;
+`migrate_to_2.0.py` reste disponible si un vrai projet legacy apparaît un jour.
 
 ### Validation de nommage — point unique (2026-07-02)
 `create_asset()` valide désormais le nom **à la création**, pour les trois familles
@@ -76,6 +78,21 @@ Couvre tous les entrants : web UI (`ylos_ui.py::_post_create_asset`), Blender
 (`op_new_asset.py`, qui composait auparavant un nom PascalCase via un validateur local
 dupliqué dans `core/asset.py` — supprimé, il passe maintenant par
 `create_project.validate_entity_name`), CLI, futur.
+
+### Migration 2.0 : renommage à la convention (2026-07-06)
+La validation de nommage n'existant qu'à la création, une entité legacy la contourne…
+jusqu'au premier publish LOP qui échoue (`validate_publish_asset_name`) — mur silencieux.
+`migrate_to_2.0.py` renomme donc les entités à la convention `TYPE_Nom_Variant` : dossier +
+stems des fichiers de publish + `manifest.name` (`asset_root.usda` et `manifest.publishes`
+sont recomposés depuis le disque APRÈS renommage, donc auto-cohérents). Les `wip/` ne sont
+jamais touchés : la détection de version Blender est agnostique au nom
+(`core/asset.py::VERSION_PATTERN`), la continuité de versions est conservée telle quelle.
+Type invalide pour la famille (ex `ENVIRONMENT`, absent d'`ASSET_TYPES`) → renommage
+impossible : entité migrée telle quelle + warning actionnable (`--type-override NOM=TYPE`,
+répétable, prioritaire sur le type legacy). Tests : `tests/test_migrate_to_2_0.py`
+(chargé via `importlib`, le nom de fichier contient un point). Mode d'emploi (si un vrai
+projet legacy doit migrer un jour — cf. « Reste » plus haut, les projets existants sont
+des projets de test) : `--dry-run` d'abord, trancher les overrides signalés, appliquer.
 
 ### Contrat deux-phases généralisé (allocate/finalize, `kind`)
 `allocate_publish_version()`/`finalize_publish_version()` ne sont plus spécifiques au
