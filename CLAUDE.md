@@ -59,9 +59,10 @@ deux sous-commandes / fonctions :
 Contrats figés : `project.schema.json`, `asset.schema.json`, `docs/usd-convention.md`,
 `docs/migration-1.0-to-2.0.md`. Validé end-to-end (arbre + JSON conformes aux schémas).
 
-**Reste :** retirer le `~/Desktop/create_project.py` mort (Incrément 4) ; vérifier
-l'up-axis Blender↔USD à l'usage ; TODO `validate_texture_paths_relative` (anti chemin
-absolu dans les textures USD) le jour où un chemin de publish lookdev/texture existera.
+**Reste :** vérifier l'up-axis Blender↔USD à l'usage ; TODO
+`validate_texture_paths_relative` (anti chemin absolu dans les textures USD) le jour où
+un chemin de publish lookdev/texture existera. (Incrément 4 — nettoyage — fait le
+2026-07-06 : `~/Desktop/create_project.py` mort et `files003.zip` supprimés.)
 L'ex-Incrément 3 (migrer les projets existants) est **abandonné** — décision 2026-07-06 :
 `YLOS__TEST` et `Pachamama` ne sont que des projets de test, pas de données à préserver ;
 `migrate_to_2.0.py` reste disponible si un vrai projet legacy apparaît un jour.
