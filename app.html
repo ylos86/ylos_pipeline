@@ -298,6 +298,25 @@
     }
     .step-check input[type=checkbox] { accent-color: var(--accent); }
 
+    /* Pins web (modal Sync Web) */
+    .ws-pins {
+      display: flex; flex-direction: column; gap: 6px;
+      max-height: 200px; overflow-y: auto;
+    }
+    .ws-pin-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .ws-pin-name {
+      font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ws-pin-row select {
+      background: var(--bg-3); color: inherit;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: 12px; padding: 4px 6px; max-width: 190px;
+    }
+    .ws-pin-row select:focus { border-color: var(--accent); outline: none; }
+    .ws-pins-empty { font-size: 12.5px; color: var(--text-muted); }
+
     .hidden { display: none !important; pointer-events: none !important; }
 
     /* ── Recent dropdown ─────────────────────────────── */
@@ -469,6 +488,10 @@
       <label>Dossier du projet web (racine)</label>
       <input type="text" id="js-ws-target" spellcheck="false"
              placeholder="~/Projects/mon-site-three">
+    </div>
+    <div class="field">
+      <label>Assets pinnés (publishes GLB)</label>
+      <div class="ws-pins" id="js-ws-pins"></div>
     </div>
     <div class="modal-err" id="js-ws-err"></div>
     <div class="modal-actions">
@@ -1064,10 +1087,86 @@ const MODAL_WS = el('js-modal-web-sync');
 function openWebSyncModal() {
   el('js-ws-target').value = S.project?.web?.target_dir || '';
   el('js-ws-err').textContent = '';
+  el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Chargement…</div>';
+  loadWebPins();  // async, remplit la liste dès la réponse
   MODAL_WS.classList.remove('hidden');
   setTimeout(() => el('js-ws-target').focus(), 40);
 }
 function closeWebSyncModal() { MODAL_WS.classList.add('hidden'); }
+
+async function loadWebPins() {
+  try {
+    const { ok, data } = await api('/api/web-pins');
+    if (!ok) {
+      el('js-ws-pins').innerHTML =
+        `<div class="ws-pins-empty">${esc(data.error || 'Erreur')}</div>`;
+      return;
+    }
+    renderWebPins(data);
+  } catch {
+    el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Serveur non disponible</div>';
+  }
+}
+
+function renderWebPins(data) {
+  const names = Object.keys(data.available).sort();
+  if (!names.length) {
+    el('js-ws-pins').innerHTML =
+      '<div class="ws-pins-empty">Aucun publish GLB dans ce projet — exporter en GLB depuis Blender d’abord.</div>';
+    return;
+  }
+  el('js-ws-pins').innerHTML = names.map(name => {
+    const pin = data.pins[name];
+    const cur = pin ? `${pin.step}|${pin.version}` : '';
+    const opts = ['<option value="">— non pinné —</option>'];
+    let curFound = cur === '';
+    for (const [step, versions] of Object.entries(data.available[name])) {
+      for (const v of versions) {
+        const val = `${step}|${v}`;
+        if (val === cur) curFound = true;
+        opts.push(`<option value="${esc(val)}"${val === cur ? ' selected' : ''}>` +
+                  `${esc(step)} v${String(v).padStart(3, '0')}</option>`);
+      }
+    }
+    // Pin pointant vers un publish disparu (édition manuelle, disque) : le montrer tel
+    // quel plutôt que d'afficher "non pinné" alors que le serveur a un pin.
+    if (!curFound)
+      opts.push(`<option value="${esc(cur)}" selected>${esc(pin.step)} v${String(pin.version).padStart(3, '0')} (introuvable)</option>`);
+    return `<div class="ws-pin-row"><span class="ws-pin-name" title="${esc(name)}">${esc(name)}</span>` +
+           `<select data-asset="${esc(name)}">${opts.join('')}</select></div>`;
+  }).join('');
+}
+
+el('js-ws-pins').addEventListener('change', async e => {
+  const sel = e.target.closest('select[data-asset]');
+  if (!sel) return;
+  const name = sel.dataset.asset;
+  sel.disabled = true;
+  try {
+    let resp;
+    if (sel.value === '') {
+      resp = await api('/api/unpin-asset', {
+        method: 'POST', body: JSON.stringify({ name }),
+      });
+    } else {
+      const [step, version] = sel.value.split('|');
+      resp = await api('/api/pin-asset', {
+        method: 'POST',
+        body: JSON.stringify({ name, step, version: Number(version) }),
+      });
+    }
+    if (resp.ok) {
+      el('js-ws-err').textContent = '';
+    } else {
+      el('js-ws-err').textContent = resp.data.error || 'Erreur inconnue';
+      await loadWebPins();  // resynchronise l'affichage sur l'état serveur réel
+    }
+  } catch {
+    el('js-ws-err').textContent = 'Serveur non disponible';
+  } finally {
+    sel.disabled = false;
+  }
+});
 
 async function confirmWebSync() {
   const targetDir = el('js-ws-target').value.trim();

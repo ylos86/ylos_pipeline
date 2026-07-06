@@ -25,6 +25,9 @@ Endpoints:
     POST /api/open-blender     {path} ouvre Blender.app (non-bloquant)
     POST /api/set-project      {path} définit le projet actif
     POST /api/set-web-target   {target_dir} persiste project.json["web"]["target_dir"]
+    GET  /api/web-pins         pins courants + publishes GLB disponibles par asset
+    POST /api/pin-asset        {name, step, version} pinne un GLB publié (validé)
+    POST /api/unpin-asset      {name} retire le pin (idempotent)
     POST /api/sync-web         sync_web_assets() vers web.target_dir (assets pinnés)
     GET  /thumb/<asset>/<rest> fichier statique depuis <step>/publish/ (LOP ou deux-phases)
 """
@@ -234,6 +237,34 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
     return None
 
 
+def _glb_publishes(manifest: dict) -> dict:
+    """{step: [versions triées]} des publishes deux-phases 'complete' dont l'artefact est
+    un .glb — les seuls pinnables pour le web (cf. sync_web_assets, qui résout le GLB via
+    (step, version)). Un publish USD n'apparaît jamais ici."""
+    out: dict = {}
+    for step, entries in manifest.get("step_publishes", {}).items():
+        versions = sorted(
+            e["version"] for e in entries
+            if e.get("status") == "complete" and (e.get("artifact") or "").endswith(".glb")
+        )
+        if versions:
+            out[step] = versions
+    return out
+
+
+def _update_project_web(project_dir: Path, mutate) -> None:
+    """Read-modify-write de project.json['web'] sous flock (serveur multi-thread +
+    plugins DCC écrivent le même manifeste — même discipline que create_project).
+    'mutate' reçoit le dict web (créé si absent) et le modifie en place."""
+    manifest_path = project_dir / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME
+    with create_project.acquire_lock(manifest_path):
+        manifest = create_project.read_manifest(project_dir)
+        web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
+        mutate(web)
+        manifest["modified_utc"] = create_project._now()
+        create_project.write_manifest(project_dir / create_project.PIPELINE_DIR, manifest)
+
+
 def _is_project(path: Path) -> bool:
     return (path / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME).is_file()
 
@@ -302,6 +333,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._get_browse()
         elif p == "/api/recent-projects":
             self._get_recent_projects()
+        elif p == "/api/web-pins":
+            self._get_web_pins()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -320,6 +353,10 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._post_create_asset()
         elif p == "/api/set-web-target":
             self._post_set_web_target()
+        elif p == "/api/pin-asset":
+            self._post_pin_asset()
+        elif p == "/api/unpin-asset":
+            self._post_unpin_asset()
         elif p == "/api/sync-web":
             self._post_sync_web()
         else:
@@ -513,6 +550,40 @@ class YlosHandler(BaseHTTPRequestHandler):
         recent = [p for p in _load_recent() if Path(p).is_dir()]
         _json(self, 200, recent)
 
+    def _get_web_pins(self):
+        """État du pinning web : pins courants (project.json['web']) + publishes GLB
+        disponibles par entité ({name: {step: [versions]}}) — ce que le modal Sync Web
+        propose dans ses selects. Une entité sans publish GLB n'apparaît pas."""
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        try:
+            manifest = create_project.read_manifest(project_dir)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        web = manifest.get("web", {})
+        available: dict = {}
+        for family in ("assets", "sets", "shots"):
+            family_dir = project_dir / family
+            if not family_dir.is_dir():
+                continue
+            for asset_dir in sorted(family_dir.iterdir()):
+                if not asset_dir.is_dir():
+                    continue
+                asset_manifest = _read_asset_manifest(asset_dir)
+                if asset_manifest is None:
+                    continue
+                glb = _glb_publishes(asset_manifest)
+                if glb:
+                    available[asset_dir.name] = glb
+        _json(self, 200, {
+            "target_dir": web.get("target_dir"),
+            "pins": web.get("pinned_assets", {}),
+            "available": available,
+        })
+
     # --- POST handlers
 
     def _post_open_blender(self):
@@ -643,21 +714,77 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 404, {"error": "Aucun projet actif"})
             return
         target_dir = (body.get("target_dir") or "").strip() or None
-        # Read-modify-write de project.json sous flock : le serveur est multi-thread
-        # (ThreadingHTTPServer) et d'autres process (plugins DCC) écrivent le même
-        # manifeste — même discipline que create_project (cf. acquire_lock).
-        manifest_path = project_dir / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME
         try:
-            with create_project.acquire_lock(manifest_path):
-                manifest = create_project.read_manifest(project_dir)
-                web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
-                web["target_dir"] = target_dir
-                manifest["modified_utc"] = create_project._now()
-                create_project.write_manifest(project_dir / create_project.PIPELINE_DIR, manifest)
+            _update_project_web(project_dir, lambda web: web.__setitem__("target_dir", target_dir))
         except (OSError, ValueError) as e:
             _json(self, 500, {"error": str(e)})
             return
         _json(self, 200, {"ok": True, "target_dir": target_dir})
+
+    def _post_pin_asset(self):
+        """Pinne un GLB publié : {name, step, version}. Refuse tout pin qui ne correspond
+        pas à un publish GLB 'complete' réel (le pin est un contrat consommé tel quel par
+        sync_web_assets — un pin cassé n'y produirait qu'un warning tardif, autant le
+        refuser ici avec la liste de ce qui existe)."""
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "JSON invalide dans le body"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        name = (body.get("name") or "").strip()
+        step = (body.get("step") or "").strip()
+        version = body.get("version")
+        if not name or not step or not isinstance(version, int):
+            _json(self, 400, {"error": "Champs requis : name (str), step (str), version (int)"})
+            return
+        try:
+            entity_dir, _ = create_project._find_asset_entity(project_dir, name)
+        except FileNotFoundError as e:
+            _json(self, 400, {"error": str(e)})
+            return
+        asset_manifest = _read_asset_manifest(entity_dir)
+        glb = _glb_publishes(asset_manifest or {})
+        if version not in glb.get(step, []):
+            _json(self, 400, {"error": f"Aucun publish GLB 'complete' pour {name!r} en "
+                                       f"{step} v{version:03d}. Disponibles : {glb or 'aucun'}"})
+            return
+        try:
+            _update_project_web(
+                project_dir,
+                lambda web: web.setdefault("pinned_assets", {}).__setitem__(
+                    name, {"step": step, "version": version}),
+            )
+        except (OSError, ValueError) as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _json(self, 200, {"ok": True, "name": name, "step": step, "version": version})
+
+    def _post_unpin_asset(self):
+        """Retire le pin d'un asset. Idempotent : dé-pinner un asset non pinné est un ok."""
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "JSON invalide dans le body"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        name = (body.get("name") or "").strip()
+        if not name:
+            _json(self, 400, {"error": "Champ 'name' manquant"})
+            return
+        try:
+            _update_project_web(
+                project_dir,
+                lambda web: web.setdefault("pinned_assets", {}).pop(name, None),
+            )
+        except (OSError, ValueError) as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _json(self, 200, {"ok": True, "name": name})
 
     def _post_sync_web(self):
         project_dir = self._active()

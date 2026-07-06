@@ -136,7 +136,16 @@ laissé intact). **Le projet web ne lit jamais la structure du pipeline, uniquem
 `assets.json`.** Schéma `project.json["web"]` : `{target_dir, pinned_assets: {<asset>:
 {step, version}}}` — le `step` est requis car un asset peut avoir des publishes GLB
 indépendants par step. Exposé côté `ylos_ui.py` : `POST /api/set-web-target`,
-`POST /api/sync-web` ; bouton "Sync Web" dans `app.html`.
+`POST /api/sync-web`, et depuis 2026-07-06 le pinning complet — `GET /api/web-pins`
+(pins courants + publishes GLB disponibles par entité, seuls les deux-phases `complete`
+à artefact `.glb` sont pinnables), `POST /api/pin-asset` (refuse tout pin sans publish
+GLB réel correspondant : le pin est un contrat consommé tel quel par `sync_web_assets`,
+un pin cassé n'y produirait qu'un warning tardif), `POST /api/unpin-asset` (idempotent).
+Les mutations de `project.json["web"]` passent par `_update_project_web()` (flock).
+UI : le modal "Sync Web" d'`app.html` liste les entités à publishes GLB avec un select
+step/version par entité — pin/unpin immédiat au changement, plus d'édition manuelle de
+`pinned_assets`. Un pin pointant vers un publish disparu s'affiche "(introuvable)"
+plutôt que "non pinné".
 
 ### UI web : source unique de config + durcissements (2026-07-06)
 - `GET /api/config` (`ylos_ui.py::_get_config`) : types (`ASSET_TYPES`/`SET_TYPES`/

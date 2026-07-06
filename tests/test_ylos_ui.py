@@ -231,5 +231,99 @@ class TestThumbSecurity(ServerTestCase):
         self.assertEqual(status, 400)
 
 
+class TestWebPins(ServerTestCase):
+    """Pinning web via l'API : /api/web-pins (état + disponibles), /api/pin-asset
+    (validé contre les publishes GLB réels), /api/unpin-asset (idempotent), et le
+    circuit complet pin -> set-web-target -> sync-web."""
+
+    @classmethod
+    def _publish(cls, asset_name, step, ext):
+        staging, final = cp.allocate_publish_version(
+            cls.project, asset_name, comment="", kind=step)
+        version = cp.publish_version_from_dir(final)
+        stem = f"{asset_name}_{step}_v{version:03d}"
+        (staging / f"{stem}.{ext}").write_bytes(b"artifact")
+        (staging / "thumb.png").write_bytes(b"png")
+        cp.finalize_publish_version(cls.project, asset_name, staging, final, version,
+                                    expected_artifacts=[stem, "thumb.png"])
+        return version
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_pins", root=str(cls._tmp / "proot"),
+                         cache=str(cls._tmp / "pcache"))
+        cls.project = info["source"]
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+        cls._publish("PROP_Tente_Default", "lookdev", "glb")   # v1
+        cls._publish("PROP_Tente_Default", "lookdev", "glb")   # v2
+        cls._publish("PROP_Tente_Default", "modeling", "usd")  # USD : jamais pinnable
+        cls._set_active(cls.project)
+
+    def _pins_state(self):
+        status, _, body = self._request("/api/web-pins")
+        self.assertEqual(status, 200)
+        return json.loads(body)
+
+    def test_available_lists_glb_only(self):
+        state = self._pins_state()
+        self.assertEqual(state["available"],
+                         {"PROP_Tente_Default": {"lookdev": [1, 2]}})  # pas de modeling (USD)
+
+    def test_pin_unpin_roundtrip(self):
+        status, _, _ = self._request("/api/pin-asset", method="POST",
+                                     body={"name": "PROP_Tente_Default",
+                                           "step": "lookdev", "version": 2})
+        self.assertEqual(status, 200)
+        self.assertEqual(self._pins_state()["pins"],
+                         {"PROP_Tente_Default": {"step": "lookdev", "version": 2}})
+        # Persisté dans project.json (le contrat que sync_web_assets lit).
+        manifest = cp.read_manifest(self.project)
+        self.assertEqual(manifest["web"]["pinned_assets"]["PROP_Tente_Default"]["version"], 2)
+
+        status, _, _ = self._request("/api/unpin-asset", method="POST",
+                                     body={"name": "PROP_Tente_Default"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self._pins_state()["pins"], {})
+        # Idempotent : dé-pinner à nouveau reste un ok.
+        status, _, _ = self._request("/api/unpin-asset", method="POST",
+                                     body={"name": "PROP_Tente_Default"})
+        self.assertEqual(status, 200)
+
+    def test_pin_nonexistent_version_rejected(self):
+        status, _, body = self._request("/api/pin-asset", method="POST",
+                                        body={"name": "PROP_Tente_Default",
+                                              "step": "lookdev", "version": 99})
+        self.assertEqual(status, 400)
+        self.assertIn("lookdev", json.loads(body)["error"])  # message liste les disponibles
+
+    def test_pin_usd_step_rejected(self):
+        status, _, _ = self._request("/api/pin-asset", method="POST",
+                                     body={"name": "PROP_Tente_Default",
+                                           "step": "modeling", "version": 1})
+        self.assertEqual(status, 400)
+
+    def test_pin_unknown_asset_rejected(self):
+        status, _, _ = self._request("/api/pin-asset", method="POST",
+                                     body={"name": "PROP_Fantome_Default",
+                                           "step": "lookdev", "version": 1})
+        self.assertEqual(status, 400)
+
+    def test_full_pin_sync_cycle(self):
+        # Le circuit complet tel que le modal l'exécute : pin -> target -> sync.
+        for path, payload in (
+            ("/api/pin-asset", {"name": "PROP_Tente_Default", "step": "lookdev", "version": 1}),
+            ("/api/set-web-target", {"target_dir": str(self._tmp / "webproj")}),
+        ):
+            status, _, _ = self._request(path, method="POST", body=payload)
+            self.assertEqual(status, 200)
+        status, _, body = self._request("/api/sync-web", method="POST")
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result["warnings"], [])
+        glb = self._tmp / "webproj" / "public" / "assets" / "PROP_Tente_Default_v001.glb"
+        self.assertTrue(glb.is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
