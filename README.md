@@ -4,7 +4,7 @@ Scaffolder de projet 3D/VFX. `create_project.py` est la **source de vérité uni
 logique de création : importable par les plugins DCC (Houdini, Blender), **stdlib seule**
 (les interpréteurs embarqués hython / Blender ne doivent pas dépendre d'un `pip install`).
 
-## Arborescence créée (schéma 2.0 — asset-centric)
+## Arborescence créée (schéma 2.1 — asset-centric)
 
 ```
 $PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné
@@ -16,15 +16,26 @@ $PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné
       <step>/wip/             #     travail DCC (.blend versionnés)
       <step>/publish/         #     sorties USD versionnées (un dossier par step)
   sets/                       #   assemblage — optionnel (scaffold vide)
-  shots/                      #   shots — optionnel (scaffold vide)
+  shots/                      #   shots — entités comme les assets (steps + publishes)
+    <shot>/
+      manifest.json           #     entity_type=shot / steps / frame_range (2.1) / publishes
+      shot_root.usda          #     compo shot (root /ROOT, subLayers SHOT_DOWNSTREAM_ORDER,
+                              #       timecodes) — recomposé auto à chaque publish de step
   references/                 #   refs projet (ai / photo / board)
   resources/                  #   hdri/ textures/ (réutilisable intra-projet)
-  delivery/                   #   masters (cf. delivery.targets)
+  delivery/                   #   masters + render/<shot>/<step>/ (copie explicite validée)
   .gitignore  .metadata_never_index
 
 $PROJ_CACHE/<projet>/         # CACHE — NVMe interne, régénérable, hors Git
-  houdini/  blender/  render/  alembic/  sim/  tmp/
+  houdini/<entité>/<step>/    #   caches scratch jetables (filecache SOP)
+  render/<shot>/<step>/v###/  #   rendus Karma (tier régénérable ; promus en delivery/ à la main)
+  blender/  alembic/  sim/  tmp/
 ```
+
+Le **workflow shot/Solaris Houdini** (bridge `plugins/houdini/python/ylos_houdini.py` + HDA
+`ylos::publish::0.2`) publie les steps de shot en USD, recompose `shot_root.usda`, cache et
+rend vers `$PROJ_CACHE`, et livre explicitement dans `delivery/`. Cf. `CLAUDE.md` (sections
+shots) et `docs/plan-houdini-shots.md`.
 
 ## Variables d'environnement (design relocalisable)
 
@@ -70,14 +81,16 @@ du `pipeline` du manifeste projet (sinon les défauts du module).
 ## Le manifeste est un contrat
 
 `project.json` est lu par le créateur, n8n et les 2 plugins. Schémas documentés (figés en
-`2.0.0`) :
+`2.1.0`) :
 - `project.schema.json` — manifeste **projet** (`pipeline`/`scene`/`delivery` + principes).
 - `asset.schema.json` — manifeste **par entité** (`<asset>/manifest.json` : `entity_type`,
-  `type`, `steps`, `publishes`).
+  `type`, `steps`, `publishes`, et pour un shot le `frame_range` optionnel `{start, end, fps}`).
 
 Tout changement de structure = **bump `schema_version` + migration**, pas édition
-silencieuse. `validate_manifest()` refuse une version **majeure** incompatible. La migration
-`1.0.0 → 2.0.0` est documentée dans [`docs/migration-1.0-to-2.0.md`](docs/migration-1.0-to-2.0.md).
+silencieuse. `validate_manifest()` refuse une version **majeure** incompatible. Migrations
+documentées : [`docs/migration-1.0-to-2.0.md`](docs/migration-1.0-to-2.0.md) (structurelle) et
+[`docs/migration-2.0-to-2.1.md`](docs/migration-2.0-to-2.1.md) (`frame_range` additif, aucun
+manifeste existant invalidé).
 
 ## Décisions tranchées (2026-06-14, cf. `CLAUDE.md`)
 

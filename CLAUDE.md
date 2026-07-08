@@ -47,7 +47,8 @@ active.
    de création vit à **un seul endroit**, jamais dupliquée entre outils.
 
 ## État actuel
-`create_project.py` (stdlib, importable par les DCC) émet la structure **schéma 2.0.0** via
+`create_project.py` (stdlib, importable par les DCC) émet la structure **schéma 2.1.0**
+(2.0.0 + `frame_range` optionnel des shots, additif — cf. « Schéma 2.1 » plus bas) via
 deux sous-commandes / fonctions :
 - `project` / `create()` → coquille asset-centric (`_pipeline/project.json`, `assets/`,
   `sets/`+`shots/` vides, `references/`, `resources/`, `delivery/`, `edit/`) + cache séparé
@@ -57,7 +58,8 @@ deux sous-commandes / fonctions :
 - `.metadata_never_index` (anti-Spotlight) + `.gitignore` (cache, rendus, `*.usdc` hors Git).
 
 Contrats figés : `project.schema.json`, `asset.schema.json`, `docs/usd-convention.md`,
-`docs/migration-1.0-to-2.0.md`. Validé end-to-end (arbre + JSON conformes aux schémas).
+`docs/migration-1.0-to-2.0.md`, `docs/migration-2.0-to-2.1.md`. Validé end-to-end (arbre +
+JSON conformes aux schémas).
 
 **Reste :** vérifier l'up-axis Blender↔USD à l'usage ; TODO
 `validate_texture_paths_relative` (anti chemin absolu dans les textures USD) le jour où
@@ -67,14 +69,19 @@ L'ex-Incrément 3 (migrer les projets existants) est **abandonné** — décisio
 `YLOS__TEST` et `Pachamama` ne sont que des projets de test, pas de données à préserver ;
 `migrate_to_2.0.py` reste disponible si un vrai projet legacy apparaît un jour.
 
-**Chantier en cours (2026-07-07) : workflow shot/Solaris Houdini.** Plan d'implémentation
-par incréments dans `docs/plan-houdini-shots.md` (incréments 0-7, numérotation propre au
-plan — sans rapport avec les « Incréments » historiques ci-dessus). Le lire en entier
-avant de toucher à quoi que ce soit côté Houdini. Prérequis absolu : Incrément 0 (tests +
-commit du bridge `plugins/houdini/python/ylos_houdini.py`, actuellement non commité).
-Discipline : un incrément = tests + un commit, jamais plus ; CI (`unittest` sans Houdini)
-verte à chaque étape ; les sections « Hors scope » et « Points de vigilance » du plan
-s'appliquent intégralement.
+**Workflow shot/Solaris Houdini — terminé (2026-07-08).** Plan `docs/plan-houdini-shots.md`,
+incréments 0-7 tous implémentés et commités (numérotation propre au plan, sans rapport avec
+les « Incréments » historiques ci-dessus) : bridge `ylos_houdini.py` + shelf (0), composeur
+unifié `refresh_entity_root` (1), schéma 2.1 `frame_range` (2), HDA `ylos::publish::0.2` mode
+step (3), outils shelf shot (4), convention cache + caches consommables (5), rendu Karma →
+cache + delivery (6), validation e2e + sweep docs (7). Les sections dédiées ci-dessus font foi
+pour chaque brique. Validation end-to-end : CI (`python3 -m unittest`, sans Houdini) verte ;
+scénario complet manuel (hython) `tools/houdini/test_shot_workflow_e2e.py` (create shot → WIP
+anim → publish anim/lighting via HDA → `shot_root.usda` recomposé, lighting plus fort → load
+shot → rendu Karma cache → deliver), complémentaire de `test_publish_hda_e2e.py` (fidélité du
+noeud HDA du TAB menu). **Hors scope resté hors scope** (cf. plan) : launcher per-session env,
+cycle de vie des caches (TTL/sweep/quotas), Python Panel / asset browser, portage des variantes
+Blender dans le composeur unique, tooling comp 2D, pages shot dans l'UI web, multi-séquences.
 
 ### Validation de nommage — point unique (2026-07-02)
 `create_asset()` valide désormais le nom **à la création**, pour les trois familles
@@ -145,6 +152,22 @@ flock ; les deux passent par `_compose_entity_root()`.
 variantes. La cible est ce composeur unique ; les **variantes** en seront une extension future
 (le portage n'a pas été fait ici pour ne rien casser côté Blender). Convention shot figée dans
 `docs/usd-convention.md` (section 6).
+
+### Schéma 2.1 : `frame_range` du shot (2026-07-08, Incrément 2 shots)
+`SCHEMA_VERSION = "2.1.0"` (partagée par les deux manifestes — `project.json` ET manifeste
+d'entité ; le bump s'applique aux deux, changement additif nul côté projet). Additif :
+`asset.schema.json` gagne une propriété **optionnelle** `frame_range`
+(`{"start": int, "end": int, "fps": number}`, les trois requis si l'objet est présent).
+`build_asset_manifest()` pose un défaut `{start: 1001, end: 1100, fps: DEFAULT_SCENE["fps"]}`
+pour `entity_type="shot"` uniquement (assets/sets n'en ont pas). `set_frame_range(project_root,
+shot_name, start, end, fps=None)` valide (`start < end`, entité = shot), écrit sous
+`acquire_lock` + `_atomic_write_json`, puis recompose le `shot_root.usda` (timecodes) via
+`refresh_entity_root` **hors flock** (`acquire_lock` non réentrant). `additionalProperties: true`
++ propriété optionnelle → aucun manifeste 2.0 invalidé, aucune migration de fichiers : un shot
+créé en 2.0 sans `frame_range` reste valide, les consommateurs traitent l'absence (fallback
+défaut, jamais de crash — cf. `refresh_entity_root` timecodes conditionnels, `render_shot`
+fallback range du hip avec warning). Doc : `docs/migration-2.0-to-2.1.md`. Édition UI web hors
+scope (CLI/`set_frame_range` pour l'instant).
 
 ### HDA `ylos::publish::0.2` — mode step (2026-07-08, Incrément 3 shots)
 Le HDA (`tools/houdini/build_publish_hda.py`, source de vérité scriptée — le `.hdanc` est
@@ -336,6 +359,15 @@ build_publish_hda.py`) :
    de l'héritage Mantra du node, défaut `False`) force le blocage. Posé à `1` sur `thumb_rop`
    dans `build_publish_hda.py`. `publish_rop` (type `usd_rop`, pas `usdrender_rop`) n'a pas ce
    problème — sérialisation de layer in-process, pas de `husk` séparé.
+
+6. `item_generator_script` d'un `ParmTemplate` de menu (menu dynamique) est évalué en mode
+   **`eval`** : **UNE expression** qui doit *retourner* la liste plate `[valeur, label, ...]`,
+   pas un bloc d'instructions — ni `return X` ni `menu = X` ne sont valides (**SyntaxError sur
+   les deux**, vérifié empiriquement). D'où la délégation en une expression unique au module
+   embarqué : `item_generator_script="kwargs['node'].hdaModule().kind_menu_items(kwargs['node'])"`
+   (jamais de logique de menu dupliquée dans la définition — la source de vérité reste
+   `kind_menu_items`, cf. `build_publish_hda.py`). Fixer aussi
+   `item_generator_script_language=hou.scriptLanguage.Python`.
 
 Filet de sécurité indépendant de ce fix : `finalize_publish_version()` exige un paramètre
 `expected_artifacts` et refuse tout `os.replace()` si un artefact déclaré manque ou est vide
