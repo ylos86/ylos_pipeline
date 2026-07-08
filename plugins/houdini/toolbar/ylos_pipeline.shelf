@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shelf pipeline Ylos Prod. Charge via HOUDINI_TOOLBAR_PATH (package ylos.json).
+     Les outils delegent tout a ylos_houdini.py (PYTHONPATH, meme package) - aucune
+     logique ici, le shelf n'est que le point d'entree UI. -->
+<shelfDocument>
+  <toolshelf name="ylos_pipeline" label="Ylos">
+    <memberTool name="ylos_save_wip"/>
+    <memberTool name="ylos_new_asset"/>
+    <memberTool name="ylos_load_asset"/>
+  </toolshelf>
+
+  <tool name="ylos_save_wip" label="Save WIP" icon="MISC_python">
+    <helpText><![CDATA[Sauvegarde le hip courant comme prochaine version WIP (_vNNN) de l'entite/step du contexte. Hors contexte : propose entite + step du projet actif.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_save_wip()]]></script>
+  </tool>
+
+  <tool name="ylos_new_asset" label="New Asset" icon="MISC_python">
+    <helpText><![CDATA[Cree une entite (asset/set/shot) dans le projet actif - meme validation de nommage TYPE_Nom_Variant que l'UI web et Blender.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_new_asset()]]></script>
+  </tool>
+
+  <tool name="ylos_load_asset" label="Load Asset" icon="MISC_python">
+    <helpText><![CDATA[Reference l'asset_root.usda d'une entite dans /stage (chemin en $PROJ_ROOT quand possible).]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_load_asset()]]></script>
+  </tool>
+</shelfDocument>

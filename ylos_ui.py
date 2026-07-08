@@ -93,10 +93,9 @@ def _json(handler: BaseHTTPRequestHandler, code: int, data: object) -> None:
 
 
 def _read_active() -> Path | None:
-    if not ACTIVE_FILE.is_file():
-        return None
-    text = ACTIVE_FILE.read_text(encoding="utf-8").strip()
-    return Path(text) if text else None
+    # Lecteur unique du contrat ~/.ylos/active_project (partage avec le module Houdini).
+    # ACTIVE_FILE passe en parametre : les tests redirigent cette constante vers un tmpdir.
+    return create_project.read_active_project(ACTIVE_FILE)
 
 
 def _write_active(path: str) -> None:

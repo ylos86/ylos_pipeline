@@ -328,6 +328,22 @@ def read_manifest(project_dir):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def read_active_project(path=None):
+    """Projet actif de la machine (Path) ou None. Contrat : ~/.ylos/active_project, une
+    ligne, chemin absolu - ecrit par l'UI web (POST /api/set-project). Lecteur UNIQUE,
+    partage par ylos_ui et le module Houdini (le default_expression du HDA ylos::publish
+    garde sa copie inline : une expression de parametre embarquee ne peut pas dependre
+    d'un import). Path.home() resolu a l'appel, pas a l'import (les tests hython basculent
+    HOME en cours de session, cf. test_publish_hda_e2e)."""
+    if path is None:
+        path = Path.home() / ".ylos" / "active_project"
+    try:
+        text = Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return Path(text) if text else None
+
+
 def validate_manifest(manifest):
     """Validation stdlib (pas de dependance jsonschema). Leve ValueError si invalide.
     Verifie la compatibilite de version MAJEURE du schema (sinon : migration requise)."""

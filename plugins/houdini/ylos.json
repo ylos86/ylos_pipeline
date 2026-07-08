@@ -8,6 +8,18 @@
                 "value": "$YLOS_REPO/plugins/houdini/otls",
                 "method": "append"
             }
+        },
+        {
+            "PYTHONPATH": {
+                "value": "$YLOS_REPO/plugins/houdini/python",
+                "method": "append"
+            }
+        },
+        {
+            "HOUDINI_TOOLBAR_PATH": {
+                "value": "$YLOS_REPO/plugins/houdini/toolbar",
+                "method": "append"
+            }
         }
     ]
 }

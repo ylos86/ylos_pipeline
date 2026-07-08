@@ -67,6 +67,15 @@ L'ex-Incrément 3 (migrer les projets existants) est **abandonné** — décisio
 `YLOS__TEST` et `Pachamama` ne sont que des projets de test, pas de données à préserver ;
 `migrate_to_2.0.py` reste disponible si un vrai projet legacy apparaît un jour.
 
+**Chantier en cours (2026-07-07) : workflow shot/Solaris Houdini.** Plan d'implémentation
+par incréments dans `docs/plan-houdini-shots.md` (incréments 0-7, numérotation propre au
+plan — sans rapport avec les « Incréments » historiques ci-dessus). Le lire en entier
+avant de toucher à quoi que ce soit côté Houdini. Prérequis absolu : Incrément 0 (tests +
+commit du bridge `plugins/houdini/python/ylos_houdini.py`, actuellement non commité).
+Discipline : un incrément = tests + un commit, jamais plus ; CI (`unittest` sans Houdini)
+verte à chaque étape ; les sections « Hors scope » et « Points de vigilance » du plan
+s'appliquent intégralement.
+
 ### Validation de nommage — point unique (2026-07-02)
 `create_asset()` valide désormais le nom **à la création**, pour les trois familles
 (asset/set/shot), via `validate_entity_name(name, entity_type, sub_type)` — même fonction
