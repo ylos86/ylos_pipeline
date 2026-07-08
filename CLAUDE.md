@@ -119,6 +119,33 @@ commit si `thumb.png` manque, `staging_dir` reste intact pour audit/retry). L'an
 `publish_asset()` (écriture directe, pas de thumbnail garanti) est déprécié
 (`DeprecationWarning`), conservé, plus aucun appelant dans ce repo.
 
+### Composition unifiée : `refresh_entity_root()` (2026-07-08, Incrément 1 shots)
+Composeur **unique** du fichier root d'assemblage d'une entité (principe 5), dans
+`create_project.py` — corrige une dérive : depuis la généralisation du contrat deux-phases,
+`build_asset_root()` n'avait plus aucun appelant vivant (seul `publish_asset()` déprécié),
+donc rien ne recomposait le root après un publish de step. `refresh_entity_root(project_root,
+entity_name)` lit le manifeste (sous `acquire_lock`), collecte le latest publish `complete`
+par step en **fusionnant** `step_publishes` (clé `artifact`, statut `complete`, prioritaire à
+step égal) et `publishes` legacy (`_latest_by_step`), puis recompose : asset/set →
+`ASSET_ROOT_NAME` (`defaultPrim=<Nom>`, ordre `DOWNSTREAM_ORDER`, via `build_asset_root`) ;
+shot → `SHOT_ROOT_NAME` (root prim `/ROOT`, `defaultPrim="ROOT"`, ordre `SHOT_DOWNSTREAM_ORDER`
+— **pas** `DOWNSTREAM_ORDER` : sur un shot le lighting override l'anim — + timecodes depuis
+`frame_range` si présent, via `build_shot_root`). Les publishes **LOP** n'entrent jamais dans
+la composition (`_latest_by_step` ne lit pas `lop_publishes` : un LOP est un instantané complet
+hors taxonomie de steps). Écriture atomique, subLayers relatifs à l'entité (le root vit à sa
+racine). Appelé automatiquement en fin de `finalize_publish_version()` **pour `kind != "lop"`
+uniquement**, dans le même flock, depuis le manifeste déjà mis à jour — via le helper interne
+`_compose_entity_root()` qui **ne re-verrouille pas** (`acquire_lock` ouvre un nouveau fd
+bloquant à chaque appel : nesting = interblocage). `refresh_entity_root()` public prend le
+flock ; les deux passent par `_compose_entity_root()`.
+
+**Duplication Blender à résorber** (nommée, non traitée dans cet incrément — hors scope) :
+`plugins/blender/core/usd_composer.py::compose_asset_root()` écrit un `asset_root.usd` (nom ≠
+`ASSET_ROOT_NAME`, extension `.usd` bannie par la convention) avec sa propre logique de
+variantes. La cible est ce composeur unique ; les **variantes** en seront une extension future
+(le portage n'a pas été fait ici pour ne rien casser côté Blender). Convention shot figée dans
+`docs/usd-convention.md` (section 6).
+
 ### Thumbnail Blender headless
 `plugins/blender/core/thumbnails.py::render_publish_thumbnail()` — scène/caméra/world
 temporaires, rendu EEVEE réel (256×256, cadrage trois-quarts auto sur la bbox), purgés en

@@ -54,7 +54,8 @@ SCHEMA_VERSION = "2.0.0"          # version du contrat (project.json ET manifest
                                   # A bumper a CHAQUE changement de schema (= migration).
 MANIFEST_NAME = "project.json"
 ASSET_MANIFEST_NAME = "manifest.json"
-ASSET_ROOT_NAME = "asset_root.usda"   # fichier de composition USD (ASCII, cf. convention)
+ASSET_ROOT_NAME = "asset_root.usda"   # composition USD d'un asset/set (ASCII, cf. convention)
+SHOT_ROOT_NAME = "shot_root.usda"     # composition USD d'un shot (root prim /ROOT, timecodes)
 PIPELINE_DIR = "_pipeline"        # dossier config/manifeste (renomme de _config en 2.0)
 SPOTLIGHT_MARKER = ".metadata_never_index"
 GITIGNORE_NAME = ".gitignore"
@@ -132,6 +133,12 @@ _DIR_VER_RE = re.compile(r"_v(\d+)$")
 # USD : le premier sublayer de la liste est le plus fort.
 DOWNSTREAM_ORDER = ["fx", "lookdev", "rigging", "uvs", "modeling",
                     "layout", "animation", "lighting", "render", "composite"]
+
+# Ordre de force propre au SHOT (distinct de DOWNSTREAM_ORDER, qui est correct pour un asset
+# mais faux pour un shot) : sur un shot le lighting override l'animation, l'inverse d'un asset.
+# 'comp' est declare pour l'ordre mais ne produit jamais de layer USD (2D) - simplement jamais
+# present dans les publishes. NE PAS reutiliser DOWNSTREAM_ORDER ici (cf. plan Increment 1).
+SHOT_DOWNSTREAM_ORDER = ["comp", "lighting", "fx", "animation", "layout"]
 
 _VER_RE = re.compile(r"_v(\d+)\.")
 
@@ -432,9 +439,100 @@ def build_asset_root(name, latest):
     return "\n".join(lines) + "\n"
 
 
+def _num_str(value):
+    """Serialise un nombre USD sans '.0' parasite (24 plutot que 24.0), float sinon."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def build_shot_root(name, latest, frame_range=None):
+    """Reconstruit shot_root.usda depuis {step: chemin_relatif_du_latest_publish}. Miroir de
+    build_asset_root pour un SHOT : root prim /ROOT (defaultPrim "ROOT", cf. USD_ROOT_PRIM),
+    subLayers ordonnes SHOT_DOWNSTREAM_ORDER (plus fort/downstream en premier - lighting
+    override l'anim). 'frame_range' ({start, end, fps}) present (schema 2.1) -> timecodes
+    dans le header de stage ; absent -> pas de timecodes (cf. docs/usd-convention.md)."""
+    ordered = [s for s in SHOT_DOWNSTREAM_ORDER if s in latest]
+    ordered += [s for s in latest if s not in SHOT_DOWNSTREAM_ORDER]
+    prim = USD_ROOT_PRIM.lstrip("/")
+    lines = [
+        "#usda 1.0",
+        "(",
+        f'    defaultPrim = "{prim}"',
+        f'    upAxis = "{USD_UP_AXIS}"',
+        f"    metersPerUnit = {_meters_per_unit_str()}",
+    ]
+    if frame_range:
+        lines += [
+            f"    startTimeCode = {int(frame_range['start'])}",
+            f"    endTimeCode = {int(frame_range['end'])}",
+            f"    timeCodesPerSecond = {_num_str(frame_range['fps'])}",
+        ]
+    lines.append("    subLayers = [")
+    for s in ordered:
+        lines.append(f"        @{latest[s]}@,")
+    lines += [
+        "    ]",
+        ")",
+        "",
+        f'def Xform "{prim}"',
+        "{",
+        "}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _latest_from_publishes(publishes):
     """Retourne {step: chemin_latest} depuis manifest.publishes (dict step -> [paths])."""
     return {step: max(paths, key=_ver) for step, paths in publishes.items() if paths}
+
+
+def _latest_by_step(manifest):
+    """{step: chemin_relatif_du_latest_publish 'complete'} pour la composition d'un root,
+    en FUSIONNANT les deux sources d'un manifeste :
+    - 'publishes' legacy (dict step -> [chemins], ecrit par publish_asset() deprecie) ;
+    - 'step_publishes' (contrat deux-phases, dict step -> [entrees], cle 'artifact',
+      statut 'complete').
+    A step egal, le contrat deux-phases prime (source vivante). Les publishes LOP
+    (lop_publishes) ne sont JAMAIS lus ici : un LOP est un instantane complet hors
+    taxonomie de steps, il n'entre pas dans la composition subLayers."""
+    latest = _latest_from_publishes(manifest.get("publishes", {}))
+    for step, entries in manifest.get(STEP_PUBLISHES_KEY, {}).items():
+        complete = [e for e in entries
+                    if e.get("status") == "complete" and e.get("artifact")]
+        if complete:
+            latest[step] = max(complete, key=lambda e: e["version"])["artifact"]
+    return latest
+
+
+def _compose_entity_root(entity_dir, manifest, entity_name):
+    """Ecrit le fichier root d'assemblage depuis un manifeste DEJA charge - composeur UNIQUE
+    (principe 5, CLAUDE.md). Appele SOUS le flock du manifeste, par les deux entrees :
+    refresh_entity_root() (publique, prend le flock) et finalize_publish_version() (deja
+    dans son flock). Retourne le Path ecrit. NE prend PAS le flock lui-meme (acquire_lock
+    ouvre un nouveau fd bloquant a chaque appel : re-verrouiller ici = interblocage)."""
+    latest = _latest_by_step(manifest)
+    name = manifest.get("name", entity_name)
+    if manifest.get("entity_type") == "shot":
+        content = build_shot_root(name, latest, manifest.get("frame_range"))
+        root_path = entity_dir / SHOT_ROOT_NAME
+    else:
+        content = build_asset_root(name, latest)
+        root_path = entity_dir / ASSET_ROOT_NAME
+    _atomic_write_text(root_path, content)
+    return root_path
+
+
+def refresh_entity_root(project_root, entity_name):
+    """Recompose le fichier root d'assemblage d'une entite depuis ses publishes 'complete'
+    (latest par step) - point d'entree public, prend le flock du manifeste :
+    - asset/set -> asset_root.usda (defaultPrim <Nom>, ordre DOWNSTREAM_ORDER) ;
+    - shot      -> shot_root.usda  (root prim /ROOT, ordre SHOT_DOWNSTREAM_ORDER, timecodes
+                   depuis frame_range si present au manifeste).
+    Chemins de subLayers relatifs a l'entite (le root vit a sa racine). Retourne le Path ecrit.
+    finalize_publish_version() appelle _compose_entity_root() directement (deja sous flock)."""
+    entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
+    with acquire_lock(manifest_path):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return _compose_entity_root(entity_dir, manifest, entity_name)
 
 
 def _project_steps(project_dir, entity_type):
@@ -912,6 +1010,13 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
             entry["comment"] = comment
         manifest["modified_utc"] = _now()
         _atomic_write_json(manifest_path, manifest)
+
+        # Recomposition du root d'assemblage (asset_root.usda / shot_root.usda) pour un
+        # publish de STEP (kind != 'lop') : un step alimente la composition subLayers, un
+        # LOP est un instantane complet hors taxonomie (jamais compose). Dans le meme flock,
+        # depuis le manifeste deja mis a jour - _compose_entity_root ne re-verrouille pas.
+        if kind != "lop":
+            _compose_entity_root(entity_dir, manifest, asset_name)
 
     return {
         "name": asset_name,
