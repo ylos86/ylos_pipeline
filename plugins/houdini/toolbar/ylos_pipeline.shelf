@@ -7,6 +7,8 @@
     <memberTool name="ylos_save_wip"/>
     <memberTool name="ylos_new_asset"/>
     <memberTool name="ylos_load_asset"/>
+    <memberTool name="ylos_load_shot"/>
+    <memberTool name="ylos_load_step_publish"/>
   </toolshelf>
 
   <tool name="ylos_save_wip" label="Save WIP" icon="MISC_python">
@@ -25,5 +27,17 @@ ylos_houdini.tool_new_asset()]]></script>
     <helpText><![CDATA[Reference l'asset_root.usda d'une entite dans /stage (chemin en $PROJ_ROOT quand possible).]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_load_asset()]]></script>
+  </tool>
+
+  <tool name="ylos_load_shot" label="Load Shot" icon="MISC_python">
+    <helpText><![CDATA[Sublayer le shot_root.usda d'un shot dans /stage (le shot EST le stage, root prim /ROOT) - compose tous les steps publies du shot, chemin en $PROJ_ROOT.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_load_shot()]]></script>
+  </tool>
+
+  <tool name="ylos_load_step_publish" label="Load Step Publish" icon="MISC_python">
+    <helpText><![CDATA[Sublayer le latest publish d'un step (entite + step au choix) dans /stage - composer manuellement quand on ne veut pas tout le shot_root.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_load_step_publish()]]></script>
   </tool>
 </shelfDocument>

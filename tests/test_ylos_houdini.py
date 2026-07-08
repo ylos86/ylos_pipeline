@@ -215,6 +215,57 @@ class RealProjectTestCase(unittest.TestCase):
         self.assertIsNone(
             yh.latest_lop_publish(self.project, "CHARACTER_Lina_Default"))
 
+    # -- latest_step_publish ------------------------------------------------------------
+
+    def _set_step_publishes(self, family, entity, step_publishes):
+        manifest_path = (self.project / family / entity / cp.ASSET_MANIFEST_NAME)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[cp.STEP_PUBLISHES_KEY] = step_publishes
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    def test_latest_step_publish_ignore_pending(self):
+        self._set_step_publishes("shots", "ANIMATION_Sq010_Default", {
+            "animation": [
+                {"version": 1, "status": "complete",
+                 "artifact": "animation/publish/v001/anim_v001.usdnc"},
+                {"version": 2, "status": "complete",
+                 "artifact": "animation/publish/v002/anim_v002.usdnc"},
+                {"version": 3, "status": "pending",
+                 "artifact": "animation/publish/v003/anim_v003.usdnc"},
+            ],
+        })
+        got = yh.latest_step_publish(self.project, "ANIMATION_Sq010_Default", "animation")
+        expected = (self.project / "shots" / "ANIMATION_Sq010_Default"
+                    / "animation/publish/v002/anim_v002.usdnc")
+        self.assertEqual(Path(got), expected)
+
+    def test_latest_step_publish_aucun_et_step_absent(self):
+        # step jamais publie -> None
+        self.assertIsNone(
+            yh.latest_step_publish(self.project, "ANIMATION_Sq010_Default", "animation"))
+        # step present mais que des 'pending' -> None aussi
+        self._set_step_publishes("shots", "ANIMATION_Sq010_Default", {
+            "lighting": [
+                {"version": 1, "status": "pending",
+                 "artifact": "lighting/publish/v001/light_v001.usdnc"},
+            ],
+        })
+        self.assertIsNone(
+            yh.latest_step_publish(self.project, "ANIMATION_Sq010_Default", "lighting"))
+
+    # -- shot_root_path -----------------------------------------------------------------
+
+    def test_shot_root_path_absent_leve(self):
+        with self.assertRaises(FileNotFoundError):
+            yh.shot_root_path(self.project, "ANIMATION_Sq010_Default")
+
+    def test_shot_root_path_present(self):
+        shot_dir = self.project / "shots" / "ANIMATION_Sq010_Default"
+        root = shot_dir / cp.SHOT_ROOT_NAME
+        root.write_text("#usda 1.0\n", encoding="utf-8")
+        self.assertEqual(
+            Path(yh.shot_root_path(self.project, "ANIMATION_Sq010_Default")), root)
+
 
 if __name__ == "__main__":
     unittest.main()

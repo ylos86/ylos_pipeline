@@ -164,6 +164,34 @@ def latest_lop_publish(project_root, entity_name):
     return entity_dir / best["layer"]
 
 
+def latest_step_publish(project_root, entity_name, step):
+    """Chemin (Path) de l'artefact du dernier publish 'complete' du step <step> de
+    l'entite, ou None si aucun. Miroir de latest_lop_publish sur manifest.step_publishes
+    (contrat ecrit par finalize_publish_version en kind=<step>, cle 'artifact') - alimente
+    la composition shot_root et le sublayer manuel d'un step precis."""
+    entity_dir, manifest_path = cp._find_asset_entity(project_root, entity_name)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = [e for e in manifest.get(cp.STEP_PUBLISHES_KEY, {}).get(step, [])
+               if e.get("status") == "complete" and e.get("artifact")]
+    if not entries:
+        return None
+    best = max(entries, key=lambda e: e["version"])
+    return entity_dir / best["artifact"]
+
+
+def shot_root_path(project_root, shot_name):
+    """Chemin (Path) du shot_root.usda d'un shot. FileNotFoundError explicite si absent :
+    tant qu'aucun step n'est publie, refresh_entity_root() ne l'a pas encore compose."""
+    entity_dir, _ = cp._find_asset_entity(project_root, shot_name)
+    path = entity_dir / cp.SHOT_ROOT_NAME
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Pas de {cp.SHOT_ROOT_NAME} pour '{shot_name}' ({path}) - publier au moins "
+            f"un step du shot pour composer le shot_root."
+        )
+    return path
+
+
 def env_relative(path, env_name=cp.ENV_ROOT):
     """'$PROJ_ROOT/<relatif>' si 'path' vit sous $PROJ_ROOT - les scenes referencent via
     env, jamais un chemin absolu en dur (principe 1, CLAUDE.md) : le projet reste
@@ -224,6 +252,50 @@ def reference_asset(entity_name, project_root=None):
     node.parm("filepath1").set(env_relative(path))
     node.moveToGoodPosition()
     return node
+
+
+def _create_sublayer(node_name, path):
+    """Cree un LOP 'sublayer' dans /stage sur 'path' (ecrit en $PROJ_ROOT via env_relative).
+    Helper commun a sublayer_shot / sublayer_step_publish - un sublayer empile le layer sur
+    le stage (contrairement a 'reference' qui le greffe sous un prim). Retourne le noeud."""
+    import hou
+    stage = hou.node("/stage")
+    node = stage.createNode("sublayer", node_name)
+    # 'sublayer' porte une liste de fichiers (multiparm 'num_files') - un seul ici.
+    num = node.parm("num_files")
+    if num is not None:
+        num.set(1)
+    node.parm("filepath1").set(env_relative(path))
+    node.moveToGoodPosition()
+    return node
+
+
+def sublayer_shot(shot_name, project_root=None):
+    """Cree un LOP 'sublayer' dans /stage sur le shot_root.usda du shot. sublayer et NON
+    reference : le shot EST le stage (root prim /ROOT, cf. docs/usd-convention.md), on ne le
+    greffe pas sous un prim. Retourne le noeud."""
+    if project_root is None:
+        project_root = active_project()
+    if project_root is None:
+        raise ValueError("Aucun projet actif (~/.ylos/active_project).")
+    path = shot_root_path(project_root, shot_name)
+    return _create_sublayer(shot_name, path)
+
+
+def sublayer_step_publish(entity_name, step, project_root=None):
+    """Cree un LOP 'sublayer' dans /stage sur le latest publish 'complete' du step de
+    l'entite - pour composer manuellement un step precis (ex. lighting qui ne veut que
+    l'anim) sans passer par tout le shot_root. Retourne le noeud."""
+    if project_root is None:
+        project_root = active_project()
+    if project_root is None:
+        raise ValueError("Aucun projet actif (~/.ylos/active_project).")
+    path = latest_step_publish(project_root, entity_name, step)
+    if path is None:
+        raise FileNotFoundError(
+            f"Aucun publish 'complete' pour le step '{step}' de '{entity_name}'."
+        )
+    return _create_sublayer(f"{entity_name}_{step}", path)
 
 
 # --------------------------------------------------------------------------------------
@@ -334,5 +406,51 @@ def tool_load_asset():
     try:
         node = reference_asset(entity["name"], project_root)
         hou.ui.displayMessage(f"Reference creee : {node.path()}")
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+
+
+def tool_load_shot():
+    """Shelf 'Load Shot' : sublayer le shot_root.usda d'un shot dans /stage (le shot EST le
+    stage, root prim /ROOT) - compose tous les steps publies du shot."""
+    import hou
+    project_root = active_project()
+    if project_root is None:
+        hou.ui.displayMessage(
+            "Aucun projet actif - definir le projet via l'UI web (ylos_ui.py).",
+            severity=hou.severityType.Warning)
+        return
+    shots = [e for e in list_entities(project_root)
+             if e["family"] == cp.ENTITY_DIR["shot"]]
+    entity = _pick_entity(project_root, "Load Shot", shots)
+    if entity is None:
+        return
+    try:
+        node = sublayer_shot(entity["name"], project_root)
+        hou.ui.displayMessage(f"Sublayer cree : {node.path()}")
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+
+
+def tool_load_step_publish():
+    """Shelf 'Load Step Publish' : sublayer le latest publish d'un step (entite + step au
+    choix) - composer manuellement quand on ne veut pas tout le shot_root."""
+    import hou
+    project_root = active_project()
+    if project_root is None:
+        hou.ui.displayMessage(
+            "Aucun projet actif - definir le projet via l'UI web (ylos_ui.py).",
+            severity=hou.severityType.Warning)
+        return
+    entity = _pick_entity(project_root, "Load Step Publish")
+    if entity is None:
+        return
+    steps = entity["steps"]
+    idx = _pick_from_list("Load Step Publish", steps, "Step :")
+    if idx is None:
+        return
+    try:
+        node = sublayer_step_publish(entity["name"], steps[idx], project_root)
+        hou.ui.displayMessage(f"Sublayer cree : {node.path()}")
     except (ValueError, FileNotFoundError, OSError) as exc:
         hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
