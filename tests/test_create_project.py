@@ -304,5 +304,77 @@ class TestCleanStaleStaging(TempProjectTestCase):
         self.assertEqual(report["pending_without_staging"], [])
 
 
+class TestFrameRange(TempProjectTestCase):
+    """Schema 2.1 : frame_range du shot (defaut a la creation + set_frame_range)."""
+
+    SHOT = "ANIMATION_Sq010_Default"
+
+    def _create_shot(self):
+        cp.create_asset(self.project, self.SHOT, entity_type="shot", asset_type="ANIMATION")
+
+    def _manifest(self, name):
+        path = Path(self.project) / "shots" / name / cp.ASSET_MANIFEST_NAME
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _shot_root(self, name):
+        return (Path(self.project) / "shots" / name / cp.SHOT_ROOT_NAME).read_text(encoding="utf-8")
+
+    def test_shot_creation_poses_default_frame_range_and_2_1(self):
+        self._create_shot()
+        m = self._manifest(self.SHOT)
+        self.assertEqual(m["schema_version"], "2.1.0")
+        self.assertEqual(m["frame_range"],
+                         {"start": 1001, "end": 1100, "fps": cp.DEFAULT_SCENE["fps"]})
+
+    def test_asset_has_no_frame_range(self):
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+        m = json.loads(
+            (Path(self.project) / "assets" / "PROP_Tente_Default" / cp.ASSET_MANIFEST_NAME)
+            .read_text(encoding="utf-8"))
+        self.assertNotIn("frame_range", m)
+        self.assertEqual(m["schema_version"], "2.1.0")
+
+    def test_set_frame_range_updates_manifest_and_timecodes(self):
+        self._create_shot()
+        fr = cp.set_frame_range(self.project, self.SHOT, 1010, 1042, fps=25)
+        self.assertEqual(fr, {"start": 1010, "end": 1042, "fps": 25})
+        self.assertEqual(self._manifest(self.SHOT)["frame_range"], fr)
+        out = self._shot_root(self.SHOT)
+        self.assertIn("startTimeCode = 1010", out)
+        self.assertIn("endTimeCode = 1042", out)
+        self.assertIn("timeCodesPerSecond = 25", out)
+
+    def test_set_frame_range_fps_none_keeps_existing(self):
+        self._create_shot()
+        cp.set_frame_range(self.project, self.SHOT, 1010, 1050, fps=30)
+        fr = cp.set_frame_range(self.project, self.SHOT, 1005, 1020)  # fps omis
+        self.assertEqual(fr["fps"], 30)
+
+    def test_set_frame_range_rejects_start_ge_end(self):
+        self._create_shot()
+        with self.assertRaises(ValueError):
+            cp.set_frame_range(self.project, self.SHOT, 1100, 1001)
+        with self.assertRaises(ValueError):
+            cp.set_frame_range(self.project, self.SHOT, 1001, 1001)
+
+    def test_set_frame_range_rejects_non_shot(self):
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+        with self.assertRaises(ValueError):
+            cp.set_frame_range(self.project, "PROP_Tente_Default", 1001, 1100)
+
+    def test_legacy_shot_without_frame_range_still_accepted(self):
+        # Manifeste 2.0 : shot sans frame_range (cle retiree a la main). set_frame_range
+        # doit l'accepter et poser la plage sans crash (fallback fps = defaut scene).
+        self._create_shot()
+        path = Path(self.project) / "shots" / self.SHOT / cp.ASSET_MANIFEST_NAME
+        m = json.loads(path.read_text(encoding="utf-8"))
+        del m["frame_range"]
+        m["schema_version"] = "2.0.0"
+        path.write_text(json.dumps(m), encoding="utf-8")
+        fr = cp.set_frame_range(self.project, self.SHOT, 1001, 1024)
+        self.assertEqual(fr["fps"], cp.DEFAULT_SCENE["fps"])
+        self.assertIn("startTimeCode = 1001", self._shot_root(self.SHOT))
+
+
 if __name__ == "__main__":
     unittest.main()

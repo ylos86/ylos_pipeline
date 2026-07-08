@@ -40,6 +40,17 @@
         "items": {"type": "string"}
       }
     },
+    "frame_range": {
+      "type": "object",
+      "description": "Plage d'images du shot (schema 2.1, shots uniquement). OPTIONNEL : les shots crees en 2.0 n'en ont pas - les consommateurs traitent l'absence par un fallback, jamais de crash. Les trois cles sont requises si present. Contrainte start < end verifiee cote code (set_frame_range), non exprimable en draft-07.",
+      "required": ["start", "end", "fps"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {"type": "integer", "description": "Premiere image (inclusive)."},
+        "end": {"type": "integer", "description": "Derniere image (inclusive)."},
+        "fps": {"type": "number", "description": "Images par seconde (timeCodesPerSecond USD)."}
+      }
+    },
     "created_utc": {"type": "string", "format": "date-time"},
     "modified_utc": {"type": "string", "format": "date-time"}
   }

@@ -154,12 +154,14 @@ class ShotRecompositionTestCase(_BaseCase):
         out = self._read(shot_root)
         self.assertIn('defaultPrim = "ROOT"', out)
         self.assertLess(out.index("lighting/publish"), out.index("animation/publish"))
-        # pas de frame_range au manifeste (schema 2.0) -> pas de timecode, pas de crash.
-        self.assertNotIn("startTimeCode", out)
+        # depuis schema 2.1 (Increment 2) un shot nait avec un frame_range par defaut
+        # (1001-1100) -> timecodes presents dans le shot_root recompose.
+        self.assertIn("startTimeCode = 1001", out)
+        self.assertIn("endTimeCode = 1100", out)
 
     def test_refresh_with_frame_range_writes_timecodes(self):
-        # frame_range injecte a la main (Increment 2 le posera a la creation d'un shot) :
-        # refresh_entity_root doit deja le consommer s'il est present.
+        # frame_range surcharge a la main (le defaut 2.1 pose 1001-1100@24) :
+        # refresh_entity_root doit consommer la valeur presente au manifeste.
         manifest_path = self._shot_dir("ANIMATION_Sq010_Default") / cp.ASSET_MANIFEST_NAME
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["frame_range"] = {"start": 1010, "end": 1042, "fps": 25}

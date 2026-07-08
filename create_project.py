@@ -50,8 +50,10 @@ from pathlib import Path
 # Constantes - contrat
 # --------------------------------------------------------------------------------------
 
-SCHEMA_VERSION = "2.0.0"          # version du contrat (project.json ET manifeste d'asset).
+SCHEMA_VERSION = "2.1.0"          # version du contrat (project.json ET manifeste d'asset).
                                   # A bumper a CHAQUE changement de schema (= migration).
+                                  # 2.1.0 : ajout de 'frame_range' (shots) - additif, aucun
+                                  # manifeste 2.0 invalide (cf. docs/migration-2.0-to-2.1.md).
 MANIFEST_NAME = "project.json"
 ASSET_MANIFEST_NAME = "manifest.json"
 ASSET_ROOT_NAME = "asset_root.usda"   # composition USD d'un asset/set (ASCII, cf. convention)
@@ -375,7 +377,7 @@ def build_asset_manifest(name, entity_type, asset_type, steps):
     """Manifeste par entite (cf. asset.schema.json). 'entity_type' = famille (asset/set/
     shot) ; 'type' = sous-type metier (CHARACTER, ENVIRONMENT, PROP...)."""
     now = _now()
-    return {
+    manifest = {
         "schema_version": SCHEMA_VERSION,
         "name": name,
         "entity_type": entity_type,
@@ -385,6 +387,13 @@ def build_asset_manifest(name, entity_type, asset_type, steps):
         "created_utc": now,
         "modified_utc": now,
     }
+    # Un shot porte sa plage d'images (schema 2.1). Defaut editable via set_frame_range().
+    # Les autres familles n'ont pas de frame_range (cle absente = pas de timecodes).
+    if entity_type == "shot":
+        manifest["frame_range"] = {
+            "start": 1001, "end": 1100, "fps": DEFAULT_SCENE["fps"],
+        }
+    return manifest
 
 
 def _meters_per_unit_str():
@@ -533,6 +542,34 @@ def refresh_entity_root(project_root, entity_name):
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         return _compose_entity_root(entity_dir, manifest, entity_name)
+
+
+def set_frame_range(project_root, shot_name, start, end, fps=None):
+    """Pose / actualise la plage d'images d'un SHOT (schema 2.1) puis recompose son
+    shot_root.usda (timecodes). 'start' < 'end' requis ; l'entite doit etre un shot. 'fps'
+    None -> conserve le fps existant du manifeste, sinon le defaut scene. Ecriture atomique
+    sous acquire_lock ; la recomposition est faite APRES relachement du flock (via
+    refresh_entity_root, qui reprend son propre flock - acquire_lock n'est pas reentrant,
+    cf. CLAUDE.md). Retourne le frame_range ecrit."""
+    start, end = int(start), int(end)
+    if start >= end:
+        raise ValueError(f"frame_range invalide : start ({start}) doit etre < end ({end})")
+    entity_dir, manifest_path = _find_asset_entity(project_root, shot_name)
+    with acquire_lock(manifest_path):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("entity_type") != "shot":
+            raise ValueError(
+                f"frame_range reserve aux shots : '{shot_name}' est de type "
+                f"{manifest.get('entity_type')!r}."
+            )
+        if fps is None:
+            fps = manifest.get("frame_range", {}).get("fps", DEFAULT_SCENE["fps"])
+        frame_range = {"start": start, "end": end, "fps": fps}
+        manifest["frame_range"] = frame_range
+        manifest["modified_utc"] = _now()
+        _atomic_write_json(manifest_path, manifest)
+    refresh_entity_root(project_root, shot_name)
+    return frame_range
 
 
 def _project_steps(project_dir, entity_type):
@@ -1267,6 +1304,16 @@ def _cli(argv=None):
     pub.add_argument("step", help="Step de publication (ex: modeling, lookdev)")
     pub.add_argument("file", help="Fichier source a publier (.usda ou .usdc)")
 
+    pfr = sub.add_parser("set-frame-range",
+                         help="Pose la plage d'images d'un shot (schema 2.1) et recompose "
+                              "son shot_root.usda (timecodes).")
+    pfr.add_argument("project", help="Chemin du projet existant")
+    pfr.add_argument("shot", help="Nom du shot")
+    pfr.add_argument("start", type=int, help="Premiere image (inclusive)")
+    pfr.add_argument("end", type=int, help="Derniere image (inclusive), > start")
+    pfr.add_argument("--fps", type=float, default=None,
+                     help="Images par seconde (defaut : fps existant du shot ou defaut scene)")
+
     pcs = sub.add_parser("clean-staging",
                          help="Purge les staging_dirs orphelins (process mort) + rapporte "
                               "les entrees manifest 'pending' sans staging correspondant.")
@@ -1300,6 +1347,10 @@ def _cli(argv=None):
             print(f"  manifeste : {info['manifest']}")
             if info["asset_root"]:
                 print(f"  asset_root: {info['asset_root']}")
+        elif args.cmd == "set-frame-range":
+            fr = set_frame_range(args.project, args.shot, args.start, args.end, fps=args.fps)
+            print(f"[ok] frame_range {args.shot} : {fr['start']}-{fr['end']} @ {fr['fps']} fps")
+            print("  shot_root.usda recompose (timecodes)")
         else:  # clean-staging
             info = clean_stale_staging(args.project, dry_run=not args.apply)
             verb = "supprime(s)" if args.apply else "a supprimer (dry-run - passer --apply pour executer)"
