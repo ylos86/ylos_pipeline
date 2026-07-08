@@ -108,6 +108,105 @@ class CacheDirExpressionTestCase(unittest.TestCase):
         self.assertNotIn("/vol/ext", expr)
 
 
+class RenderOutputExpressionTestCase(unittest.TestCase):
+    """Increment 6 : expression litterale du fichier EXR de sortie ($PROJ_CACHE + $F4),
+    posee sur 'outputimage' du usdrender_rop (relocalisable, variable non resolue). Pure."""
+
+    def test_expression_litterale_avec_f4(self):
+        expr = yh.render_output_expression("/vol/ext/MyProj", "SHOT_Sq010_Default",
+                                           "lighting", 3)
+        self.assertEqual(
+            expr,
+            "$PROJ_CACHE/MyProj/render/SHOT_Sq010_Default/lighting/v003/"
+            "SHOT_Sq010_Default_lighting_v003.$F4.exr")
+        # ni le chemin absolu resolu ni un numero de frame en dur ne fuient dans l'expression.
+        self.assertNotIn("/vol/ext", expr)
+        self.assertIn("$F4", expr)
+
+
+class RenderCacheTestCase(unittest.TestCase):
+    """Increment 6 : next_render_version (scan disque du tier cache, +1) et deliver_render
+    (copie explicite vers delivery/, refus si vide). Le tier cache est resolu via
+    create_project.resolve_cache -> $PROJ_CACHE doit etre pose (comme en prod)."""
+
+    def setUp(self):
+        self._tmp = Path(tempfile.mkdtemp(prefix="ylos_hou_render_")).resolve()
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+        self._saved_cache = os.environ.get(cp.ENV_CACHE)
+        self.addCleanup(self._restore_cache)
+        os.environ[cp.ENV_CACHE] = str(self._tmp / "cache")
+        info = cp.create("Proj", root=self._tmp / "src", cache=self._tmp / "cache")
+        self.project = Path(info["source"])
+        cp.create_asset(self.project, "ANIMATION_Sq010_Default",
+                        entity_type="shot", asset_type="ANIMATION")
+
+    def _restore_cache(self):
+        if self._saved_cache is None:
+            os.environ.pop(cp.ENV_CACHE, None)
+        else:
+            os.environ[cp.ENV_CACHE] = self._saved_cache
+
+    def _render_version_dir(self, step, version):
+        d = (yh.render_dir(self.project, "ANIMATION_Sq010_Default", step)
+             / f"v{version:03d}")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_next_render_version_aucun_rendu(self):
+        self.assertEqual(
+            yh.next_render_version(self.project, "ANIMATION_Sq010_Default", "lighting"), 1)
+
+    def test_next_render_version_incremente_max_disque(self):
+        self._render_version_dir("lighting", 1)
+        self._render_version_dir("lighting", 3)  # trou : max+1, pas count+1
+        (self._render_version_dir("lighting", 3)
+         / "img.0001.exr").write_text("", encoding="utf-8")
+        self.assertEqual(
+            yh.next_render_version(self.project, "ANIMATION_Sq010_Default", "lighting"), 4)
+        # un autre step est independant.
+        self.assertEqual(
+            yh.next_render_version(self.project, "ANIMATION_Sq010_Default", "fx"), 1)
+
+    def test_list_render_versions_ignore_non_vNNN(self):
+        self._render_version_dir("lighting", 2)
+        (yh.render_dir(self.project, "ANIMATION_Sq010_Default", "lighting")
+         / "notes").mkdir(parents=True, exist_ok=True)  # pas v<NNN> -> ignore
+        self.assertEqual(
+            yh.list_render_versions(self.project, "ANIMATION_Sq010_Default", "lighting"), [2])
+
+    def test_deliver_render_copie_vers_delivery(self):
+        vdir = self._render_version_dir("lighting", 2)
+        (vdir / "SHOT_lighting_v002.0001.exr").write_text("exr", encoding="utf-8")
+        (vdir / "SHOT_lighting_v002.0002.exr").write_text("exr", encoding="utf-8")
+        dst = yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "lighting", 2)
+        expected = (self.project / "delivery" / "render" / "ANIMATION_Sq010_Default"
+                    / "lighting" / "v002")
+        self.assertEqual(Path(dst), expected)
+        self.assertTrue((expected / "SHOT_lighting_v002.0001.exr").is_file())
+        self.assertTrue((expected / "SHOT_lighting_v002.0002.exr").is_file())
+
+    def test_deliver_render_steps_ne_fusionnent_pas(self):
+        # deux steps a la meme version -> chemins de livraison distincts (le <step> les
+        # separe), aucun ecrasement silencieux via copytree dirs_exist_ok.
+        for step in ("lighting", "fx"):
+            vdir = self._render_version_dir(step, 1)
+            (vdir / f"{step}.0001.exr").write_text(step, encoding="utf-8")
+        d_light = yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "lighting", 1)
+        d_fx = yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "fx", 1)
+        self.assertNotEqual(Path(d_light), Path(d_fx))
+        self.assertTrue((Path(d_light) / "lighting.0001.exr").is_file())
+        self.assertTrue((Path(d_fx) / "fx.0001.exr").is_file())
+
+    def test_deliver_render_refuse_source_absente(self):
+        with self.assertRaises(FileNotFoundError):
+            yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "lighting", 9)
+
+    def test_deliver_render_refuse_source_vide(self):
+        self._render_version_dir("lighting", 1)  # dossier v001 cree mais vide
+        with self.assertRaises(FileNotFoundError):
+            yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "lighting", 1)
+
+
 class RealProjectTestCase(unittest.TestCase):
     """Projet + entites reels (create()/create_asset()) - pour tout ce qui lit un
     project.json / manifest.json sur disque : parse_wip_context, list_wip_versions,

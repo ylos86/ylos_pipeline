@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -45,6 +46,13 @@ _HIP_EXT_BY_LICENSE = {"Commercial": ".hip", "Indie": ".hiplc"}  # tout le reste
 # philosophie que Blender core/asset.py::VERSION_PATTERN : un fichier renomme/migre garde
 # sa place dans la continuite de versions.
 WIP_VERSION_RE = re.compile(r"_v(\d{3})\.hip(?:lc|nc)?$")
+
+# Rendus de shot : tier cache regenerable, sous $PROJ_CACHE/<projet>/render/ (miroir de
+# CACHE_TREE). Un rendu est jetable et son suivi releve de la gestion de prod (principe 4,
+# CLAUDE.md), pas du pipeline technique : versioning par scan disque (v<NNN>), aucun
+# manifeste. Seul deliver_render() copie explicitement un take valide vers delivery/.
+RENDER_SUBDIR = "render"
+RENDER_VERSION_RE = re.compile(r"^v(\d{3})$")
 
 
 # --------------------------------------------------------------------------------------
@@ -217,6 +225,66 @@ def env_relative(path, env_name=cp.ENV_ROOT):
     return str(Path(path))
 
 
+def render_dir(project_root, shot_name, step):
+    """Dossier de rendu (resolu sur disque) d'un step de shot :
+    $PROJ_CACHE/<projet>/render/<shot>/<step>/ (tier regenerable, cf. CLAUDE.md). Resolution
+    de $PROJ_CACHE via create_project.resolve_cache (logique unique, meme source que
+    entity_cache_dir) - 'project_root' est la racine SOURCE, seul son basename sert a nommer
+    le sous-arbre cache. Ne cree rien (lecture/scan) ; les versions sont creees par le rendu."""
+    return (cp.resolve_cache() / Path(project_root).name / RENDER_SUBDIR
+            / shot_name / step)
+
+
+def list_render_versions(project_root, shot_name, step):
+    """[int, ...] tries des versions de rendu (dossiers v<NNN>) presentes sur disque pour
+    <shot>/<step>. Vide si aucun rendu (dossier absent). Scan pur, aucun manifeste."""
+    rdir = render_dir(project_root, shot_name, step)
+    if not rdir.is_dir():
+        return []
+    out = [int(m.group(1)) for d in rdir.iterdir()
+           if d.is_dir() and (m := RENDER_VERSION_RE.match(d.name))]
+    return sorted(out)
+
+
+def next_render_version(project_root, shot_name, step):
+    """Prochaine version de rendu (max des v<NNN> sur disque + 1) pour <shot>/<step>, ou 1
+    si aucun rendu. Pas de manifeste : un rendu est regenerable (tier cache) et son suivi
+    releve de la gestion de prod, hors pipeline technique (principe 4, CLAUDE.md). Pure."""
+    versions = list_render_versions(project_root, shot_name, step)
+    return (max(versions) + 1) if versions else 1
+
+
+def render_output_expression(project_root, shot_name, step, version, env_name=cp.ENV_CACHE):
+    """Expression LITTERALE (variable non resolue) du fichier de sortie EXR d'un rendu :
+    '$PROJ_CACHE/<projet>/render/<shot>/<step>/v<NNN>/<shot>_<step>_v<NNN>.$F4.exr'. Posee
+    telle quelle sur 'outputimage' du usdrender_rop - miroir de cache_dir_expression : le
+    chemin reste relocalisable (tier jetable, $PROJ_CACHE peut changer) plutot que resolu en
+    dur. '$F4' = numero de frame Houdini zero-padde 4 chiffres (une image par frame). Pure."""
+    stem = f"{shot_name}_{step}_v{version:03d}"
+    return (f"${env_name}/{Path(project_root).name}/{RENDER_SUBDIR}/{shot_name}/{step}"
+            f"/v{version:03d}/{stem}.$F4.exr")
+
+
+def deliver_render(project_root, shot_name, step, version):
+    """Copie explicite d'un take de rendu valide (v<NNN> du tier cache) vers
+    delivery/render/<shot>/<step>/v<NNN>/ (permanent). Le <step> est dans le chemin : deux
+    steps livres a la meme version ne doivent PAS fusionner (copytree dirs_exist_ok=True les
+    ecraserait silencieusement). SEUL chemin qui ecrit dans delivery/ : les rendus n'y
+    arrivent que par validation humaine, jamais automatiquement (cf. plan). Refuse si la
+    source est absente ou vide (rien a livrer). Pas de manifeste (gestion de prod + source
+    regenerable). Retourne le Path du dossier livre. Testable (shutil, sans hou)."""
+    project_root = Path(project_root)
+    src = render_dir(project_root, shot_name, step) / f"v{version:03d}"
+    if not src.is_dir() or not any(src.iterdir()):
+        raise FileNotFoundError(
+            f"Rien a livrer : {src} absent ou vide (rendre le step avant de livrer)."
+        )
+    dst = project_root / "delivery" / RENDER_SUBDIR / shot_name / step / f"v{version:03d}"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+    return dst
+
+
 # --------------------------------------------------------------------------------------
 # Actions Houdini (hou requis)
 # --------------------------------------------------------------------------------------
@@ -306,6 +374,90 @@ def sublayer_step_publish(entity_name, step, project_root=None):
             f"Aucun publish 'complete' pour le step '{step}' de '{entity_name}'."
         )
     return _create_sublayer(f"{entity_name}_{step}", path)
+
+
+def _first_shot_camera(node):
+    """Prim path de la premiere camera sous /ROOT/cameras/ dans le stage d'entree de 'node',
+    ou None. Convention shot (docs/usd-convention.md) : les cameras publiees vivent sous
+    /ROOT/cameras/ (distinctes de /cameras/ylos_thumb_cam du thumbnail HDA). Requiert hou."""
+    try:
+        inputs = node.inputs()
+        stage = inputs[0].stage() if inputs and inputs[0] is not None else node.stage()
+    except (AttributeError, IndexError):
+        return None
+    if stage is None:
+        return None
+    cams = stage.GetPrimAtPath("/ROOT/cameras")
+    if not cams or not cams.IsValid():
+        return None
+    for child in cams.GetChildren():
+        if child.GetTypeName() == "Camera":
+            return child.GetPath().pathString
+    return None
+
+
+def render_shot(shot_name, step, camera=None, project_root=None):
+    """Cree et configure (ne lance PAS) un usdrender_rop dans /stage pour rendre <shot>/<step>
+    vers le tier cache ($PROJ_CACHE/.../render/<shot>/<step>/v<NNN>/, version =
+    next_render_version). Entree = display node courant du /stage (le stage compose). trange
+    sur la frame_range du manifeste (schema 2.1), fallback range du hip avec warning si
+    absente. 'camera' = prim path (None -> premiere sous /ROOT/cameras/). 'outputimage' en
+    expression $PROJ_CACHE litterale + $F4 (relocalisable). soho_foreground=1 : sinon
+    node.render() en GUI rend la main a la soumission de husk, pas a la fin du rendu (gotcha
+    CLAUDE.md). Retourne le noeud."""
+    import hou
+    if project_root is None:
+        project_root = active_project()
+    if project_root is None:
+        raise ValueError("Aucun projet actif (~/.ylos/active_project).")
+    project_root = Path(project_root)
+    _, manifest_path = cp._find_asset_entity(project_root, shot_name)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    version = next_render_version(project_root, shot_name, step)
+
+    stage = hou.node("/stage")
+    node = stage.createNode("usdrender_rop", f"render_{shot_name}_{step}")
+    display = stage.displayNode()
+    if display is not None and display is not node:
+        node.setInput(0, display)
+
+    fr = manifest.get("frame_range")
+    if fr:
+        f1, f2 = int(fr["start"]), int(fr["end"])
+    else:
+        rng = hou.playbar.frameRange()
+        f1, f2 = int(rng[0]), int(rng[1])
+        sys.stderr.write(
+            f"[warn] {shot_name} sans frame_range au manifeste - fallback range du hip "
+            f"({f1}-{f2}). Poser create_project.set_frame_range() pour figer la plage.\n"
+        )
+    for name, val in (("trange", 1), ("f1", f1), ("f2", f2), ("f3", 1),
+                      ("soho_foreground", 1)):
+        parm = node.parm(name)
+        if parm is not None:
+            parm.set(val)
+
+    if camera is None:
+        camera = _first_shot_camera(node)
+    if camera:
+        # Sur usdrender_rop le parm camera s'appelle 'override_camera' (verifie par
+        # enumeration hython - node.parm("camera") est None ; meme parm que le build du
+        # HDA sur ce type de node). Warning explicite si introuvable (jamais silencieux :
+        # une camera demandee mais non posee doit se voir, pas disparaitre).
+        parm = node.parm("override_camera")
+        if parm is not None:
+            parm.set(camera)
+        else:
+            sys.stderr.write(
+                f"[warn] usdrender_rop sans parametre 'override_camera' - camera "
+                f"{camera!r} non posee (verifier la version de Houdini).\n"
+            )
+
+    out = node.parm("outputimage")
+    if out is not None:
+        out.set(render_output_expression(project_root, shot_name, step, version))
+    node.moveToGoodPosition()
+    return node
 
 
 # --------------------------------------------------------------------------------------
@@ -498,5 +650,79 @@ def tool_load_step_publish():
     try:
         node = sublayer_step_publish(entity["name"], steps[idx], project_root)
         hou.ui.displayMessage(f"Sublayer cree : {node.path()}")
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+
+
+def tool_render_shot():
+    """Shelf 'Render Shot' : configure un usdrender_rop pour rendre un step de shot vers le
+    tier cache (choix shot + step), sur la frame_range du manifeste, camera auto
+    (/ROOT/cameras/), output relocalisable. Propose de lancer le rendu (soho_foreground : il
+    bloque jusqu'a la fin)."""
+    import hou
+    project_root = active_project()
+    if project_root is None:
+        hou.ui.displayMessage(
+            "Aucun projet actif - definir le projet via l'UI web (ylos_ui.py).",
+            severity=hou.severityType.Warning)
+        return
+    shots = [e for e in list_entities(project_root)
+             if e["family"] == cp.ENTITY_DIR["shot"]]
+    entity = _pick_entity(project_root, "Render Shot", shots)
+    if entity is None:
+        return
+    steps = entity["steps"]
+    idx = _pick_from_list("Render Shot", steps, "Step :")
+    if idx is None:
+        return
+    try:
+        node = render_shot(entity["name"], steps[idx], project_root=project_root)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+        return
+    launch = hou.ui.displayConfirmation(
+        f"usdrender_rop configure : {node.path()}\nLancer le rendu maintenant ?")
+    if launch:
+        try:
+            node.render()
+            hou.ui.displayMessage("Rendu termine (voir $PROJ_CACHE/.../render/).")
+        except hou.OperationFailed as exc:
+            hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+
+
+def tool_deliver_render():
+    """Shelf 'Deliver Render' : copie un take de rendu valide du cache vers delivery/ (choix
+    shot + step + version). SEUL chemin qui ecrit dans delivery/ (validation humaine, cf.
+    deliver_render)."""
+    import hou
+    project_root = active_project()
+    if project_root is None:
+        hou.ui.displayMessage(
+            "Aucun projet actif - definir le projet via l'UI web (ylos_ui.py).",
+            severity=hou.severityType.Warning)
+        return
+    shots = [e for e in list_entities(project_root)
+             if e["family"] == cp.ENTITY_DIR["shot"]]
+    entity = _pick_entity(project_root, "Deliver Render", shots)
+    if entity is None:
+        return
+    steps = entity["steps"]
+    idx = _pick_from_list("Deliver Render", steps, "Step :")
+    if idx is None:
+        return
+    step = steps[idx]
+    versions = list_render_versions(project_root, entity["name"], step)
+    if not versions:
+        hou.ui.displayMessage(
+            f"Aucun rendu pour {entity['name']}/{step} - rendre le step avant de livrer.",
+            severity=hou.severityType.Warning)
+        return
+    labels = [f"v{v:03d}" for v in versions]
+    vidx = _pick_from_list("Deliver Render", labels, "Version a livrer :")
+    if vidx is None:
+        return
+    try:
+        dst = deliver_render(project_root, entity["name"], step, versions[vidx])
+        hou.ui.displayMessage(f"Rendu livre :\n{dst}")
     except (ValueError, FileNotFoundError, OSError) as exc:
         hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)

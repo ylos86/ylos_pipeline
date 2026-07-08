@@ -245,7 +245,9 @@ passe le deux-phases sans polluer `shot_root.usda`.
   littérale + `$F4`). Poser `soho_foreground=1` (gotcha connu : `node.render()` en GUI
   rend la main à la soumission de husk, pas à la fin).
 - `deliver_render(project_root, shot_name, step, version)` : copie explicite du dossier
-  `v<NNN>` validé vers `delivery/render/<shot>/v<NNN>/`. Refuse si la source est vide.
+  `v<NNN>` validé vers `delivery/render/<shot>/<step>/v<NNN>/` (le `<step>` est dans le
+  chemin — décision Incrément 6 : sans lui, deux steps livrés à la même version fusionnent
+  silencieusement via `copytree(dirs_exist_ok=True)`). Refuse si la source est vide.
   Pas d'écriture manifeste (même raison que ci-dessus). Outil shelf `tool_deliver_render()`.
 - Note Apprentice : rendus watermarkés/résolution limitée — suffisant pour valider la
   plomberie, pas pour livrer.

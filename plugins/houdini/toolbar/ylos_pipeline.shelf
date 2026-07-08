@@ -10,6 +10,8 @@
     <memberTool name="ylos_load_shot"/>
     <memberTool name="ylos_load_step_publish"/>
     <memberTool name="ylos_setup_filecache"/>
+    <memberTool name="ylos_render_shot"/>
+    <memberTool name="ylos_deliver_render"/>
   </toolshelf>
 
   <tool name="ylos_save_wip" label="Save WIP" icon="MISC_python">
@@ -46,5 +48,17 @@ ylos_houdini.tool_load_step_publish()]]></script>
     <helpText><![CDATA[Pose 'basedir' du filecache SOP selectionne a $PROJ_CACHE/<projet>/houdini/<entite>/<step>/ (relocalisable) - contexte deduit du hip courant. Caches jetables, versioning natif du filecache.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_setup_filecache()]]></script>
+  </tool>
+
+  <tool name="ylos_render_shot" label="Render Shot" icon="MISC_python">
+    <helpText><![CDATA[Configure un usdrender_rop pour rendre un step de shot vers $PROJ_CACHE/<projet>/render/<shot>/<step>/v<NNN>/ (frame_range du manifeste, camera /ROOT/cameras/, output relocalisable). Propose de lancer le rendu.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_render_shot()]]></script>
+  </tool>
+
+  <tool name="ylos_deliver_render" label="Deliver Render" icon="MISC_python">
+    <helpText><![CDATA[Copie explicite d'un take de rendu valide (cache) vers delivery/render/<shot>/v<NNN>/. Seul chemin qui ecrit dans delivery/ - validation humaine.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_deliver_render()]]></script>
   </tool>
 </shelfDocument>

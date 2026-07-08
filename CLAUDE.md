@@ -193,6 +193,38 @@ Deux contrats géo distincts, jamais confondus (décision figée du plan) :
   un USD plus ancien compose quand même son latest USD. Idem pour un `.glb` (bridge Blender) :
   filtré, jamais empilé en subLayer.
 
+### Rendu Karma → cache, delivery explicite (2026-07-08, Incrément 6 shots)
+Les rendus de shot vivent dans le **tier cache régénérable**, jamais dans la source ; seul un
+geste humain les promeut en livraison. Tout dans `ylos_houdini.py` (le rendu est un flux
+Houdini, pas de la logique métier de `create_project`) :
+- **Convention de sortie** : `$PROJ_CACHE/<projet>/render/<shot>/<step>/v<NNN>/<shot>_<step>_
+  v<NNN>.$F4.exr`. Résolution disque via `render_dir()` (utilise `create_project.resolve_cache()`
+  — logique unique de `$PROJ_CACHE`, comme `entity_cache_dir`) ; expression **littérale** posée
+  sur `outputimage` du ROP via `render_output_expression()` (miroir de `cache_dir_expression` :
+  `$PROJ_CACHE` non résolu + `$F4` = frame Houdini 4 chiffres, relocalisable).
+- **Versioning par scan disque, aucun manifeste** : `list_render_versions()` /
+  `next_render_version()` (max des `v<NNN>` + 1). Un rendu est régénérable **et** son suivi
+  relève de la gestion de prod (principe 4) — hors pipeline technique, donc pas de trace
+  versionnée (même raison que les caches scratch de l'Incrément 5).
+- `render_shot()` (action hou) : `usdrender_rop` dans `/stage`, entrée = display node courant,
+  `trange=1` + f1/f2 depuis `frame_range` du manifeste (fallback range du hip **avec warning**),
+  caméra = premier prim `Camera` sous `/ROOT/cameras/` (convention shot, `docs/usd-convention.md`)
+  sauf argument explicite. Le parm caméra du `usdrender_rop` est **`override_camera`** (vérifié
+  par énumération hython — `node.parm("camera")` est `None` ; même parm que le build du HDA sur
+  ce type de node) : warning explicite si introuvable, jamais de garde silencieuse. **`soho_
+  foreground=1`** posé (gotcha 5 : `node.render()` en GUI rend la main à la soumission de husk,
+  pas à la fin). Shelf « Render Shot » (`tool_render_shot`) configure puis propose de lancer.
+- `deliver_render(project_root, shot, step, version)` : **seul** chemin qui écrit dans
+  `delivery/` — copie explicite (`shutil.copytree`) de `v<NNN>` (cache) vers
+  `delivery/render/<shot>/<step>/v<NNN>/`. Le `<step>` est dans le chemin : deux steps livrés à
+  la même version ne fusionnent pas (`dirs_exist_ok=True` les écraserait sinon). Refuse si la
+  source est absente **ou vide** (rien à livrer).
+  Pas de manifeste. Shelf « Deliver Render » (`tool_deliver_render`). Note Apprentice : rendus
+  watermarkés — plomberie validable, pas livrable en l'état.
+- Tests CI (sans hou) : `tests/test_ylos_houdini.py::RenderCacheTestCase` /
+  `RenderOutputExpressionTestCase` (scan version, copie/refus delivery, expression littérale).
+  L'e2e rendu réel reste manuel (hython, Incrément 7).
+
 ### Thumbnail Blender headless
 `plugins/blender/core/thumbnails.py::render_publish_thumbnail()` — scène/caméra/world
 temporaires, rendu EEVEE réel (256×256, cadrage trois-quarts auto sur la bbox), purgés en
