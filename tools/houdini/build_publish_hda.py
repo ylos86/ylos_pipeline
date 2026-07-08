@@ -1,8 +1,14 @@
 #!/usr/bin/env hython
-"""build_publish_hda.py - construit ylos::publish::0.1 (Lop) par code, hython uniquement.
+"""build_publish_hda.py - construit ylos::publish::0.2 (Lop) par code, hython uniquement.
 
 Rejouable : detruit/reconstruit le noeud de build a chaque run, ecrase le .hdanc cible.
 La definition du HDA vit en git via CE script, pas comme un blob binaire d'edition GUI.
+
+0.2 ajoute le mode step : le parametre `publish_kind` (menu 'lop' + steps de l'entite,
+lus du manifeste) selectionne le sous-arbre de publish. 'lop' = contrat historique
+(instantane complet, `asset_type` requis) ; un nom de step = publish deux-phases par step
+(kind=<step>, alimente la composition asset_root/shot_root). Pas de cohabitation 0.1 : le
+.hdanc est regenere entierement par ce script (cf. build()).
 
 Usage :
     hython tools/houdini/build_publish_hda.py
@@ -13,7 +19,7 @@ import sys
 
 import hou
 
-TYPE_NAME = "ylos::publish::0.1"
+TYPE_NAME = "ylos::publish::0.2"
 TYPE_LABEL = "Ylos Publish"
 BUILD_NODE_NAME = "ylos_publish_build"
 OTL_REL_PATH = os.path.join("plugins", "houdini", "otls", "ylos_publish.hdanc")
@@ -34,6 +40,7 @@ def _python_module_source():
 le locking/versioning/manifest - ne reimplemente jamais cette logique ici (cf. contrat
 pipeline Ylos)."""
 
+import json
 import os
 import shutil
 import sys
@@ -74,6 +81,38 @@ def _cp(node):
     return create_project
 
 
+def kind_menu_items(node):
+    """Genere le menu 'publish_kind' : 'lop' (instantane complet, contrat historique) suivi
+    des steps de l'entite saisie, lus depuis son manifest.json via create_project (source de
+    verite unique - jamais de liste de steps codee en dur dans le HDA). Fallback statique
+    DEFAULT_SHOT_STEPS + DEFAULT_ASSET_STEPS (union ordonnee, doublons retires) si le manifeste
+    n'est pas lisible (entite pas encore saisie, projet introuvable, JSON casse...). Retourne
+    la liste plate [valeur, label, ...] attendue par item_generator_script (mode Replace)."""
+    cp = _cp(node)  # _repo_root derive de la definition installee : toujours resoluble
+
+    steps = None
+    try:
+        project_root = node.evalParm("project_root")
+        asset_name = node.evalParm("asset_name")
+        if project_root and asset_name:
+            _entity_dir, manifest_path = cp._find_asset_entity(project_root, asset_name)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            steps = manifest.get("steps") or None
+    except Exception:
+        steps = None  # entite pas encore saisie / manifeste illisible -> fallback statique
+
+    if not steps:
+        steps = []
+        for s in list(cp.DEFAULT_SHOT_STEPS) + list(cp.DEFAULT_ASSET_STEPS):
+            if s not in steps:
+                steps.append(s)
+
+    items = ["lop", "lop (instantane complet)"]
+    for s in steps:
+        items.extend([s, s])
+    return items
+
+
 def publish(kwargs):
     node = kwargs["node"]
     status_parm = node.parm("status")
@@ -82,20 +121,33 @@ def publish(kwargs):
     project_root = node.evalParm("project_root")
     asset_name = node.evalParm("asset_name")
     asset_type = node.evalParm("asset_type")
+    kind = node.evalParm("publish_kind")
     comment = node.evalParm("version_comment")
 
     try:
-        cp.validate_publish_asset_name(asset_name, asset_type)
-
-        staging_dir, final_dir = cp.allocate_publish_version(
-            project_root, asset_name, asset_type, comment=comment
-        )
+        if kind == "lop":
+            # Contrat historique : instantane complet hors taxonomie de steps. Le nom est
+            # (re)valide, 'asset_type' requis et confronte au manifeste par allocate.
+            cp.validate_publish_asset_name(asset_name, asset_type)
+            staging_dir, final_dir = cp.allocate_publish_version(
+                project_root, asset_name, asset_type, comment=comment
+            )
+        else:
+            # Mode step : publish deux-phases dans step_publishes[kind]. 'asset_type' est
+            # ignore (comme dans allocate_publish_version pour kind != 'lop') ; le nommage de
+            # l'entite est deja garanti a la creation (validate_entity_name), pas de
+            # revalidation ici.
+            staging_dir, final_dir = cp.allocate_publish_version(
+                project_root, asset_name, comment=comment, kind=kind
+            )
         version = cp.publish_version_from_dir(final_dir)
 
-        # layer_stem : nom demande au ROP (savepath), PAS garanti etre le nom reellement ecrit
-        # sur disque (licence Apprentice reecrit en '.usdnc') - cf. finalize_publish_version /
-        # LOP_LAYER_EXTENSIONS, qui resout le stem contre les extensions USD connues.
-        layer_stem = "{}_lop_v{:03d}".format(asset_name, version)
+        # layer_stem = versioned_name calcule par allocate_publish_version
+        # ('{asset}_{kind}_v{NNN}') : identique pour lop et pour un step. Nom demande au ROP
+        # (savepath), PAS garanti etre le nom reellement ecrit sur disque (licence Apprentice
+        # reecrit en '.usdnc') - finalize_publish_version resout le stem contre les extensions
+        # USD connues (PUBLISH_ARTIFACT_EXTENSIONS).
+        layer_stem = "{}_{}_v{:03d}".format(asset_name, kind, version)
         layer_path = os.path.join(str(staging_dir), layer_stem + ".usd")
         thumb_path = os.path.join(str(staging_dir), cp.LOP_THUMB_NAME)
 
@@ -137,7 +189,7 @@ def publish(kwargs):
             expected_artifacts, comment=comment
         )
 
-        status_parm.set("OK - v{:03d} - {}".format(version, result["final_dir"]))
+        status_parm.set("OK - {} v{:03d} - {}".format(kind, version, result["final_dir"]))
     except Exception as exc:
         status_parm.set("ERREUR: {}".format(exc))
         raise
@@ -163,6 +215,23 @@ def _build_parm_template_group(cp):
     g.append(project_root)
 
     g.append(hou.StringParmTemplate("asset_name", "Asset Name", 1))
+
+    # Menu dynamique 'lop' + steps de l'entite saisie (lus du manifeste par kind_menu_items,
+    # source de verite unique). item_generator_script delegue au module embarque via
+    # hdaModule() : la liste de steps n'est jamais codee en dur dans la definition. Defaut
+    # 'lop' -> compat totale avec le contrat historique (un noeud fraichement cree publie en
+    # lop comme 0.1). Mode Replace : la valeur DOIT etre un des items generes.
+    # Le script de menu est evalue en mode 'eval' (UNE expression, pas un bloc) : ni 'return X'
+    # ni 'menu = X' ne sont valides (verifie empiriquement, SyntaxError sur les deux). On donne
+    # donc une expression nue qui produit la liste plate [token, label, ...] ; 'kwargs' (avec
+    # 'node') est fourni dans le namespace d'evaluation.
+    g.append(hou.StringParmTemplate(
+        "publish_kind", "Publish Kind", 1,
+        default_value=("lop",),
+        menu_type=hou.menuType.Normal,
+        item_generator_script="kwargs['node'].hdaModule().kind_menu_items(kwargs['node'])",
+        item_generator_script_language=hou.scriptLanguage.Python,
+    ))
 
     g.append(hou.StringParmTemplate(
         "asset_type", "Asset Type", 1,
@@ -208,6 +277,12 @@ def build():
 
     otl_path = os.path.join(repo_root, OTL_REL_PATH)
     os.makedirs(os.path.dirname(otl_path), exist_ok=True)
+
+    # Pas de cohabitation 0.1/0.2 : hda_def.save() sur une librairie existante AJOUTE la
+    # definition (les deux versions cohabiteraient dans le meme .hdanc, TAB menu ambigu). On
+    # repart d'un fichier neuf - le script est la source de verite, le blob est jetable.
+    if os.path.exists(otl_path):
+        os.remove(otl_path)
 
     stage = hou.node("/stage")
 

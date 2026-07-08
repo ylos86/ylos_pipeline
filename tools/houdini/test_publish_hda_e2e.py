@@ -1,6 +1,9 @@
 #!/usr/bin/env hython
-"""test_publish_hda_e2e.py - reproduit un noeud ylos::publish::0.1 EXACTEMENT comme le TAB
+"""test_publish_hda_e2e.py - reproduit un noeud ylos::publish::0.2 EXACTEMENT comme le TAB
 menu de Houdini le ferait, puis appelle le callback publish tel quel.
+
+MANUEL / HYTHON UNIQUEMENT - hors CI (necessite Houdini + le HDA installe). La CI
+(`python3 -m unittest`, sans Houdini) ne charge jamais ce fichier (`import hou` top-level).
 
 Difference deliberee avec un test "pratique" : on ne pre-remplit AUCUN parametre a la main,
 sauf `asset_name` (le seul que l'utilisateur renseigne manuellement dans le workflow reel).
@@ -32,9 +35,14 @@ import hou
 _HERE = os.path.realpath(__file__)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 
-TYPE_NAME = "ylos::publish::0.1"
+TYPE_NAME = "ylos::publish::0.2"
 ASSET_TYPE = "CHARACTER"          # doit matcher ASSET_TYPES[0] (default_value reel du parm)
 ASSET_NAME = "CHARACTER_Test_Default"
+
+# Mode step (0.2) : fixture shot + publish d'un step qui produit un layer USD.
+SHOT_NAME = "ANIMATION_Test_Default"   # prefixe = un SHOT_TYPES ; distinct du step publie
+SHOT_TYPE = "ANIMATION"
+SHOT_STEP = "lighting"                 # un DEFAULT_SHOT_STEPS, produit bien un layer (pas comp/2D)
 
 
 def fail(msg):
@@ -234,9 +242,131 @@ def main():
         shutil.rmtree(tmp_base, ignore_errors=True)
 
 
+def test_step_publish_shot():
+    """Mode step (0.2) : sur une fixture shot, publier `publish_kind=lighting` doit deposer
+    le layer dans shots/<shot>/lighting/publish/, ecrire step_publishes['lighting'] au
+    manifeste (statut complete) et declencher la recomposition de shot_root.usda
+    (refresh_entity_root, kind != 'lop'). Meme reproduction fidele du TAB menu que main() :
+    seuls asset_name (le shot) et publish_kind sont poses a la main (les deux valeurs que
+    l'utilisateur choisit dans le workflow step reel) ; asset_type garde son defaut et est
+    ignore par le callback en mode step."""
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+    import create_project as cp
+
+    tmp_base = tempfile.mkdtemp(prefix="ylos_publish_step_e2e_")
+    fake_home = os.path.join(tmp_base, "fake_home")
+    os.makedirs(os.path.join(fake_home, ".ylos"), exist_ok=True)
+
+    node = None
+    real_home = os.environ.get("HOME")
+    try:
+        info = cp.create(
+            "E2EStepTest",
+            root=os.path.join(tmp_base, "projects"),
+            cache=os.path.join(tmp_base, "cache"),
+        )
+        project_source = info["source"]
+        cp.create_asset(project_source, SHOT_NAME, entity_type="shot", asset_type=SHOT_TYPE)
+
+        active_project_file = os.path.join(fake_home, ".ylos", "active_project")
+        with open(active_project_file, "w", encoding="utf-8") as f:
+            f.write(project_source)
+
+        stage = hou.node("/stage")
+        try:
+            node = stage.createNode(TYPE_NAME)
+        except hou.OperationFailed as exc:
+            fail(
+                "type '{}' introuvable (package Houdini non charge ? "
+                "cf. plugins/houdini/ylos.json) : {}".format(TYPE_NAME, exc)
+            )
+
+        os.environ["HOME"] = fake_home
+
+        # Les deux seuls parms poses a la main dans le workflow step : le shot et le step.
+        node.parm("asset_name").set(SHOT_NAME)
+        node.parm("publish_kind").set(SHOT_STEP)
+
+        # Le menu publish_kind doit exposer le step (lu du manifeste du shot par
+        # kind_menu_items) - sinon la valeur posee ne matcherait aucun item.
+        kind_items = node.parm("publish_kind").menuItems()
+        if SHOT_STEP not in kind_items:
+            fail(
+                "publish_kind ne propose pas {!r} (menu genere = {!r} ; manifeste du shot "
+                "non lu par kind_menu_items ?)".format(SHOT_STEP, kind_items)
+            )
+        if node.evalParm("publish_kind") != SHOT_STEP:
+            fail("publish_kind = {!r}, attendu {!r}".format(
+                node.evalParm("publish_kind"), SHOT_STEP))
+
+        try:
+            node.parm("publish").pressButton()
+        except hou.OperationFailed as exc:
+            print("[warn] pressButton a leve : {}".format(exc))
+
+        status_after = node.evalParm("status")
+        if not status_after.startswith("OK"):
+            fail("callback publish (step) en erreur - status = {!r}".format(status_after))
+
+        # 1. Le layer atterrit sous le sous-arbre du step, PAS sous lop/.
+        publish_dir = os.path.join(
+            project_source, "shots", SHOT_NAME, SHOT_STEP, "publish"
+        )
+        if not os.path.isdir(publish_dir):
+            fail("aucun repertoire de publish step sur disque : {}".format(publish_dir))
+        versions = sorted(os.listdir(publish_dir))
+        if not versions:
+            fail("repertoire de publish step vide : {}".format(publish_dir))
+        version_dir = os.path.join(publish_dir, versions[-1])
+        produced = sorted(os.listdir(version_dir))
+        if not [n for n in produced if n != cp.LOP_THUMB_NAME]:
+            fail("aucun layer USD ecrit dans {} (produced={!r})".format(version_dir, produced))
+        if cp.LOP_THUMB_NAME not in produced:
+            fail("aucun thumbnail dans {} (produced={!r})".format(version_dir, produced))
+
+        # 2. Le manifeste enregistre l'entree sous step_publishes[step], statut complete.
+        manifest_path = Path(project_source) / "shots" / SHOT_NAME / cp.ASSET_MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        step_entries = manifest.get(cp.STEP_PUBLISHES_KEY, {}).get(SHOT_STEP)
+        if not step_entries:
+            fail(
+                "step_publishes[{!r}] absent/vide au manifeste (kind mal route ?) : {}".format(
+                    SHOT_STEP, manifest.get(cp.STEP_PUBLISHES_KEY))
+            )
+        if step_entries[-1].get("status") != "complete":
+            fail("derniere entree step_publishes[{!r}] non 'complete' : {!r}".format(
+                SHOT_STEP, step_entries[-1]))
+        # Le publish LOP ne doit PAS avoir ete alimente en mode step.
+        if manifest.get(cp.LOP_PUBLISHES_KEY):
+            fail("lop_publishes non vide apres un publish step : {!r}".format(
+                manifest.get(cp.LOP_PUBLISHES_KEY)))
+
+        # 3. shot_root.usda recompose par finalize (kind != 'lop' -> refresh_entity_root).
+        shot_root = Path(project_source) / "shots" / SHOT_NAME / cp.SHOT_ROOT_NAME
+        if not shot_root.is_file():
+            fail("shot_root.usda non recompose apres le publish step : {}".format(shot_root))
+
+        print("[ok] status         : {}".format(status_after))
+        print("[ok] version publiee: {}".format(version_dir))
+        print("[ok] step_publishes : {}".format(step_entries[-1]))
+        print("[ok] shot_root.usda : {}".format(shot_root))
+        print("[PASS] test_step_publish_shot")
+
+    finally:
+        if real_home is not None:
+            os.environ["HOME"] = real_home
+        else:
+            os.environ.pop("HOME", None)
+        if node is not None:
+            node.destroy()
+        shutil.rmtree(tmp_base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     # Contrat de completude d'abord : rapide, pas de rendu Houdini reel, feedback immediat.
-    # Puis l'e2e complet avec le vrai HDA/rendu. Fail-fast (cf. fail()) : si le premier
-    # echoue, le second ne se lance pas.
+    # Puis l'e2e complet avec le vrai HDA/rendu (mode lop, puis mode step). Fail-fast
+    # (cf. fail()) : si un test echoue, les suivants ne se lancent pas.
     test_finalize_rejects_missing_thumb()
     main()
+    test_step_publish_shot()

@@ -146,6 +146,26 @@ variantes. La cible est ce composeur unique ; les **variantes** en seront une ex
 (le portage n'a pas été fait ici pour ne rien casser côté Blender). Convention shot figée dans
 `docs/usd-convention.md` (section 6).
 
+### HDA `ylos::publish::0.2` — mode step (2026-07-08, Incrément 3 shots)
+Le HDA (`tools/houdini/build_publish_hda.py`, source de vérité scriptée — le `.hdanc` est
+régénéré, **jamais** édité en GUI) ne publie plus seulement en `kind="lop"`. Un paramètre
+`publish_kind` (menu **dynamique** : `lop` + les steps de l'entité saisie, lus de son
+`manifest.json` par `kind_menu_items()` via `create_project` — source unique, jamais de liste
+codée en dur ; fallback statique `DEFAULT_SHOT_STEPS + DEFAULT_ASSET_STEPS` si le manifeste est
+illisible) sélectionne le sous-arbre. `lop` = contrat historique inchangé (instantané complet,
+`asset_type` requis + validé). Un nom de step → `allocate_publish_version(..., kind=<step>)`,
+`asset_type` **ignoré** (nommage déjà garanti à la création), stem `f"{asset}_{step}_v{NNN}"`
+(= `versioned_name`, identique lop/step), `expected_artifacts` inchangé (artefact + thumbnail
+requis). Le publish de step alimente `step_publishes[step]` et déclenche la recomposition
+`shot_root.usda`/`asset_root.usda` (finalize → `refresh_entity_root`, `kind != "lop"`). Le menu
+délègue au module embarqué via `hdaModule()` (jamais de logique dupliquée dans la définition).
+**Pas de cohabitation 0.1** : `build()` supprime le `.hdanc` existant avant de reconstruire (un
+`save()` sur une librairie existante y *ajouterait* la définition). Les 5 gotchas LOP HDA
+(`template_node=`, paramètres promus, `savestyle`, `soho_foreground`) restent intégralement
+appliqués. e2e `tools/houdini/test_publish_hda_e2e.py::test_step_publish_shot` (hython, manuel,
+**hors CI**). Régénération obligatoire après tout changement du build :
+`hython tools/houdini/build_publish_hda.py`.
+
 ### Thumbnail Blender headless
 `plugins/blender/core/thumbnails.py::render_publish_thumbnail()` — scène/caméra/world
 temporaires, rendu EEVEE réel (256×256, cadrage trois-quarts auto sur la bbox), purgés en
