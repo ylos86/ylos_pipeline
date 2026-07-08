@@ -118,11 +118,15 @@ LOP_DIR_NAME = "lop"
 LOP_PUBLISH_DIR_NAME = "publish"
 LOP_STAGING_DIR_NAME = ".staging"
 LOP_THUMB_NAME = "thumb.png"
-PUBLISH_ARTIFACT_EXTENSIONS = (".usd", ".usdc", ".usda", ".usdnc", ".glb")  # .usdnc =
-                                                              # watermark Apprentice, jamais
-                                                              # suppose a l'avance (cf. gotcha
-                                                              # extensions, LOP HDA) ; .glb =
-                                                              # bridge Blender/Three.js
+# Extensions USD composables (layer d'assemblage). '.usdnc' = watermark Apprentice, jamais
+# suppose a l'avance (cf. gotcha extensions, LOP HDA). Un cache consommable ou un GLB (cf.
+# PUBLISH_ARTIFACT_EXTENSIONS) n'en fait PAS partie : il passe le contrat deux-phases mais
+# n'entre JAMAIS dans la composition subLayers de asset_root/shot_root (cf. _is_usd_layer).
+USD_LAYER_EXTENSIONS = (".usd", ".usdc", ".usda", ".usdnc")
+# Extensions d'artefact acceptees par le contrat deux-phases (_missing_artifacts) : les layers
+# USD + '.glb' (bridge Blender/Three.js) + caches consommables FX publies en kind=step
+# ('.vdb', '.bgeo.sc' suffixe double, '.abc'). Ces quatre derniers ne sont PAS des layers USD.
+PUBLISH_ARTIFACT_EXTENSIONS = USD_LAYER_EXTENSIONS + (".glb", ".vdb", ".bgeo.sc", ".abc")
 LOP_PUBLISHES_KEY = "lop_publishes"
 # Publishes DCC par step (Blender USD/GLB...), generalisation du contrat deux-phases LOP a
 # tout 'kind' != 'lop' (cf. allocate_publish_version). {step: [version-entry, ...]} - cle
@@ -238,6 +242,21 @@ def _make_tree(base, tree):
     base.mkdir(parents=True, exist_ok=True)
     for rel in tree:
         (base / rel).mkdir(parents=True, exist_ok=True)
+
+
+def entity_cache_dir(project_root, entity_name, step, label):
+    """Dossier de cache scratch d'un step : $PROJ_CACHE/<projet>/houdini/<entite>/<step>/
+    <label>/ (tier regenerable, cf. CLAUDE.md - stockage 3 tiers). Logique UNIQUE de
+    resolution (principe 5) : le bridge Houdini pose sur le noeud filecache l'EXPRESSION
+    litterale '$PROJ_CACHE/...' (relocalisable, cf. ylos_houdini.cache_dir_expression),
+    tandis que le chemin resolu (cette fonction) vit ici. Cree les parents (mkdir), retourne
+    le Path. Aucune trace au manifeste : un cache scratch est jetable, son versioning est
+    celui natif du filecache (v1/v2...), pas un contrat deux-phases."""
+    _validate_segment(label)
+    cache_dir = (resolve_cache() / Path(project_root).name / "houdini"
+                 / entity_name / step / label)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 
 def _ver(path):
@@ -489,6 +508,15 @@ def build_shot_root(name, latest, frame_range=None):
     return "\n".join(lines) + "\n"
 
 
+def _is_usd_layer(path):
+    """True si 'path' pointe un layer USD composable (extension USD, watermark Apprentice
+    inclus). Un cache consommable (.vdb/.bgeo.sc/.abc) ou un GLB publie en kind=step passe le
+    contrat deux-phases mais n'est PAS un layer USD : il n'entre jamais dans la composition
+    subLayers (asset_root/shot_root) - filtre explicite dans _latest_by_step (plan Increment 5).
+    Un dossier de sequence (artefact = nom de dossier, sans extension) n'est pas USD non plus."""
+    return str(path).endswith(USD_LAYER_EXTENSIONS)
+
+
 def _latest_from_publishes(publishes):
     """Retourne {step: chemin_latest} depuis manifest.publishes (dict step -> [paths])."""
     return {step: max(paths, key=_ver) for step, paths in publishes.items() if paths}
@@ -505,8 +533,12 @@ def _latest_by_step(manifest):
     taxonomie de steps, il n'entre pas dans la composition subLayers."""
     latest = _latest_from_publishes(manifest.get("publishes", {}))
     for step, entries in manifest.get(STEP_PUBLISHES_KEY, {}).items():
+        # Seuls les layers USD entrent en composition : un cache consommable (.vdb/.bgeo.sc/
+        # .abc) ou un GLB publie en kind=step est filtre AVANT le max (un step avec un VDB plus
+        # recent mais un USD plus ancien compose quand meme son latest USD, pas le VDB).
         complete = [e for e in entries
-                    if e.get("status") == "complete" and e.get("artifact")]
+                    if e.get("status") == "complete" and e.get("artifact")
+                    and _is_usd_layer(e["artifact"])]
         if complete:
             latest[step] = max(complete, key=lambda e: e["version"])["artifact"]
     return latest
@@ -954,10 +986,11 @@ def allocate_publish_version(project_root, asset_name, asset_type=None, comment=
 
 def _missing_artifacts(staging_dir, expected_artifacts):
     """Verifie que chaque entree de expected_artifacts existe et est non-vide dans staging_dir.
-    Une entree avec un '.' est un nom exact (ex: 'thumb.png'). Une entree sans '.' est un stem
-    d'artefact (layer USD ou GLB) : matchee contre PUBLISH_ARTIFACT_EXTENSIONS (jamais
-    d'extension supposee a l'avance - licence Apprentice ecrit '.usdnc', licence commerciale
-    '.usd'/'.usdc'/'.usda', bridge Blender ecrit '.glb').
+    Une entree avec un '.' est un nom exact (ex: 'thumb.png') - branche PRIORITAIRE, jamais
+    interpretee comme dossier. Une entree sans '.' est soit un stem d'artefact (layer USD, GLB
+    ou cache .vdb/.bgeo.sc/.abc), matchee contre PUBLISH_ARTIFACT_EXTENSIONS (jamais d'extension
+    supposee a l'avance - Apprentice ecrit '.usdnc', commerciale '.usd'/'.usdc'/'.usda', Blender
+    '.glb'), soit un dossier de sequence (sim multi-frames) - accepte s'il existe et est non-vide.
 
     Retourne la liste des entrees manquantes/vides (liste vide = tout est present)."""
     missing = []
@@ -972,7 +1005,9 @@ def _missing_artifacts(staging_dir, expected_artifacts):
                 if (staging_dir / f"{artifact}{ext}").is_file()
                 and (staging_dir / f"{artifact}{ext}").stat().st_size > 0
             ]
-            if not matches:
+            seq_dir = staging_dir / artifact
+            seq_ok = seq_dir.is_dir() and any(seq_dir.iterdir())
+            if not matches and not seq_ok:
                 missing.append(artifact)
     return missing
 
@@ -1033,7 +1068,10 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         # licence Apprentice, Houdini ecrit '.usdnc' (watermarke) et non '.usd' (cf. contexte
         # hython/licence). Se fier au disque evite un manifeste qui pointe vers un fichier
         # inexistant selon la licence/le DCC qui a publie.
-        produced = sorted(p.name for p in final_dir.iterdir() if p.is_file())
+        # Fichiers ET dossiers : un artefact de sequence (sim multi-frames, cf.
+        # _missing_artifacts mode dossier) est un sous-dossier, jamais un fichier - l'ignorer
+        # laisserait 'artifact' a None au manifeste. L'entree pointe alors le dossier.
+        produced = sorted(p.name for p in final_dir.iterdir() if p.is_file() or p.is_dir())
         thumbs = [n for n in produced if n == LOP_THUMB_NAME]
         artifacts = [n for n in produced if n != LOP_THUMB_NAME]
         rel_dir = f"{kind_dirname}/{LOP_PUBLISH_DIR_NAME}/{final_dir.name}"

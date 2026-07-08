@@ -166,6 +166,33 @@ appliqués. e2e `tools/houdini/test_publish_hda_e2e.py::test_step_publish_shot` 
 **hors CI**). Régénération obligatoire après tout changement du build :
 `hython tools/houdini/build_publish_hda.py`.
 
+### Convention cache + caches consommables (2026-07-08, Incrément 5 shots)
+Deux contrats géo distincts, jamais confondus (décision figée du plan) :
+- **Caches scratch (jetables)** : `$PROJ_CACHE/<projet>/houdini/<entité>/<step>/<label>/`
+  (tier régénérable, NVMe interne). Résolution unique dans
+  `create_project.entity_cache_dir(project_root, entity_name, step, label)` (stdlib, `mkdir`
+  parents, `label` validé par `_validate_segment`). Le bridge Houdini
+  (`ylos_houdini.tool_setup_filecache()` — shelf « Setup File Cache ») pose sur le `basedir`
+  du filecache SOP sélectionné l'**expression littérale** `$PROJ_CACHE/<projet>/houdini/
+  <entité>/<step>/` (via `cache_dir_expression()`, pure, miroir cache d'`env_relative` :
+  relocalisable, variable jamais résolue en dur). Versioning v1/v2 = celui **natif du
+  filecache**, aucun manifeste (une donnée jetable n'a pas de trace versionnée). Contexte
+  déduit du hip courant (`parse_wip_context`).
+- **Caches consommables (FX publié pour le lighting / un autre DCC)** = contrat deux-phases
+  `kind=<step>` dans la **source** (permanent), jamais dans le cache. `PUBLISH_ARTIFACT_EXTENSIONS`
+  gagne `.vdb`, `.bgeo.sc` (suffixe **double**, résolu par concaténation `f"{stem}{ext}"` dans
+  `_missing_artifacts`, jamais par split), `.abc`. Une **séquence** (sim multi-frames) peut être
+  un **sous-dossier** de `staging_dir` : `_missing_artifacts` accepte un dossier non vide (la
+  branche « nom exact = contient un point », ex `thumb.png`, reste **prioritaire** — jamais
+  interprétée comme dossier), et `finalize_publish_version()` liste fichiers **et** dossiers
+  (`p.is_file() or p.is_dir()`) sinon `artifact` resterait `None` ; l'entrée manifeste `artifact`
+  pointe alors le dossier.
+- **Un cache publié n'entre JAMAIS dans la composition** `shot_root`/`asset_root` (ce n'est pas
+  un layer USD). `_latest_by_step()` filtre explicitement par `_is_usd_layer()` (extension dans
+  `USD_LAYER_EXTENSIONS`) **avant** le `max` par version : un step avec un VDB plus récent mais
+  un USD plus ancien compose quand même son latest USD. Idem pour un `.glb` (bridge Blender) :
+  filtré, jamais empilé en subLayer.
+
 ### Thumbnail Blender headless
 `plugins/blender/core/thumbnails.py::render_publish_thumbnail()` — scène/caméra/world
 temporaires, rendu EEVEE réel (256×256, cadrage trois-quarts auto sur la bbox), purgés en

@@ -97,6 +97,17 @@ class EnvRelativeTestCase(unittest.TestCase):
         self.assertEqual(yh.env_relative(other), str(other))
 
 
+class CacheDirExpressionTestCase(unittest.TestCase):
+    """Increment 5 : expression litterale $PROJ_CACHE/<projet>/houdini/<entite>/<step>/ posee
+    sur le basedir d'un filecache (relocalisable, variable non resolue). Pure, sans hou."""
+
+    def test_expression_litterale_relocalisable(self):
+        expr = yh.cache_dir_expression("/vol/ext/MyProj", "FX_Sq010_Default", "fx")
+        self.assertEqual(expr, "$PROJ_CACHE/MyProj/houdini/FX_Sq010_Default/fx/")
+        # la variable reste litterale : aucun chemin absolu resolu ne fuit dans l'expression.
+        self.assertNotIn("/vol/ext", expr)
+
+
 class RealProjectTestCase(unittest.TestCase):
     """Projet + entites reels (create()/create_asset()) - pour tout ce qui lit un
     project.json / manifest.json sur disque : parse_wip_context, list_wip_versions,

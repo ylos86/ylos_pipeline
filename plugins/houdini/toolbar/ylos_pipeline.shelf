@@ -9,6 +9,7 @@
     <memberTool name="ylos_load_asset"/>
     <memberTool name="ylos_load_shot"/>
     <memberTool name="ylos_load_step_publish"/>
+    <memberTool name="ylos_setup_filecache"/>
   </toolshelf>
 
   <tool name="ylos_save_wip" label="Save WIP" icon="MISC_python">
@@ -39,5 +40,11 @@ ylos_houdini.tool_load_shot()]]></script>
     <helpText><![CDATA[Sublayer le latest publish d'un step (entite + step au choix) dans /stage - composer manuellement quand on ne veut pas tout le shot_root.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_load_step_publish()]]></script>
+  </tool>
+
+  <tool name="ylos_setup_filecache" label="Setup File Cache" icon="MISC_python">
+    <helpText><![CDATA[Pose 'basedir' du filecache SOP selectionne a $PROJ_CACHE/<projet>/houdini/<entite>/<step>/ (relocalisable) - contexte deduit du hip courant. Caches jetables, versioning natif du filecache.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_setup_filecache()]]></script>
   </tool>
 </shelfDocument>

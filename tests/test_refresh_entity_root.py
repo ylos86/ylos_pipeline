@@ -118,6 +118,30 @@ class BuildRootPureTestCase(unittest.TestCase):
             {"version": 1, "status": "complete", "layer": "lop/publish/v001/x.usdnc"}]}
         self.assertEqual(cp._latest_by_step(manifest), {})
 
+    def test_latest_by_step_filters_non_usd_artifacts(self):
+        # Increment 5 : un cache consommable (VDB/bgeo/abc) ou GLB publie en kind=step passe le
+        # deux-phases mais n'entre JAMAIS en composition. Le filtre USD s'applique AVANT le max :
+        # un step avec un VDB plus recent (v002) mais un USD plus ancien (v001) compose l'USD.
+        manifest = {
+            "step_publishes": {
+                "fx": [
+                    {"version": 1, "status": "complete",
+                     "artifact": "fx/publish/S_fx_v001/S_fx_v001.usda"},
+                    {"version": 2, "status": "complete",
+                     "artifact": "fx/publish/S_fx_v002/S_fx_v002.vdb"},
+                ],
+                "modeling": [
+                    {"version": 1, "status": "complete",
+                     "artifact": "modeling/publish/S_modeling_v001/S_modeling_v001.glb"},
+                ],
+            },
+        }
+        latest = cp._latest_by_step(manifest)
+        # fx : le VDB v002 est filtre, l'USD v001 compose.
+        self.assertEqual(latest["fx"], "fx/publish/S_fx_v001/S_fx_v001.usda")
+        # modeling : GLB seul -> aucun layer USD -> step absent de la composition.
+        self.assertNotIn("modeling", latest)
+
 
 class AssetRecompositionTestCase(_BaseCase):
     """finalize_publish_version(kind=step) recompose asset_root.usda."""

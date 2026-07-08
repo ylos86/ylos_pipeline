@@ -192,6 +192,16 @@ def shot_root_path(project_root, shot_name):
     return path
 
 
+def cache_dir_expression(project_root, entity_name, step, env_name=cp.ENV_CACHE):
+    """Expression LITTERALE (variable non resolue) du dossier de cache scratch d'un step :
+    '$PROJ_CACHE/<projet>/houdini/<entite>/<step>/'. Posee telle quelle sur le 'basedir' d'un
+    filecache SOP - miroir cote cache de env_relative() : le chemin reste relocalisable (le
+    NVMe interne peut changer, le projet se deplace) plutot que resolu en dur. Le versioning
+    v1/v2 des caches jetables reste celui natif du filecache (aucun manifeste). La resolution
+    reelle du chemin vit dans create_project.entity_cache_dir (logique unique). Pure (sans hou)."""
+    return f"${env_name}/{Path(project_root).name}/houdini/{entity_name}/{step}/"
+
+
 def env_relative(path, env_name=cp.ENV_ROOT):
     """'$PROJ_ROOT/<relatif>' si 'path' vit sous $PROJ_ROOT - les scenes referencent via
     env, jamais un chemin absolu en dur (principe 1, CLAUDE.md) : le projet reste
@@ -430,6 +440,42 @@ def tool_load_shot():
         hou.ui.displayMessage(f"Sublayer cree : {node.path()}")
     except (ValueError, FileNotFoundError, OSError) as exc:
         hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+
+
+def tool_setup_filecache():
+    """Shelf 'Setup File Cache' : pose 'basedir' du/des filecache SOP selectionne(s) a
+    l'expression $PROJ_CACHE/<projet>/houdini/<entite>/<step>/ (relocalisable, cf.
+    cache_dir_expression). Contexte deduit du hip courant (parse_wip_context) - un cache est
+    toujours ecrit dans le contexte de l'entite/step ouvert. Le versioning v1/v2 reste celui
+    natif du filecache (donnee jetable, aucun manifeste)."""
+    import hou
+    ctx = parse_wip_context(hou.hipFile.path())
+    if ctx is None:
+        hou.ui.displayMessage(
+            "Hip courant hors pipeline (.../<entite>/<step>/wip/) - impossible de deduire "
+            "l'entite/step du cache. Ouvrir un WIP d'abord.",
+            severity=hou.severityType.Warning)
+        return
+    project_root, entity_name, step = ctx
+    selected = hou.selectedNodes()
+    if not selected:
+        hou.ui.displayMessage(
+            "Selectionner le noeud 'filecache' SOP a configurer.",
+            severity=hou.severityType.Warning)
+        return
+    expr = cache_dir_expression(project_root, entity_name, step)
+    done = []
+    for node in selected:
+        parm = node.parm("basedir")
+        if parm is not None:
+            parm.set(expr)
+            done.append(node)
+    if not done:
+        hou.ui.displayMessage(
+            "Aucun noeud selectionne n'a de parametre 'basedir' (filecache SOP attendu).",
+            severity=hou.severityType.Warning)
+        return
+    hou.ui.displayMessage(f"basedir pose sur {len(done)} noeud(s) :\n{expr}")
 
 
 def tool_load_step_publish():

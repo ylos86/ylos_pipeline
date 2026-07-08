@@ -12,6 +12,7 @@ Usage : python3 tests/test_create_project.py
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -374,6 +375,124 @@ class TestFrameRange(TempProjectTestCase):
         fr = cp.set_frame_range(self.project, self.SHOT, 1001, 1024)
         self.assertEqual(fr["fps"], cp.DEFAULT_SCENE["fps"])
         self.assertIn("startTimeCode = 1001", self._shot_root(self.SHOT))
+
+
+class TestCacheAndConsumablePublish(TempProjectTestCase):
+    """Increment 5 : convention cache (entity_cache_dir) + caches consommables publies en
+    deux-phases (extensions .vdb/.bgeo.sc/.abc, sequences en dossier) sans polluer la compo."""
+
+    SHOT = "FX_Sq010_Default"
+
+    def _create_shot(self):
+        cp.create_asset(self.project, self.SHOT, entity_type="shot", asset_type="FX")
+
+    def test_entity_cache_dir_path_and_mkdir(self):
+        # $PROJ_CACHE resolu depuis l'env (create() a pose <cache>/<projet>) - on cible la
+        # meme racine cache que le projet pour un chemin coherent.
+        os.environ[cp.ENV_CACHE] = self._tmp + "/cache"
+        self.addCleanup(os.environ.pop, cp.ENV_CACHE, None)
+        d = cp.entity_cache_dir(self.project, self.SHOT, "fx", "explosion")
+        expected = (Path(self._tmp) / "cache" / "proj" / "houdini"
+                    / self.SHOT / "fx" / "explosion")
+        self.assertEqual(d.resolve(), expected.resolve())
+        self.assertTrue(d.is_dir())  # parents crees
+
+    def test_entity_cache_dir_validates_label(self):
+        os.environ[cp.ENV_CACHE] = self._tmp + "/cache"
+        self.addCleanup(os.environ.pop, cp.ENV_CACHE, None)
+        with self.assertRaises(ValueError):
+            cp.entity_cache_dir(self.project, self.SHOT, "fx", "bad/label")
+
+    def test_new_extensions_accepted_by_two_phase(self):
+        # Un cache consommable VDB passe le contrat deux-phases (artefact + thumbnail).
+        self._create_shot()
+        staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="fx")
+        version = cp.publish_version_from_dir(final)
+        stem = f"{self.SHOT}_fx_v{version:03d}"
+        (staging / f"{stem}.vdb").write_bytes(b"vdb-data")
+        (staging / "thumb.png").write_bytes(b"png")
+        info = cp.finalize_publish_version(
+            self.project, self.SHOT, staging, final, version,
+            expected_artifacts=[stem, "thumb.png"])
+        m = json.loads((Path(info["manifest"])).read_text(encoding="utf-8"))
+        entry = m["step_publishes"]["fx"][-1]
+        self.assertTrue(entry["artifact"].endswith(f"{stem}.vdb"))
+
+    def test_bgeo_sc_double_suffix_resolved(self):
+        # Le suffixe double .bgeo.sc doit resoudre par concatenation f"{stem}{ext}", pas par
+        # split d'extension (_missing_artifacts). Un stem sans le fichier -> manquant.
+        d = Path(self._tmp) / "stg_bgeo"
+        d.mkdir()
+        (d / "cache_fx_v001.bgeo.sc").write_bytes(b"geo")
+        self.assertEqual(cp._missing_artifacts(d, ["cache_fx_v001"]), [])
+        self.assertEqual(cp._missing_artifacts(d, ["absent"]), ["absent"])
+
+    def test_missing_artifacts_sequence_folder(self):
+        # Un artefact peut etre un DOSSIER de sequence (non vide) ; vide ou absent -> manquant.
+        d = Path(self._tmp) / "stg_seq"
+        d.mkdir()
+        seq = d / "explosion_fx_v001"
+        seq.mkdir()
+        (seq / "explosion.0001.vdb").write_bytes(b"f1")
+        (d / "thumb.png").write_bytes(b"png")
+        self.assertEqual(
+            cp._missing_artifacts(d, ["explosion_fx_v001", "thumb.png"]), [])
+        # dossier vide -> manquant
+        (d / "empty_v001").mkdir()
+        self.assertEqual(cp._missing_artifacts(d, ["empty_v001"]), ["empty_v001"])
+
+    def test_missing_artifacts_dot_entry_stays_exact_file(self):
+        # La branche '.' (nom exact) reste prioritaire : un dossier 'thumb.png' ne satisfait
+        # PAS l'attente d'un fichier thumb.png.
+        d = Path(self._tmp) / "stg_dot"
+        d.mkdir()
+        (d / "thumb.png").mkdir()  # dossier homonyme, pas un fichier
+        self.assertEqual(cp._missing_artifacts(d, ["thumb.png"]), ["thumb.png"])
+
+    def test_sequence_publish_finalize_points_to_folder(self):
+        # finalize doit decouvrir le dossier de sequence (produced liste aussi les dossiers)
+        # et pointer 'artifact' dessus.
+        self._create_shot()
+        staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="fx")
+        version = cp.publish_version_from_dir(final)
+        stem = f"{self.SHOT}_fx_v{version:03d}"
+        seq = staging / stem
+        seq.mkdir()
+        (seq / f"{stem}.0001.vdb").write_bytes(b"f1")
+        (seq / f"{stem}.0002.vdb").write_bytes(b"f2")
+        (staging / "thumb.png").write_bytes(b"png")
+        info = cp.finalize_publish_version(
+            self.project, self.SHOT, staging, final, version,
+            expected_artifacts=[stem, "thumb.png"])
+        m = json.loads(Path(info["manifest"]).read_text(encoding="utf-8"))
+        entry = m["step_publishes"]["fx"][-1]
+        self.assertTrue(entry["artifact"].endswith(f"publish/{stem}/{stem}"))
+        self.assertTrue((Path(final) / stem).is_dir())
+
+    def test_consumable_cache_absent_from_shot_root(self):
+        # Un publish VDB en kind=step NE pollue PAS shot_root.usda (pas un layer USD).
+        self._create_shot()
+        # publish USD (animation) -> present dans la compo
+        staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="animation")
+        v = cp.publish_version_from_dir(final)
+        astem = f"{self.SHOT}_animation_v{v:03d}"
+        (staging / f"{astem}.usda").write_bytes(b"usd")
+        (staging / "thumb.png").write_bytes(b"png")
+        cp.finalize_publish_version(self.project, self.SHOT, staging, final, v,
+                                    expected_artifacts=[astem, "thumb.png"])
+        # publish VDB (fx) -> absent de la compo
+        staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="fx")
+        v = cp.publish_version_from_dir(final)
+        fstem = f"{self.SHOT}_fx_v{v:03d}"
+        (staging / f"{fstem}.vdb").write_bytes(b"vdb")
+        (staging / "thumb.png").write_bytes(b"png")
+        cp.finalize_publish_version(self.project, self.SHOT, staging, final, v,
+                                    expected_artifacts=[fstem, "thumb.png"])
+        shot_root = (Path(self.project) / "shots" / self.SHOT / cp.SHOT_ROOT_NAME).read_text(
+            encoding="utf-8")
+        self.assertIn(f"{astem}.usda", shot_root)  # animation USD compose
+        self.assertNotIn(".vdb", shot_root)         # VDB jamais en subLayer
+        self.assertNotIn(fstem, shot_root)
 
 
 if __name__ == "__main__":
