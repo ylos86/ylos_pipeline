@@ -4,6 +4,7 @@ import os
 import sys
 from bpy.props import StringProperty, EnumProperty
 from ..core.project import apply_scene_preset, setup_scene_collections
+from ..core import vocab
 
 # Inject REPO_ROOT (where create_project.py lives) into sys.path
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
@@ -35,13 +36,11 @@ class YLOS_OT_NewProject(bpy.types.Operator):
         subtype="NONE",
     )
 
+    # Vocabulaire = create_project via core/vocab.py (seul home). Ecrit dans
+    # scene.ylos_prod_type (meme PROD_TYPE_ITEMS) et passe a create_project.create().
     prod_type: EnumProperty(
         name="Production Type",
-        items=[
-            ("FILM", "Film", "24fps | 2K | Cycles | AgX"),
-            ("AR",   "AR",   "60fps | Quest res | EEVEE | sRGB"),
-            ("VR",   "VR",   "90fps | Stereo res | EEVEE | sRGB"),
-        ],
+        items=vocab.PROD_TYPE_ITEMS,
         default="FILM",
     )
 

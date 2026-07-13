@@ -265,6 +265,70 @@ inter-process, pas un crash ; les deux sont complémentaires). Côté addon,
 l'`unregister()`, pour qu'un disable → edit → enable dans la même session Blender recharge
 le vrai fichier plutôt qu'une version en cache.
 
+### Vocabulaire pipeline centralisé (Blender) — `core/vocab.py` (2026-07-13)
+Le vocabulaire pipeline (asset/set/shot types, steps, prod types, context types) était
+**dupliqué en dur** dans les `EnumProperty` de l'addon (steps ×4 : `core/project.py`
+`ylos_current_step`, `op_switch_context` `new_step`, `op_publish` `step`, `op_save_wip`
+`step` ; types ×2 ; prod_type ×2 dont un enum FILM/AR/VR qui **crashait** en lisant un
+`project.json` réel à `prod_type` hors liste — ex `Pachamama` = `XR`). Résorbé :
+- **Source des VALEURS = `create_project.py`** (l'orchestrateur possède identité ET
+  vocabulaire, principe 5) : `ASSET_TYPES`/`SET_TYPES`/`SHOT_TYPES`, `DEFAULT_*_STEPS`,
+  **`PROD_TYPES`** (nouveau — union rétro-compatible FILM/SERIES/GAME/XR/AR/VR, jamais rien
+  retirer : un `project.json` existant doit rester lisible). Les **context types** sont
+  **dérivés d'`ENTITY_DIR`** (asset/set/shot upper) — pas de constante redondante.
+- **`plugins/blender/core/vocab.py`** : SEUL home des `EnumProperty` items de l'addon.
+  `PRESENTATION` = `{domaine: {valeur: (label, description)}}`, SEUL endroit où vivent les
+  libellés humains (fallback `(valeur.replace("_"," ").title(), "")`). Items construits
+  **une fois à l'import** en tuples module-level : `ASSET_TYPE_ITEMS`, `SET_TYPE_ITEMS`,
+  `SHOT_TYPE_ITEMS`, `PROD_TYPE_ITEMS`, `CONTEXT_TYPE_ITEMS`, `STEP_ITEMS`
+  (`{"ASSET"/"SET"/"SHOT": (...)}`), `STEP_ITEMS_ALL` (union ordonnée sans doublons).
+  Auto-amorce `sys.path` (pattern `os.path.realpath`, 4 remontées) car les corps de classe
+  d'opérateurs sont évalués à l'**import** de l'addon, avant `register()`.
+- **Piège GC/bpy** (déjà documenté) : un callback `items=` ne doit JAMAIS retourner un
+  tuple construit à la volée. Ici tous les `*_ITEMS` sont module-level ; **tous** les
+  call-sites utilisent le mode statique `items=vocab.X_ITEMS`. Le mode callback (b)
+  (`return STEP_ITEMS[ctx]`) reste autorisé mais **n'est utilisé nulle part** : chaque enum
+  step round-trip avec la propriété Scene context-agnostique `ylos_current_step`
+  (`STEP_ITEMS_ALL`) — la recopie croisée en `invoke`/`execute` casserait avec une liste
+  filtrée par contexte. Le filtrage sémantique par famille reste assuré à l'exécution par
+  `is_step_valid_for_context`.
+- **Règle** : **plus jamais de `items=[…]` en dur dans `plugins/blender`** hors `vocab.py`
+  et les enums d'**UI pure** (`ylos_popup_tab` dans `__init__.py` — onglets du popup, pas du
+  vocabulaire pipeline). Garde : `grep -rn "items=\[" plugins/blender` → seulement
+  `__init__.py` (`ylos_popup_tab`).
+- **Résiduel connu (hors scope)** : `core/project.py` porte encore des LISTES de steps
+  `SHOT_STEPS`/`SET_STEPS` **dérivées à la main** (et légèrement driftées vs `DEFAULT_*_STEPS`)
+  consommées par les `BoolVectorProperty` (taille codée en dur) d'`op_new_asset` et par
+  `is_step_valid_for_context`/`get_asset_step_status`. Les retirer = refonte de l'UI de
+  sélection de steps (chantier séparé).
+- Test headless : `tools/blender/test_vocab_sync.py` (`"$BLENDER" --background --python …`)
+  asserte `*_ITEMS == constantes create_project` (valeurs ET ordre), active l'addon sans
+  exception, et vérifie que `scene.ylos_prod_type = "XR"` ne lève plus.
+
+### `resolve_open_target()` — quel fichier ouvrir pour une entité+step
+`create_project.py::resolve_open_target(entity_name, dcc="blender", step=None,
+project_root=None) -> dict`. Logique dans l'orchestrateur (réutilisable Houdini), l'addon
+consomme. **Ne lève JAMAIS** pour un cas métier : renvoie
+`{"path": str|None, "kind": "wip"|"scene_default"|"publish"|None, "step": str|None,
+"exists": bool, "reason": str (si exists=False)}`. `project_root=None` → projet actif
+(`read_active_project()`). `step=None` → premier step déclaré du manifeste (peut rester
+`None` sur manifeste corrompu → branches WIP/publish sautées, `scene_default` reste
+résoluble). Ordre `blender` : (1) dernier WIP `<step>/wip/<name>_<step>_vNNN.blend` →
+`wip` ; (2) root d'assemblage de l'entité (`shot_root.usda`/`asset_root.usda`, step-agnostique,
+référence déjà les latest publishes en subLayers) → `scene_default` ; (3) dernier publish USD
+`complete` du step **par chemin niché correct** (`step_publishes[step]` cle `artifact`,
+`entity_dir/<step>/publish/<versioned_name>/<file>`) → `publish` ; (4) échec `exists=False`.
+**Diagnostic du bug corrigé** : l'addon (`core/asset.py::list_publish_versions`,
+`op_load_publish`) scannait `.../<step>/publish/` pour des fichiers `.usd*` **à plat**, alors
+que le contrat deux-phases écrit un **dossier par version** (`publish/<name>_<step>_vNNN/…`) —
+`f.suffix` d'un dossier vaut `""`, donc un publish deux-phases était **invisible** (aucun /
+mauvais fichier). `resolve_open_target` lit le manifeste (chemin niché), jamais un scan plat.
+`op_open_context` : (a) `prod_type` lu du manifeste passe par `_set_enum_safe` (valeur hors
+enum → `WARNING` + fallback, **plus jamais d'exception**) ; (b) option `dry_run` (BoolProperty)
+qui `print`/report le chemin résolu sans ouvrir. Tests : `tests/test_resolve_open_target.py`
+(stdlib, CI) — manifeste synthétique avec `prod_type="ZZ_UNKNOWN"`, WIP/scene_default/publish,
+entité/projet absents, manifeste corrompu : tous résolvent proprement sans lever.
+
 ### Sync web (`sync_web_assets`)
 `create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB
 **pinnés** (`project.json["web"]["pinned_assets"]`, jamais "latest") vers

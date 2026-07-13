@@ -114,6 +114,16 @@ ASSET_TYPES = ["CHARACTER", "PROP", "VEHICLE", "CREATURE", "FX_ELEMENT"]
 SET_TYPES = ["EXTERIOR", "INTERIOR", "HERO_SET", "MODULAR_KIT"]
 SHOT_TYPES = ["LAYOUT", "ANIMATION", "FX", "LIGHTING", "COMP"]
 _TYPES_BY_ENTITY = {"asset": ASSET_TYPES, "set": SET_TYPES, "shot": SHOT_TYPES}
+
+# Types de production (project.json["prod_type"], defaut de build_manifest()). Union
+# RETRO-COMPATIBLE des valeurs reellement emises, jamais inventees ni retirees (la relecture
+# d'un project.json existant prime) : app.html (FILM/SERIES/GAME/XR), addon Blender
+# (FILM/AR/VR) et les manifests existants (ex: Pachamama = 'XR'). Seule source de vocab pour
+# le prod_type - avant, create_project ne le connaissait pas et l'enum Blender (FILM/AR/VR)
+# CRASHAIT en lisant un manifest 'XR'/'SERIES'/'GAME' (cf. plugins/blender/core/vocab.py,
+# op_open_context). N'implique aucune logique de scene preset (celle-ci reste cote DCC et
+# no-op proprement pour un type qu'elle ne connait pas).
+PROD_TYPES = ["FILM", "SERIES", "GAME", "XR", "AR", "VR"]
 LOP_DIR_NAME = "lop"
 LOP_PUBLISH_DIR_NAME = "publish"
 LOP_STAGING_DIR_NAME = ".staging"
@@ -602,6 +612,124 @@ def set_frame_range(project_root, shot_name, start, end, fps=None):
         _atomic_write_json(manifest_path, manifest)
     refresh_entity_root(project_root, shot_name)
     return frame_range
+
+
+# --------------------------------------------------------------------------------------
+# Resolution du fichier a OUVRIR pour une entite+step (consomme par les bridges DCC)
+# --------------------------------------------------------------------------------------
+
+_WIP_VER_RE = re.compile(r"_v(\d+)\.blend$")
+
+
+def _latest_wip(entity_dir, step):
+    """Dernier WIP .blend d'un step Blender : entity_dir/<step>/wip/<name>_<step>_vNNN.blend
+    (plus haut numero). Retourne (Path, version) ou (None, 0). Ne leve jamais - un dossier
+    absent (step non scaffolde) renvoie simplement (None, 0)."""
+    wip_dir = Path(entity_dir) / step / "wip"
+    if not wip_dir.is_dir():
+        return None, 0
+    best, best_ver = None, -1
+    for f in wip_dir.iterdir():
+        if not f.is_file() or f.suffix.lower() != ".blend":
+            continue
+        m = _WIP_VER_RE.search(f.name)
+        if m and int(m.group(1)) > best_ver:
+            best, best_ver = f, int(m.group(1))
+    return best, (best_ver if best is not None else 0)
+
+
+def _latest_step_publish_rel(manifest, step):
+    """Chemin RELATIF (a l'entite) du dernier publish USD 'complete' du step - contrat
+    deux-phases (step_publishes[step], cle 'artifact'). Resolution CORRECTE du dossier
+    par-version niche (entity_dir/<step>/publish/<versioned_name>/<fichier>), la ou l'addon
+    Blender scannait a tort des fichiers PLATS et ne trouvait donc jamais un publish deux-
+    phases (cf. resolve_open_target, fix op_open_context). Filtre aux layers USD composables
+    (_is_usd_layer) - un cache consommable/GLB n'est pas un fichier a ouvrir comme scene."""
+    entries = manifest.get(STEP_PUBLISHES_KEY, {}).get(step, [])
+    complete = [e for e in entries
+                if e.get("status") == "complete" and e.get("artifact")
+                and _is_usd_layer(e["artifact"])]
+    if not complete:
+        return None
+    return max(complete, key=lambda e: e.get("version", 0))["artifact"]
+
+
+def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None):
+    """Resout QUEL fichier un DCC doit ouvrir pour une entite+step. La logique vit dans
+    l'orchestrateur (principe 5) : reutilisable par Blender ET Houdini, l'addon ne fait que
+    consommer. NE LEVE JAMAIS pour un cas metier (projet/entite/step introuvable, valeur
+    d'enum inconnue lue au manifeste, aucun fichier candidat) : renvoie un dict exists=False
+    avec 'reason'. Les seules exceptions possibles seraient des bugs de programmation.
+
+    Parametres :
+      entity_name  : nom d'entite (asset/set/shot) - localise via _find_asset_entity.
+      dcc          : DCC cible ('blender' par defaut). Seul 'blender' resout des WIP .blend.
+      step         : step vise ; None -> premier step declare au manifeste (fallback).
+      project_root : racine projet ; None -> projet actif (read_active_project(), contrat
+                     ~/.ylos/active_project).
+
+    Ordre de resolution (dcc='blender') :
+      1. dernier WIP .blend du step                                    -> kind='wip'
+      2. scene par defaut de l'entite = son root d'assemblage
+         (shot_root.usda / asset_root.usda, qui reference deja les latest
+         publishes en subLayers). Pas de template .blend par step au
+         scaffold : le root compose est la scene par defaut a ouvrir.       -> kind='scene_default'
+      3. dernier publish USD 'complete' du step (chemin niche correct)   -> kind='publish'
+      4. echec explicite                                                -> exists=False
+
+    Retour : {"path": str|None, "kind": "wip"|"scene_default"|"publish"|None,
+              "step": str|None, "exists": bool, "reason": str (present si exists=False)}."""
+    if project_root is None:
+        project_root = read_active_project()
+    if project_root is None:
+        return {"path": None, "kind": None, "step": step, "exists": False,
+                "reason": "aucun projet actif (project_root=None et ~/.ylos/active_project absent)"}
+
+    project_root = Path(project_root)
+    try:
+        entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
+    except FileNotFoundError as exc:
+        return {"path": None, "kind": None, "step": step, "exists": False, "reason": str(exc)}
+
+    # Manifeste lu de facon TOLERANTE : une valeur d'enum inconnue (prod_type/type legacy,
+    # ex 'XR', 'ZZ_UNKNOWN') ne doit jamais faire lever - on ne valide rien, on resout des
+    # chemins. Un manifeste illisible degrade proprement (dict vide).
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    entity_type = manifest.get("entity_type", "asset")
+    steps = manifest.get("steps", [])
+    if step is None:
+        step = steps[0] if steps else None
+    # step peut rester None (manifeste sans steps / corrompu) : les branches WIP et publish
+    # sont step-dependantes et donc sautees, mais la scene par defaut (root d'assemblage,
+    # step-agnostique) reste resoluble -> degradation propre, jamais d'exception.
+
+    # 1. dernier WIP (Blender uniquement, step requis)
+    if dcc == "blender" and step:
+        wip, _wver = _latest_wip(entity_dir, step)
+        if wip is not None:
+            return {"path": str(wip), "kind": "wip", "step": step, "exists": True}
+
+    # 2. scene par defaut = root d'assemblage de l'entite (step-agnostique)
+    root_name = SHOT_ROOT_NAME if entity_type == "shot" else ASSET_ROOT_NAME
+    default_path = entity_dir / root_name
+    if default_path.is_file():
+        return {"path": str(default_path), "kind": "scene_default", "step": step, "exists": True}
+
+    # 3. dernier publish USD du step (chemin niche correct, jamais un scan de fichiers plats)
+    if step:
+        rel = _latest_step_publish_rel(manifest, step)
+        if rel is not None:
+            pub = entity_dir / rel
+            if pub.is_file():
+                return {"path": str(pub), "kind": "publish", "step": step, "exists": True}
+
+    # 4. echec explicite (cas metier, pas une exception)
+    return {"path": None, "kind": None, "step": step, "exists": False,
+            "reason": (f"aucun WIP pour le step {step!r}, ni scene par defaut ({root_name}), "
+                       f"ni publish USD pour '{entity_name}'")}
 
 
 def _project_steps(project_dir, entity_type):

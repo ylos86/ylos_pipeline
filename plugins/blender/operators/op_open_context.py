@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import bpy
 import os
+import sys
 import subprocess
 import platform
 from bpy.props import StringProperty, BoolProperty
@@ -11,6 +12,50 @@ from ..core.project import (
     PIPELINE_DIR,
     PROJECT_CONFIG_FILE,
 )
+from ..core import vocab
+
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
+
+
+def _cp():
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+    import create_project
+    return create_project
+
+
+def _set_enum_safe(scene, prop, value, items, operator):
+    """Affecte une valeur d'enum lue d'un manifeste SANS jamais crasher : une valeur absente
+    des items (ex prod_type 'XR'/'SERIES' d'un manifeste, ou une valeur legacy inconnue) ->
+    warning + fallback (valeur laissee inchangee), jamais d'exception. Retourne True si
+    l'affectation a eu lieu."""
+    valid = {v for v, _label, _desc in items}
+    if value in valid:
+        setattr(scene, prop, value)
+        return True
+    operator.report(
+        {"WARNING"},
+        f"Unknown {prop} '{value}' from manifest (not in {sorted(valid)}) - keeping current "
+        f"value, no crash.",
+    )
+    return False
+
+
+def _open_resolved(operator, target):
+    """Ouvre le fichier resolu par create_project.resolve_open_target selon son 'kind' :
+    'wip' -> open_mainfile (.blend) ; 'scene_default'/'publish' -> usd_import (layer USD).
+    Une valeur inattendue est signalee, jamais levee."""
+    path, kind = target["path"], target["kind"]
+    try:
+        if kind == "wip":
+            bpy.ops.wm.open_mainfile(filepath=path)
+        else:
+            bpy.ops.wm.usd_import(filepath=path)
+    except Exception as e:
+        operator.report({"WARNING"}, f"Could not open resolved target ({kind}) {path}: {e}")
+        return False
+    operator.report({"INFO"}, f"Opened [{kind}]: {os.path.basename(path)}")
+    return True
 
 
 def _sanitize_path(raw: str) -> str:
@@ -54,6 +99,14 @@ class YLOS_OT_OpenContext(bpy.types.Operator):
     directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN"})
     filter_folder: BoolProperty(default=True, options={"HIDDEN"})
 
+    dry_run: BoolProperty(
+        name="Dry Run",
+        description="Resolve and print the open target for the current context without "
+                    "opening any file",
+        default=False,
+        options={"HIDDEN"},
+    )
+
     def invoke(self, context, event):
         if context.scene.ylos_project_path:
             self.directory = context.scene.ylos_project_path
@@ -80,14 +133,41 @@ class YLOS_OT_OpenContext(bpy.types.Operator):
             self.report({"ERROR"}, f"Could not read project.json in: {project_path}")
             return {"CANCELLED"}
 
+        prod_type = config["project"]["prod_type"]
         scene = context.scene
         scene.ylos_project_path = project_path
         scene.ylos_project_name = config["project"]["name"]
-        scene.ylos_prod_type    = config["project"]["prod_type"]
+        # prod_type vient du manifeste : une valeur hors enum (ex 'XR' d'un projet reel, cf.
+        # Pachamama) crashait l'affectation directe. Affectation gardee + fallback.
+        _set_enum_safe(scene, "ylos_prod_type", prod_type, vocab.PROD_TYPE_ITEMS, self)
 
-        apply_scene_preset(scene, config["project"]["prod_type"])
+        # apply_scene_preset no-op proprement pour un prod_type qu'il ne connait pas.
+        apply_scene_preset(scene, prod_type)
 
         self.report({"INFO"}, f"Project loaded: {config['project']['name']}")
+
+        # Si un contexte d'entite est deja restaure (asset + step), resoudre le fichier a
+        # ouvrir via l'orchestrateur (create_project.resolve_open_target - logique unique,
+        # reutilisable par Houdini). Ne jamais lever : resolve renvoie un dict exists=False
+        # avec raison. dry_run : imprimer/reporter le chemin resolu sans ouvrir.
+        asset = scene.ylos_current_asset
+        if asset:
+            target = _cp().resolve_open_target(
+                asset, dcc="blender", step=scene.ylos_current_step,
+                project_root=project_path,
+            )
+            if self.dry_run:
+                if target["exists"]:
+                    msg = f"[dry-run] resolve_open_target({asset}) -> [{target['kind']}] {target['path']}"
+                else:
+                    msg = f"[dry-run] resolve_open_target({asset}) -> no target: {target.get('reason', '')}"
+                print(msg)
+                self.report({"INFO"}, msg)
+            elif target["exists"]:
+                _open_resolved(self, target)
+            else:
+                self.report({"WARNING"}, f"No open target for '{asset}': {target.get('reason', '')}")
+
         return {"FINISHED"}
 
 

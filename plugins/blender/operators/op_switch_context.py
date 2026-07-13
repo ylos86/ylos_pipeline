@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import bpy
 from bpy.props import StringProperty, EnumProperty, BoolProperty
+from ..core import vocab
 
 
 class YLOS_OT_SwitchAsset(bpy.types.Operator):
@@ -55,19 +56,11 @@ class YLOS_OT_SwitchStep(bpy.types.Operator):
     bl_description = "Switch production step with unsaved-changes warning"
     bl_options = {"REGISTER"}
 
+    # Round-trip avec scene.ylos_current_step (STEP_ITEMS_ALL) : recopie en invoke,
+    # reecrit en execute -> meme domaine complet, sinon l'affectation croisee casse.
     new_step: EnumProperty(
         name="Step",
-        items=[
-            ("modeling",   "Modeling",   ""),
-            ("rigging",    "Rigging",    ""),
-            ("lookdev",    "LookDev",    ""),
-            ("fx",         "FX",         ""),
-            ("layout",     "Layout",     ""),
-            ("animation",  "Animation",  ""),
-            ("lighting",   "Lighting",   ""),
-            ("render",     "Render",     ""),
-            ("composite",  "Composite",  ""),
-        ],
+        items=vocab.STEP_ITEMS_ALL,
         default="modeling",
     )
 

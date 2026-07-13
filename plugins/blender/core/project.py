@@ -8,6 +8,8 @@ import os
 import json
 from pathlib import Path
 
+from . import vocab
+
 
 PIPELINE_DIR = "_pipeline"
 PROJECT_CONFIG_FILE = "project.json"
@@ -192,55 +194,34 @@ def register_properties():
         description="Active Ylos project name",
         default="",
     )
+    # Vocabulaire (valeurs) = create_project via core/vocab.py, seul home. Les tuples
+    # *_ITEMS sont module-level (piege GC bpy, cf. vocab.py). Defauts inchanges.
     bpy.types.Scene.ylos_prod_type = bpy.props.EnumProperty(
         name="Prod Type",
-        items=[
-            ("FILM", "Film", "24fps, 2K, Cycles, AgX"),
-            ("AR",   "AR",   "60fps, Quest res, EEVEE, sRGB"),
-            ("VR",   "VR",   "90fps, Stereo res, EEVEE, sRGB"),
-        ],
+        items=vocab.PROD_TYPE_ITEMS,
         default="FILM",
     )
     bpy.types.Scene.ylos_current_asset = bpy.props.StringProperty(
         name="Current Asset",
         default="",
     )
+    # ylos_current_step : propriete Scene sans context d'operateur -> vocabulaire
+    # complet (STEP_ITEMS_ALL, union ordonnee des steps de toutes les familles). Les
+    # enums step des operateurs round-trip avec cette propriete (cf. op_publish,
+    # op_switch_context, op_save_wip) : ils utilisent le meme STEP_ITEMS_ALL.
     bpy.types.Scene.ylos_current_step = bpy.props.EnumProperty(
         name="Current Step",
-        items=[
-            ("modeling",  "Modeling",  ""),
-            ("rigging",   "Rigging",   ""),
-            ("lookdev",   "LookDev",   ""),
-            ("fx",        "FX",        ""),
-            ("layout",    "Layout",    ""),
-            ("animation", "Animation", ""),
-            ("lighting",  "Lighting",  ""),
-            ("render",    "Render",    ""),
-            ("composite", "Composite", ""),
-        ],
+        items=vocab.STEP_ITEMS_ALL,
         default="modeling",
     )
     bpy.types.Scene.ylos_context_type = bpy.props.EnumProperty(
         name="Context",
-        items=[
-            ("ASSET", "Asset", "Working on a character, prop, or environment asset"),
-            ("SHOT",  "Shot",  "Working on a specific shot"),
-            ("SET",   "Set",   "Working on a set / environment assembly"),
-        ],
+        items=vocab.CONTEXT_TYPE_ITEMS,
         default="ASSET",
     )
-    # Mirrors create_project.py's ASSET_TYPES (single source of truth for the naming
-    # convention, cf. validate_entity_name) - kept in sync with op_new_asset.py's
-    # asset_type EnumProperty.
     bpy.types.Scene.ylos_asset_type = bpy.props.EnumProperty(
         name="Asset Type",
-        items=[
-            ("CHARACTER",  "Character",  "Biped, creature, hero, NPC..."),
-            ("PROP",       "Prop",       "Hard-surface object, furniture, tool..."),
-            ("VEHICLE",    "Vehicle",    "Car, ship, aircraft..."),
-            ("CREATURE",   "Creature",   "Non-humanoid creature"),
-            ("FX_ELEMENT", "FX Element", "Reusable FX asset (debris, particles rig...)"),
-        ],
+        items=vocab.ASSET_TYPE_ITEMS,
         default="PROP",
     )
 

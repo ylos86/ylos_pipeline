@@ -7,6 +7,7 @@ from ..core.asset import (
     get_latest_wip_version,
     list_wip_versions,
 )
+from ..core import vocab
 from ..core.thumbnails import generate_thumbnail, reload_thumb_icon
 
 
@@ -22,19 +23,11 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         min=1, max=999, default=1,
     )
 
+    # Round-trip avec scene.ylos_current_step (STEP_ITEMS_ALL) : recopie en invoke,
+    # reecrit en execute -> meme domaine complet.
     step: EnumProperty(
         name="Step",
-        items=[
-            ("modeling",  "Modeling",  ""),
-            ("rigging",   "Rigging",   ""),
-            ("lookdev",   "LookDev",   ""),
-            ("fx",        "FX",        ""),
-            ("layout",    "Layout",    ""),
-            ("animation", "Animation", ""),
-            ("lighting",  "Lighting",  ""),
-            ("render",    "Render",    ""),
-            ("composite", "Composite", ""),
-        ],
+        items=vocab.STEP_ITEMS_ALL,
         default="modeling",
     )
 

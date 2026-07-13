@@ -8,6 +8,7 @@ from ..core.asset import (
     ASSET_TYPE_PARENT_COL, invalidate_entity_cache,
 )
 from ..core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
+from ..core import vocab
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -110,48 +111,26 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         default="",
     )
 
+    # Vocabulaire (valeurs) = create_project via core/vocab.py, seul home. Tuples
+    # *_ITEMS module-level (piege GC bpy). Defauts inchanges.
     context_type: EnumProperty(
         name="Type",
-        items=[
-            ("ASSET", "Asset", "Character, prop, environment piece"),
-            ("SHOT",  "Shot",  "Shot (e.g. SQ010_SH0010)"),
-            ("SET",   "Set",   "Set / environment assembly"),
-        ],
+        items=vocab.CONTEXT_TYPE_ITEMS,
         default="ASSET",
     )
-
-    # Sous-type par famille - mirrors create_project.py's ASSET_TYPES/SET_TYPES/SHOT_TYPES
-    # (single source of truth for the naming convention, cf. validate_entity_name).
     asset_type: EnumProperty(
         name="Asset Type",
-        items=[
-            ("CHARACTER",  "Character",  "Biped, creature, hero, NPC..."),
-            ("PROP",       "Prop",       "Hard-surface object, furniture, tool..."),
-            ("VEHICLE",    "Vehicle",    "Car, ship, aircraft..."),
-            ("CREATURE",   "Creature",   "Non-humanoid creature"),
-            ("FX_ELEMENT", "FX Element", "Reusable FX asset (debris, particles rig...)"),
-        ],
+        items=vocab.ASSET_TYPE_ITEMS,
         default="PROP",
     )
     set_type: EnumProperty(
         name="Set Type",
-        items=[
-            ("EXTERIOR",    "Exterior",    "Outdoor set"),
-            ("INTERIOR",    "Interior",    "Indoor set"),
-            ("HERO_SET",    "Hero Set",    "Main, camera-ready set"),
-            ("MODULAR_KIT", "Modular Kit", "Reusable modular set pieces"),
-        ],
+        items=vocab.SET_TYPE_ITEMS,
         default="EXTERIOR",
     )
     shot_type: EnumProperty(
         name="Shot Type",
-        items=[
-            ("LAYOUT",    "Layout",    "Layout pass"),
-            ("ANIMATION", "Animation", "Animation pass"),
-            ("FX",        "FX",        "FX pass"),
-            ("LIGHTING",  "Lighting",  "Lighting pass"),
-            ("COMP",      "Comp",      "Composite pass"),
-        ],
+        items=vocab.SHOT_TYPE_ITEMS,
         default="LAYOUT",
     )
 

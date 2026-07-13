@@ -8,6 +8,7 @@ import sys
 from bpy.props import BoolProperty, EnumProperty
 from ..core.asset import get_latest_publish_version, list_publish_versions
 from ..core.project import is_step_valid_for_context
+from ..core import vocab
 from ..core.scene_checker import get_asset_objects_for_publish
 from ..core.thumbnails import render_publish_thumbnail
 
@@ -81,19 +82,12 @@ class YLOS_OT_Publish(bpy.types.Operator):
         default=False,
     )
 
+    # Round-trip avec scene.ylos_current_step (STEP_ITEMS_ALL) : lu en invoke, ecrit
+    # en execute -> meme domaine complet. Le filtrage par famille reste assure a
+    # l'execution par is_step_valid_for_context (garde semantique conservee).
     step: EnumProperty(
         name="Step",
-        items=[
-            ("modeling",  "Modeling",  ""),
-            ("rigging",   "Rigging",   ""),
-            ("lookdev",   "LookDev",   ""),
-            ("fx",        "FX",        ""),
-            ("layout",    "Layout",    ""),
-            ("animation", "Animation", ""),
-            ("lighting",  "Lighting",  ""),
-            ("render",    "Render",    ""),
-            ("composite", "Composite", ""),
-        ],
+        items=vocab.STEP_ITEMS_ALL,
         default="modeling",
     )
 
