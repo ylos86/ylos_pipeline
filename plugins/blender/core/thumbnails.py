@@ -118,6 +118,32 @@ def reload_thumb_icon(blend_path: str) -> int:
 
 _BBOX_TYPES = {"MESH", "ARMATURE", "CURVE"}
 
+# Derniere cause d'echec de render_publish_thumbnail() (texte de l'exception sous-jacente),
+# posee module-level pour que l'appelant (op_publish) remonte la CAUSE a l'utilisateur sans
+# changer la convention de retour "" ni la signature publique. "" = pas d'echec enregistre.
+LAST_ERROR = ""
+
+# Candidats de moteur de rendu, du plus recent au plus universel. BLENDER_EEVEE_NEXT n'existe
+# qu'en Blender 4.2-4.4 (retire en 5.x) ; BLENDER_EEVEE couvre 5.x (et l'EEVEE historique) ;
+# BLENDER_WORKBENCH est le filet toujours dispo. Le moteur est un enum DYNAMIQUE : on le probe
+# par affectation (try/except TypeError), jamais par une liste codee en dur ni l'introspection
+# RNA (cf. CLAUDE.md, bugs empiriques Blender #1).
+_ENGINE_CANDIDATES = ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE", "BLENDER_WORKBENCH")
+
+
+def _pick_render_engine(scene) -> str:
+    """Retourne le premier moteur de _ENGINE_CANDIDATES affectable sur CE Blender, en le
+    posant sur scene.render.engine (l'affectation est le probe fiable : l'enum des moteurs est
+    dynamique, un identifiant absent leve TypeError). Si aucun candidat ne passe (tres
+    improbable), laisse scene.render.engine inchange et retourne sa valeur courante."""
+    for engine in _ENGINE_CANDIDATES:
+        try:
+            scene.render.engine = engine
+            return engine
+        except TypeError:
+            continue
+    return scene.render.engine
+
 
 def _world_bbox(objects):
     """Bbox monde (min, max) unifiee des objets avec geometrie reelle (MESH/ARMATURE/CURVE).
@@ -168,7 +194,11 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
     generate_thumbnail ci-dessus) - le garde-fou de completude vit deja dans
     finalize_publish_version() (_missing_artifacts) : pas duplique ici.
     """
+    global LAST_ERROR
+    LAST_ERROR = ""
+
     if not objects:
+        LAST_ERROR = "no objects to frame"
         print("[Ylos] Publish thumbnail: no objects to frame")
         return ""
 
@@ -178,10 +208,12 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
     tmp_world = None
     cam_obj = None
     cam_data = None
+    engine = "?"
 
     try:
         tmp_scene = bpy.data.scenes.new("YLOS_thumb_tmp")
-        tmp_scene.render.engine = "BLENDER_EEVEE_NEXT"
+        # Moteur probe par affectation (BLENDER_EEVEE_NEXT retire en Blender 5.x - cf. CLAUDE.md).
+        engine = _pick_render_engine(tmp_scene)
         tmp_scene.render.resolution_x = size
         tmp_scene.render.resolution_y = size
         tmp_scene.render.resolution_percentage = 100
@@ -210,7 +242,8 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
             bpy.ops.render.render(write_still=True)
 
     except Exception as e:
-        print(f"[Ylos] Publish thumbnail render failed: {e}")
+        LAST_ERROR = str(e)
+        print(f"[Ylos] Publish thumbnail render failed (engine={engine}): {e}")
         return ""
 
     finally:
@@ -229,4 +262,9 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
         if tmp_scene is not None:
             bpy.data.scenes.remove(tmp_scene)
 
-    return thumb_path if os.path.isfile(thumb_path) else ""
+    if os.path.isfile(thumb_path):
+        print(f"[Ylos] Publish thumbnail OK (engine={engine}): {thumb_path}")
+        return thumb_path
+    LAST_ERROR = LAST_ERROR or f"render produced no file at {thumb_path} (engine={engine})"
+    print(f"[Ylos] Publish thumbnail: no file produced (engine={engine})")
+    return ""

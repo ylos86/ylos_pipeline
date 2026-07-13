@@ -11,6 +11,7 @@ from ..core.project import is_step_valid_for_context
 from ..core import vocab
 from ..core.scene_checker import get_asset_objects_for_publish
 from ..core.thumbnails import render_publish_thumbnail
+from ..core import thumbnails
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -186,9 +187,11 @@ class YLOS_OT_Publish(bpy.types.Operator):
         thumb_objects = objects or _fallback_objects(scene)
         thumb = render_publish_thumbnail(thumb_objects, str(staging_dir))
         if not thumb:
+            cause = thumbnails.LAST_ERROR or "unknown cause"
             self.report(
                 {"WARNING"},
-                f"Thumbnail render failed - publish will be rejected (staging preserved: {staging_dir})",
+                f"Thumbnail render failed ({cause}) - publish will be rejected "
+                f"(staging preserved: {staging_dir})",
             )
 
         try:

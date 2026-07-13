@@ -438,6 +438,25 @@ Filet de sécurité indépendant de ce fix : `finalize_publish_version()` exige 
 dans `staging_dir` (thumbnail **requis**, LOP et tout autre `kind` — cf. section "Contrat
 deux-phases généralisé" plus bas) — protège même si un futur cas async imprévu réapparaît.
 
+## Bugs empiriques Blender
+Miroir des gotchas Houdini ci-dessus, vérifiés en live (à compléter à mesure) :
+
+1. **Blender 5.x a retiré `BLENDER_EEVEE_NEXT`** — tout moteur de rendu doit être **probé par
+   affectation, jamais codé en dur**. L'identifiant `BLENDER_EEVEE_NEXT` (valide en 4.2–4.4)
+   n'existe plus en 5.x (enum : `BLENDER_EEVEE`, `BLENDER_WORKBENCH`, `CYCLES`) ; l'affecter
+   lève `TypeError`. Symptôme : `render_publish_thumbnail()` avalait l'exception, retournait
+   `""`, et `finalize_publish_version()` **rejetait le publish** (garde-fou correct mais cause
+   opaque). Fix : `plugins/blender/core/thumbnails.py::_pick_render_engine(scene)` essaie
+   `("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE", "BLENDER_WORKBENCH")` par affectation
+   `try/except TypeError` (l'enum des moteurs est **dynamique** : la tentative d'affectation
+   est le probe fiable, pas l'introspection RNA) et retourne l'identifiant retenu. La cause
+   d'échec remonte à l'utilisateur via `thumbnails.LAST_ERROR` (module-level, posé dans le
+   `except`, sans changer la convention de retour `""` ni la signature publique) — repris dans
+   le `report({'WARNING'})` d'`op_publish`. Régression : `tools/blender/test_thumbnail_headless.py`
+   (`--background`, exit code) : `_pick_render_engine` retourne un moteur affectable + cube →
+   `thumb.png` non vide. `generate_thumbnail()` (preview WIP, `render.opengl` viewport) est un
+   chemin distinct, non concerné.
+
 ## Verrouillage (fcntl.flock)
 `acquire_lock(path)` (`create_project.py`) est le **seul** point du module qui touche
 `fcntl.flock` — verrou exclusif sur un fichier `.lock` sibling de `path`, utilisé par
