@@ -206,8 +206,10 @@ def main():
         created.append(_publish_step_via_hda(project_source, SHOT_NAME, STEP_LIGHT))
         _assert_step_published(cp, project_source, SHOT_NAME, STEP_LIGHT)
         text = shot_root.read_text(encoding="utf-8")
-        idx_light = text.find("/{}/publish".format(STEP_LIGHT))
-        idx_anim = text.find("/{}/publish".format(STEP_ANIM))
+        # subLayers relatifs a l'entite : '@lighting/publish/...@' (precede de '@', PAS de '/'
+        # en tete - le fichier vit a la racine du shot). On ancre sur '@<step>/publish'.
+        idx_light = text.find("@{}/publish".format(STEP_LIGHT))
+        idx_anim = text.find("@{}/publish".format(STEP_ANIM))
         if idx_light < 0 or idx_anim < 0:
             fail("un des deux steps absent des subLayers de shot_root :\n{}".format(text))
         # SHOT_DOWNSTREAM_ORDER : lighting (plus fort) doit apparaitre AVANT animation.
