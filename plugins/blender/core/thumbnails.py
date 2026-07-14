@@ -94,6 +94,29 @@ def load_thumb_icon(blend_path: str) -> int:
     return _pcoll[key].icon_id
 
 
+def load_icon(abs_path: str) -> int:
+    """Preview icon generique pour un chemin absolu arbitraire (ex un publish thumb.png,
+    qui ne suit pas la convention '<stem>_thumb.png' de get_thumb_path/load_thumb_icon).
+    Reutilise la meme collection _pcoll. Retourne 0 si le fichier n'existe pas (jamais
+    d'exception - meme convention que load_thumb_icon)."""
+    global _pcoll
+    if _pcoll is None:
+        init_previews()
+
+    if not abs_path or not os.path.isfile(abs_path):
+        return 0
+
+    key = abs_path
+    if key not in _pcoll:
+        try:
+            _pcoll.load(key, abs_path, "IMAGE")
+        except Exception as e:
+            print(f"[Ylos] Preview load failed for {abs_path}: {e}")
+            return 0
+
+    return _pcoll[key].icon_id
+
+
 def reload_thumb_icon(blend_path: str) -> int:
     global _pcoll
     if _pcoll is None:

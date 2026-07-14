@@ -2,12 +2,11 @@
 import bpy
 import os
 import sys
-from bpy.props import StringProperty, EnumProperty, BoolVectorProperty
+from bpy.props import StringProperty, EnumProperty, BoolProperty, CollectionProperty
 from ..core.asset import (
     sanitize_entity_name,
     ASSET_TYPE_PARENT_COL, invalidate_entity_cache,
 )
-from ..core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 from ..core import vocab
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
@@ -20,13 +19,38 @@ def _cp():
     return create_project
 
 
-_ASSET_STEP_LABELS = ["Modeling", "Rigging", "LookDev", "FX"]
-_SHOT_STEP_LABELS  = ["Layout", "Animation", "Lighting", "FX", "Render", "Composite"]
-_SET_STEP_LABELS   = ["Modeling", "LookDev", "Lighting"]
+# Steps a cocher a la creation : (valeur, label) generes depuis vocab.STEP_ITEMS[ctx] (donc
+# create_project.DEFAULT_*_STEPS, seule source), jamais de liste/taille codee en dur - purge
+# INC-2. Avant : trois BoolVectorProperty a taille FIGEE (ex Shot=6) qui ont drifte du
+# vocabulaire reel (DEFAULT_SHOT_STEPS en compte 4 aujourd'hui) : un vecteur de bools ne peut
+# pas changer de taille sans redeclarer la classe, ce qui EST le bug. Remplace par une
+# CollectionProperty (taille dynamique) reconstruite depuis vocab.STEP_ITEMS[ctx] a chaque
+# changement de context_type (cf. YLOS_PG_StepToggle plus bas) - ne peut plus driver.
+_STEP_ITEMS_BY_CTX = {
+    "ASSET": vocab.STEP_ITEMS["ASSET"],
+    "SHOT":  vocab.STEP_ITEMS["SHOT"],
+    "SET":   vocab.STEP_ITEMS["SET"],
+}
 
-assert len(_ASSET_STEP_LABELS) == len(ASSET_STEPS)
-assert len(_SHOT_STEP_LABELS)  == len(SHOT_STEPS)
-assert len(_SET_STEP_LABELS)   == len(SET_STEPS)
+
+class YLOS_PG_StepToggle(bpy.types.PropertyGroup):
+    step:    StringProperty()
+    label:   StringProperty()
+    enabled: BoolProperty(default=True)
+
+
+def _rebuild_steps(op, context_type):
+    items = _STEP_ITEMS_BY_CTX.get(context_type, _STEP_ITEMS_BY_CTX["ASSET"])
+    op.steps_to_create.clear()
+    for value, label, _desc in items:
+        item = op.steps_to_create.add()
+        item.step = value
+        item.label = label
+        item.enabled = True
+
+
+def _update_context_type(self, context):
+    _rebuild_steps(self, self.context_type)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +141,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         name="Type",
         items=vocab.CONTEXT_TYPE_ITEMS,
         default="ASSET",
+        update=_update_context_type,
     )
     asset_type: EnumProperty(
         name="Asset Type",
@@ -134,9 +159,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         default="LAYOUT",
     )
 
-    asset_steps: BoolVectorProperty(name="Asset Steps", size=4, default=(True, True, True, True))
-    shot_steps:  BoolVectorProperty(name="Shot Steps",  size=6, default=(True, True, True, True, True, True))
-    set_steps:   BoolVectorProperty(name="Set Steps",   size=3, default=(True, True, True))
+    steps_to_create: CollectionProperty(type=YLOS_PG_StepToggle)
 
     def _sub_type(self):
         if self.context_type == "ASSET":
@@ -154,6 +177,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
 
     def invoke(self, context, event):
         self.context_type = context.scene.ylos_context_type
+        _rebuild_steps(self, self.context_type)
         return context.window_manager.invoke_props_dialog(self, width=420)
 
     def draw(self, context):
@@ -202,17 +226,8 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         box = layout.box()
         box.label(text="Steps to create:", icon="CHECKMARK")
         row = box.row(align=True)
-
-        if self.context_type == "ASSET":
-            for i, label in enumerate(_ASSET_STEP_LABELS):
-                row.prop(self, "asset_steps", index=i, text=label, toggle=True)
-        elif self.context_type == "SHOT":
-            col = box.column(align=True)
-            for i, label in enumerate(_SHOT_STEP_LABELS):
-                col.prop(self, "shot_steps", index=i, text=label, toggle=True)
-        else:
-            for i, label in enumerate(_SET_STEP_LABELS):
-                row.prop(self, "set_steps", index=i, text=label, toggle=True)
+        for item in self.steps_to_create:
+            row.prop(item, "enabled", text=item.label, toggle=True)
 
     def execute(self, context):
         scene        = context.scene
@@ -237,12 +252,15 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         entity_name  = full_name
         context_type = self.context_type
 
-        if context_type == "ASSET":
-            steps = [s for i, s in enumerate(ASSET_STEPS) if self.asset_steps[i]]
-        elif context_type == "SHOT":
-            steps = [s for i, s in enumerate(SHOT_STEPS) if self.shot_steps[i]]
-        else:
-            steps = [s for i, s in enumerate(SET_STEPS) if self.set_steps[i]]
+        if not self.steps_to_create:
+            # invoke() peuple steps_to_create depuis vocab (chemin dialog). Un appel
+            # scripte qui saute invoke() (bpy.ops.ylos.new_asset(...) en contexte EXEC -
+            # agent d'automatisation, cf. CLAUDE.md) verrait sinon une collection vide ->
+            # zero step cree en silence. Defaut : tous les steps actives (meme semantique
+            # que l'ancien defaut BoolVectorProperty).
+            _rebuild_steps(self, context_type)
+
+        steps = [item.step for item in self.steps_to_create if item.enabled]
 
         try:
             cp = _cp()

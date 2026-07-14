@@ -53,9 +53,13 @@ DELIVERY_TARGETS = {
     "VR": ["usd", "gltf"],
 }
 
-ASSET_STEPS = ["modeling", "rigging", "lookdev", "fx"]
-SHOT_STEPS  = ["layout", "animation", "lighting", "fx", "render", "composite"]
-SET_STEPS   = ["modeling", "lookdev", "lighting"]
+# Valeurs derivees de vocab.STEP_ITEMS (donc de create_project.DEFAULT_*_STEPS, seule
+# source - cf. CLAUDE.md principe 5). Avant : listes recopiees a la main ici, driftees vs
+# vocab (ex SHOT_STEPS incluait 'layout'/'render'/'composite', absents de
+# DEFAULT_SHOT_STEPS ; SET_STEPS avait 'modeling' au lieu de 'layout') - purge INC-2.
+ASSET_STEPS = vocab.values(vocab.STEP_ITEMS["ASSET"])
+SHOT_STEPS  = vocab.values(vocab.STEP_ITEMS["SHOT"])
+SET_STEPS   = vocab.values(vocab.STEP_ITEMS["SET"])
 
 STEPS_BY_CONTEXT = {
     "asset": ASSET_STEPS,
@@ -224,13 +228,20 @@ def register_properties():
         items=vocab.ASSET_TYPE_ITEMS,
         default="PROP",
     )
+    # Prepare pour INC-4 (op_save_wip n'ecrit rien avec ceci pour l'instant - le champ
+    # panel.py est affiche desactive tant que ce n'est pas cable).
+    bpy.types.Scene.ylos_wip_comment = bpy.props.StringProperty(
+        name="Comment",
+        description="Note for the next Save Version - not yet persisted (wired in INC-4)",
+        default="",
+    )
 
 
 def unregister_properties():
     props = [
         "ylos_project_path", "ylos_project_name", "ylos_prod_type",
         "ylos_current_asset", "ylos_current_step", "ylos_context_type",
-        "ylos_asset_type",
+        "ylos_asset_type", "ylos_wip_comment",
     ]
     for prop in props:
         if hasattr(bpy.types.Scene, prop):

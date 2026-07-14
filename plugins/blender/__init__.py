@@ -31,16 +31,18 @@ def _purge_create_project_module():
             del sys.modules[key]
 
 from . import core
-from .ui import panel_pipeline, panel_asset_list, menu
+from .ui import panel, panel_asset_list, menu
 from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
     op_open_context, op_open_wip, op_switch_context,
     op_load_publish, op_asset_list, op_scene_check, op_popup,
-    op_export_glb,
 )
 
 _classes = (
     op_new_project.YLOS_OT_NewProject,
+    # PropertyGroup avant l'operateur qui le reference via CollectionProperty(type=...) -
+    # Blender exige l'ordre d'enregistrement (cf. op_new_asset.py, purge INC-2).
+    op_new_asset.YLOS_PG_StepToggle,
     op_new_asset.YLOS_OT_NewAsset,
     op_save_wip.YLOS_OT_SaveWip,
     op_publish.YLOS_OT_Publish,
@@ -61,16 +63,15 @@ _classes = (
     op_scene_check.YLOS_OT_AutoFix,
     op_scene_check.YLOS_OT_FixAll,
     op_popup.YLOS_OT_OpenPopup,
-    op_export_glb.YLOS_OT_ExportGLB,
     menu.YLOS_OT_OpenProjectBrowser,
     menu.YLOS_OT_ReloadPipeline,
     menu.YLOS_OT_About,
     menu.YLOS_MT_TopbarMenu,
-    panel_pipeline.YLOS_PT_PipelinePanel,
-    panel_pipeline.YLOS_PT_AssetPanel,
-    panel_pipeline.YLOS_PT_SceneSettingsPanel,
-    panel_pipeline.YLOS_PT_ToolsPanel,
+    panel.YLOS_PT_Context,
     panel_asset_list.YLOS_PT_AssetListPanel,
+    panel.YLOS_PT_Scenefile,
+    panel.YLOS_PT_Publish,
+    panel.YLOS_PT_Imports,
 )
 
 
