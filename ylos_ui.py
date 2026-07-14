@@ -61,8 +61,10 @@ DEFAULT_PORT = 8765
 BLENDER_APP = Path(os.environ.get("YLOS_BLENDER")
                    or "/Applications/Blender.app/Contents/MacOS/Blender")
 THUMB_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
-# Extensions ouvertes par import USD (pas comme mainfile .blend) dans _post_open_blender.
-USD_OPEN_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
+# Launcher versionne : TOUT lancement DCC passe par lui (cf. CLAUDE.md, fin des --python-expr).
+LAUNCHER = _HERE / "tools" / "blender" / "launch_context.py"
+# Sortie du process Blender lance (append) - fini le DEVNULL silencieux (lecon CC#1b/#1d).
+SERVER_LOG = YLOS_DIR / "launch-server.log"
 
 # -------------------------------------------------------------------------------------
 # Utilitaires
@@ -588,9 +590,28 @@ class YlosHandler(BaseHTTPRequestHandler):
         if body is None:
             _json(self, 400, {"error": "JSON invalide dans le body"})
             return
+
+        # Le launcher versionne (tools/blender/launch_context.py) porte TOUTE l'ouverture
+        # DCC : contexte pipeline pose + ops differees au 1er tick timer (contexte pret) +
+        # journalisation. Fini les --python-expr inline (echec silencieux au boot, diag CC#1d).
+        # Le body accepte path/entity/step/project (tous optionnels sauf le besoin d'AU MOINS
+        # un fichier a resoudre) ; --project est requis par le launcher -> projet actif a defaut.
         path = body.get("path")
-        if not path:
-            _json(self, 400, {"error": "Champ 'path' manquant"})
+        entity = body.get("entity")
+        step = body.get("step")
+        project = body.get("project")
+        if project:
+            project = str(Path(project).expanduser())
+        else:
+            active = self._active()
+            project = str(active) if active is not None else None
+
+        if not path and not entity:
+            _json(self, 400, {"error": "Fournir 'path' ou 'entity' (a resoudre)"})
+            return
+        if not project:
+            _json(self, 400, {"error": "Aucun projet : fournir 'project' ou definir le "
+                                       "projet actif"})
             return
 
         # Binaire Blender requis (surchargeable par $YLOS_BLENDER). Introuvable -> erreur
@@ -601,19 +622,25 @@ class YlosHandler(BaseHTTPRequestHandler):
                          f"Definir $YLOS_BLENDER vers l'executable Blender.",
             })
             return
+        if not LAUNCHER.is_file():
+            _json(self, 500, {"error": f"Launcher introuvable : {LAUNCHER}"})
+            return
 
-        # Action par extension : un .usd/.usda/... ne s'ouvre pas comme mainfile - il s'importe.
-        ext = os.path.splitext(str(path))[1].lower()
-        if ext in USD_OPEN_EXTS:
-            args = [str(BLENDER_APP), "--python-expr",
-                    f"import bpy; bpy.ops.wm.usd_import(filepath={str(path)!r})"]
-        else:  # .blend (WIP) et tout le reste : ouverture comme fichier principal
-            args = [str(BLENDER_APP), str(path)]
+        # Meme commande pour TOUS les cas (.blend inclus) : uniformite du contexte.
+        args = [str(BLENDER_APP), "--python", str(LAUNCHER), "--", "--project", project]
+        if entity:
+            args += ["--entity", str(entity)]
+        if step:
+            args += ["--step", str(step)]
+        if path:
+            args += ["--path", str(path)]
 
         try:
-            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            _json(self, 200, {"ok": True, "path": str(path),
-                              "mode": "usd_import" if ext in USD_OPEN_EXTS else "mainfile"})
+            YLOS_DIR.mkdir(parents=True, exist_ok=True)
+            log_fh = open(SERVER_LOG, "a", encoding="utf-8")  # herite par l'enfant, fini DEVNULL
+            subprocess.Popen(args, stdout=log_fh, stderr=log_fh)
+            _json(self, 200, {"ok": True, "path": path, "project": project,
+                              "entity": entity, "step": step, "argv": args})
         except OSError as e:
             _json(self, 500, {"error": f"Impossible de lancer Blender : {e}"})
 

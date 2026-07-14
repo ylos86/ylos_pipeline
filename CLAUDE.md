@@ -351,15 +351,53 @@ entité/projet absents, manifeste corrompu : tous résolvent proprement sans lev
 - `ylos_ui.py::_last_versions(project_root, entity_name, manifest)` passe par
   `latest_publish_artifact` (plus de résolution dupliquée — le « logique unique, jamais
   dupliquée » en tête de module devient vrai). Contrat de sortie vers `app.html` inchangé.
-- `_post_open_blender` : **action par extension** — `.blend` → `Popen([BLENDER_APP, path])` ;
-  `.usd/.usda/.usdc/.usdz/.usdnc` → `Popen([BLENDER_APP, "--python-expr", "import bpy;
-  bpy.ops.wm.usd_import(filepath=<repr>)"])` (un USD ne s'ouvre pas comme mainfile). `BLENDER_APP`
-  surchargeable par **`$YLOS_BLENDER`** ; binaire introuvable → **réponse HTTP d'erreur explicite**,
-  jamais de no-op silencieux (leçon CC#1b).
+- `_post_open_blender` : **délègue au launcher versionné** (cf. « Lancement DCC » ci-dessous) —
+  plus de `--python-expr`. Construit `[BLENDER_APP, "--python", <launcher>, "--", "--project",
+  …, ("--entity"), ("--step"), ("--path")]` pour **tous** les cas (.blend inclus, uniformité du
+  contexte). `BLENDER_APP` surchargeable par **`$YLOS_BLENDER`** ; binaire (ou launcher) introuvable
+  → **réponse HTTP d'erreur explicite**, jamais de no-op silencieux (leçon CC#1b). Body : `path`
+  **ou** `entity` requis (au moins un fichier à résoudre), `project` → projet actif à défaut, `step`
+  optionnel. Réponse JSON : `argv` lancé. Sortie du Popen → `~/.ylos/launch-server.log` (append,
+  fini `DEVNULL`).
 - `finalize_publish_version` renseigne désormais `entry["thumbnail"]` (même chemin relatif entité
   que `entry["thumb"]`, conservé pour compat) quand `thumb.png` existe dans le dossier finalisé.
 - Tests stdlib (CI) : `tests/test_create_project.py::TestListPublishes` (fusion deux-phases +
   legacy, dédup, `complete` max, `pending` exclu, entité absente) et `::TestFinalizeThumbnailField`.
+
+### Lancement DCC contextualisé — launcher versionné (2026-07-14, CC#1d)
+**Règle : TOUT lancement DCC passe par un launcher versionné. Plus jamais de `--python-expr`
+inline.** Diagnostic : `_post_open_blender` lançait `--python-expr "usd_import(...)"` (stdout/stderr
+→ `DEVNULL`). La commande est valide **headless** (import ~8 ms) mais en **GUI** l'op s'exécute
+pendant le boot (contexte pas prêt) et échoue **en silence** → instance vide. Et par design aucune
+instance ne recevait le contexte pipeline (projet/entité/step).
+- **`tools/blender/launch_context.py`** (source unique de l'ouverture Blender). CLI, args **après
+  `--`** : `--project <root>` (**requis**) `[--entity <name>] [--step <step>] [--path <file>]
+  [--kind wip|publish|scene_default]`. Repo localisé par `os.path.realpath(__file__)` + remontée
+  parents (pattern module), `sys.path` amorcé (repo + `plugins`), `import create_project`.
+- **`--path` absent → `create_project.resolve_open_target(entity, "blender", step,
+  project_root=project)`** (logique unique, réutilisable Houdini ; ne lève jamais).
+- **GUI (`bpy.app.background` False)** : les ops ne s'exécutent **JAMAIS** au parse time —
+  `bpy.app.timers.register(cb, first_interval=0.2)` (contexte prêt au 1er tick, callback retourne
+  `None`, aucune exception n'en sort). **Background (`--background`)** : exécution immédiate +
+  `sys.exit(code)` (CI/tests).
+- **Ordre d'ouverture imposé** : `.blend` → `wm.open_mainfile` **d'abord** (l'open remplace la
+  scène) puis contexte ; **USD** → contexte **d'abord** puis `wm.usd_import` (merge dans la scène
+  contextualisée). Contexte = `bpy.ops.ylos.open_context('EXEC_DEFAULT', directory=project)` +
+  set **gardé** de `ylos_current_asset` / `ylos_current_step` / `ylos_context_type` (famille du
+  manifeste) / `ylos_asset_type` (préfixe `TYPE_` du nom si valide) — même pattern `_set_enum_safe`
+  que `op_open_context` (valeur hors enum → warning loggé, **jamais d'exception**). L'addon est
+  auto-enregistré s'il ne l'est pas (cas CI `--factory-startup`).
+- **Logs** : `~/.ylos/launch.log` (launcher : timestamp, argv, chaque étape succès/échec +
+  traceback complet ; surchargeable par **`$YLOS_LAUNCH_LOG`** pour l'isolation des tests) ;
+  `~/.ylos/launch-server.log` (stdout/stderr du Popen côté `ylos_ui`). Marqueur de succès :
+  `LAUNCH SUCCESS: [<mode>] <path> objects=<N>` (l'`objects=N` est le self-check de peuplement de
+  la scène avant sortie).
+- Test e2e : `tools/blender/test_launch_context.py` (python3 ordinaire — monte la fixture via
+  `create_project`, puis **subprocess Blender réel** `--background --python launcher -- …`) :
+  invocation A (`--path` publish niché contenant un cube `.usda` écrit à la main) et B (sans
+  `--path`, résolution `scene_default`) → exit 0, `LAUNCH SUCCESS`, `objects>0`, trace de
+  résolution et de contexte dans le log. **Hors CI stdlib** (exige Blender), comme les autres
+  `tools/blender/test_*`.
 
 ### Backlog — publish hygiene
 - **Normaliser (ou warner) data-name ≠ object-name** avant publish : sans ça les prims USD
