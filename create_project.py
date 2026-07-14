@@ -124,6 +124,14 @@ _TYPES_BY_ENTITY = {"asset": ASSET_TYPES, "set": SET_TYPES, "shot": SHOT_TYPES}
 # op_open_context). N'implique aucune logique de scene preset (celle-ci reste cote DCC et
 # no-op proprement pour un type qu'elle ne connait pas).
 PROD_TYPES = ["FILM", "SERIES", "GAME", "XR", "AR", "VR"]
+# Cible de pipeline par type de prod : decide le FORMAT d'artifact du publish. Decision
+# d'ORCHESTRATEUR, jamais du DCC (principe 5) : les bridges consomment la cible, ne la
+# calculent pas. 'web' -> GLB (Three.js) ; 'offline' -> USD. Source unique.
+PROD_TYPE_TO_TARGET = {
+    "XR": "web", "AR": "web", "VR": "web", "GAME": "web",
+    "FILM": "offline", "SERIES": "offline",
+}
+DEFAULT_PIPELINE_TARGET = "offline"
 LOP_DIR_NAME = "lop"
 LOP_PUBLISH_DIR_NAME = "publish"
 LOP_STAGING_DIR_NAME = ".staging"
@@ -329,6 +337,9 @@ def build_manifest(name, display_name=None, prod_type="FILM"):
         "name": name,
         "display_name": display_name or name,
         "prod_type": prod_type,
+        # Cible de pipeline = FORMAT d'artifact du publish (derive du prod_type, source unique
+        # PROD_TYPE_TO_TARGET). Ecrite a la creation ; lue tolerablement par get_pipeline_target.
+        "pipeline_target": PROD_TYPE_TO_TARGET.get(prod_type, DEFAULT_PIPELINE_TARGET),
         "topology": TOPOLOGY,
         "created_utc": now,
         "modified_utc": now,
@@ -364,6 +375,23 @@ def read_manifest(project_dir):
     """Lit project.json depuis <projet>/_pipeline. Utile aux plugins / launchers."""
     path = Path(project_dir) / PIPELINE_DIR / MANIFEST_NAME
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def get_pipeline_target(project_root):
+    """Cible de pipeline d'un projet : 'web' (artifacts GLB, Three.js) ou 'offline' (USD).
+    Le FORMAT d'artifact est une decision d'ORCHESTRATEUR (principe 5), jamais du DCC : les
+    bridges (Blender op_publish) consomment cette cible, ils ne la calculent pas. Lecture
+    TOLERANTE (ne leve jamais pour un cas metier) : champ 'pipeline_target' du manifeste s'il
+    est valide, sinon derive du prod_type (PROD_TYPE_TO_TARGET), defaut 'offline' -> un projet
+    2.0 sans le champ (ou manifeste illisible) degrade proprement."""
+    try:
+        manifest = read_manifest(project_root)
+    except (OSError, ValueError):
+        return DEFAULT_PIPELINE_TARGET
+    target = manifest.get("pipeline_target")
+    if target in ("web", "offline"):
+        return target
+    return PROD_TYPE_TO_TARGET.get(manifest.get("prod_type"), DEFAULT_PIPELINE_TARGET)
 
 
 def read_active_project(path=None):

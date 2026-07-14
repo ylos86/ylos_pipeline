@@ -29,6 +29,60 @@ def _fallback_objects(scene):
     return [o for o in scene.objects if o.type in ("MESH", "ARMATURE", "CURVE") and not o.hide_get()]
 
 
+def _normalize_datablock_names(objects):
+    """Hygiene des noms AVANT export : aligne le nom du datablock sur celui de l'objet quand
+    le datablock est mono-utilisateur. Sans ca, un objet renomme mais dont la donnee garde
+    'Cube.001' sort en prim USD 'Cube_001' / node glTF errone -> un Load Latest ramene un
+    objet qui ne porte plus le nom de l'asset. Un datablock MULTI-user n'est JAMAIS renomme
+    (le rename affecterait les autres utilisateurs) -> collecte pour warning, jamais
+    silencieux. Retourne (n_renommes, [descriptions des partages non touches])."""
+    renamed = 0
+    shared = []
+    for obj in objects:
+        data = getattr(obj, "data", None)
+        if data is None or data.name == obj.name:
+            continue
+        if getattr(data, "users", 1) == 1:
+            data.name = obj.name  # rename permanent (hygiene standard)
+            renamed += 1
+        else:
+            shared.append(f"{obj.name} (data '{data.name}', {data.users} users)")
+    return renamed, shared
+
+
+def _glb_export(filepath: str, context, objects: list) -> tuple:
+    """Export glTF binaire (GLB) vers un filepath exact (staging_dir, cf. execute()). Miroir de
+    _usd_export : selection = objets gather (use_selection) sinon scene entiere. +Y up par
+    defaut de l'exporter (correct pour Three.js). Retourne (success, error_message)."""
+    scene = context.scene
+    prev_selected = [o for o in scene.objects if o.select_get()]
+    prev_active   = context.view_layer.objects.active
+    use_sel = bool(objects)
+    try:
+        if use_sel:
+            for o in scene.objects:
+                o.select_set(False)
+            for o in objects:
+                o.select_set(True)
+            context.view_layer.objects.active = objects[0]
+        try:
+            bpy.ops.export_scene.gltf(
+                filepath=filepath,
+                export_format='GLB',
+                use_selection=use_sel,
+                export_apply=True,
+            )
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+    finally:
+        for o in scene.objects:
+            o.select_set(False)
+        for o in prev_selected:
+            o.select_set(True)
+        context.view_layer.objects.active = prev_active
+
+
 def _usd_export(filepath: str, context, objects: list) -> tuple:
     """
     Export USD to an exact filepath (staging_dir target, cf. execute()).
@@ -92,7 +146,9 @@ class YLOS_OT_Publish(bpy.types.Operator):
         default="modeling",
     )
 
-    _next_ver: int = 1  # display-only, computed in invoke
+    _next_ver: int = 1        # display-only, computed in invoke
+    _target: str = "offline"  # display-only : cible pipeline (web|offline), calculee en invoke
+    _ext: str = ".usd"        # display-only : extension d'artifact deduite de la cible
 
     def invoke(self, context, event):
         scene = context.scene
@@ -108,6 +164,9 @@ class YLOS_OT_Publish(bpy.types.Operator):
             scene.ylos_context_type.lower(),
         )
         self._next_ver = latest + 1
+        # Format = decision d'orchestrateur (cible pipeline), pas du DCC : le dialog l'affiche.
+        self._target = _cp().get_pipeline_target(scene.ylos_project_path)
+        self._ext = ".glb" if self._target == "web" else ".usd"
         return context.window_manager.invoke_props_dialog(self, width=380)
 
     def draw(self, context):
@@ -126,7 +185,8 @@ class YLOS_OT_Publish(bpy.types.Operator):
         box = layout.box()
         box.label(text="Publish to:", icon="EXPORT")
         box.label(
-            text=f"{scene.ylos_current_asset}_{self.step}_v{self._next_ver:03d}.usd"
+            text=f"{scene.ylos_current_asset}_{self.step}_v{self._next_ver:03d}"
+                 f"{self._ext} ({self._target})"
         )
         box.label(text="Version assigned by create_project.py", icon="INFO")
 
@@ -164,6 +224,19 @@ class YLOS_OT_Publish(bpy.types.Operator):
             return {"CANCELLED"}
 
         cp = _cp()
+
+        # Hygiene des noms AVANT export : sans ca, un datablock mono-user non renomme
+        # ('Cube.001') sort en prim USD / node glTF errone. Jamais silencieux (rapporte plus
+        # bas). Full-scene -> normalise toute la scene exportee.
+        export_objects = objects if objects else list(scene.objects)
+        n_renamed, shared = _normalize_datablock_names(export_objects)
+        for s in shared:
+            print(f"[Ylos publish] datablock partage non renomme (nom d'objet conserve): {s}")
+
+        # Format d'artifact = decision d'orchestrateur (cible pipeline), jamais du DCC.
+        target = cp.get_pipeline_target(project_path)
+        ext = ".glb" if target == "web" else ".usd"
+
         try:
             staging_dir, final_dir = cp.allocate_publish_version(
                 project_path, asset_name, comment="", kind=step,
@@ -174,13 +247,16 @@ class YLOS_OT_Publish(bpy.types.Operator):
 
         version = cp.publish_version_from_dir(final_dir)
         stem = f"{asset_name}_{step}_v{version:03d}"
-        usd_path = os.path.join(str(staging_dir), stem + ".usd")
+        art_path = os.path.join(str(staging_dir), stem + ext)
 
-        ok, err = _usd_export(usd_path, context, objects)
+        if target == "web":
+            ok, err = _glb_export(art_path, context, objects)
+        else:
+            ok, err = _usd_export(art_path, context, objects)
         if not ok:
             self.report(
                 {"ERROR"},
-                f"USD export failed: {err} (staging preserved: {staging_dir})",
+                f"{target} export failed: {err} (staging preserved: {staging_dir})",
             )
             return {"CANCELLED"}
 
@@ -203,19 +279,23 @@ class YLOS_OT_Publish(bpy.types.Operator):
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
 
-        pub_path = os.path.join(info["final_dir"], stem + ".usd")
+        pub_path = os.path.join(info["final_dir"], stem + ext)
         scene.ylos_current_step = step
 
         self.report(
             {"INFO"},
-            f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}]",
+            f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}] - "
+            f"{n_renamed} datablocks renommes, {len(shared)} partages non touches (voir console)",
         )
 
         if self.load_after:
             try:
-                bpy.ops.wm.usd_import(filepath=pub_path)
+                if ext == ".glb":
+                    bpy.ops.import_scene.gltf(filepath=pub_path)
+                else:
+                    bpy.ops.wm.usd_import(filepath=pub_path)
                 self.report({"INFO"}, f"Loaded: {os.path.basename(pub_path)}")
             except Exception as e:
-                self.report({"WARNING"}, f"Publish OK - USD import failed: {e}")
+                self.report({"WARNING"}, f"Publish OK - import failed: {e}")
 
         return {"FINISHED"}

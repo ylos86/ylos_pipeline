@@ -103,7 +103,7 @@
     "pipeline_target": {
       "type": "string",
       "enum": ["offline", "web"],
-      "description": "Mode d'export privilegie cote plugin Blender (panel_pipeline.py) : 'offline' -> bouton Publish Step (USD, allocate/finalize kind=step) ; 'web' -> bouton Export glTF (GLB, meme contrat, destine a sync_web_assets). N'affecte aucune logique de create_project.py, purement une preference d'UI DCC. Defaut 'offline' si absent."
+      "description": "Cible de pipeline = FORMAT d'artifact du publish (decision d'orchestrateur, jamais du DCC). 'offline' -> USD (allocate/finalize kind=step) ; 'web' -> GLB (meme contrat deux-phases, destine a sync_web_assets / Three.js). Ecrit a la creation par create() (derive du prod_type via PROD_TYPE_TO_TARGET) ; lu tolerablement par create_project.get_pipeline_target() (absent -> derive du prod_type, defaut 'offline'). Consomme par op_publish (format d'export) et panel_pipeline.py (bouton)."
     },
     "web": {
       "type": "object",

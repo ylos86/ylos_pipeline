@@ -399,11 +399,43 @@ instance ne recevait le contexte pipeline (projet/entité/step).
   résolution et de contexte dans le log. **Hors CI stdlib** (exige Blender), comme les autres
   `tools/blender/test_*`.
 
-### Backlog — publish hygiene
-- **Normaliser (ou warner) data-name ≠ object-name** avant publish : sans ça les prims USD
-  sortent avec le nom de la *donnée* (`Cube_001`) et non celui de l'objet — divergence de
-  nommage dans les stages publiés. Chantier séparé (probablement côté `scene_checker` / au
-  moment de l'export USD).
+### Publish propre : noms préservés + format d'artifact par cible (2026-07-14, CC#2)
+**Deux volets, même zone (`op_publish` + orchestrateur).**
+
+**A. Hygiène des noms au publish (round-trip sans perte).** Un objet renommé mais dont le
+datablock garde `Cube.001` sortait en prim USD `Cube_001` / node glTF erroné → un Load Latest
+ramenait un objet ne portant plus le nom de l'asset. `op_publish::_normalize_datablock_names`
+(appelé **au gather, AVANT export**) : pour chaque objet exporté, si `obj.data` mono-user
+(`data.users == 1`) et `data.name != obj.name` → `data.name = obj.name` (rename permanent,
+hygiène standard). Datablock **multi-user → jamais renommé** (affecterait les autres users) →
+collecté et **warné** (console + compteur). Full-scene → normalise toute la scène exportée. Le
+résultat du publish rapporte toujours `N datablocks renommés, M partagés non touchés (voir
+console)` — jamais silencieux. Les publishes déjà bakés (vN sales) restent tels quels ; c'est le
+**prochain** publish qui sort propre.
+
+**B. Format d'artifact par cible — décision d'ORCHESTRATEUR, jamais du DCC (principe 5).**
+- `create_project.PROD_TYPE_TO_TARGET` (**source unique**) : `{XR, AR, VR, GAME → "web"; FILM,
+  SERIES → "offline"}`. `create()` écrit `pipeline_target` dans `project.json` (dérivé du
+  prod_type, `build_manifest`). `get_pipeline_target(project_root) -> "web"|"offline"` : lecture
+  **tolérante** (jamais d'exception métier) — champ `pipeline_target` s'il est valide, sinon
+  dérivé du prod_type, défaut `"offline"` (projet 2.0 sans le champ / manifeste illisible dégrade
+  proprement ; un champ explicite prime la dérivation → override possible).
+- `op_publish` : le format **découle de la cible** (`get_pipeline_target`) — `"web"` → `.glb` via
+  `bpy.ops.export_scene.gltf(export_format='GLB', use_selection=<objets gather>, export_apply=True)`
+  (+Y up par défaut de l'exporter = correct pour Three.js ; `_glb_export`, miroir de `_usd_export`) ;
+  `"offline"` → `.usd` comme avant. Le **dialog** affiche le format cible : `…_vNNN.<ext> (<target>)`.
+  **Staging / finalize / manifest / thumbnail inchangés** — le contrat deux-phases est agnostique à
+  l'extension (`expected_artifacts=[stem, "thumb.png"]`, stem sans ext ; `.glb ∈
+  PUBLISH_ARTIFACT_EXTENSIONS`). `load_after` route `import_scene.gltf` pour un `.glb`.
+- **Pas de double artifact** (usd+glb) : un publish émet UN artefact selon la cible (le double
+  reste réservé à une éventuelle passerelle Houdini). `op_export_glb` (bouton dédié du panel pour
+  target web) et le routage du panel restent **inchangés** (hors scope UI) ; `op_publish` est
+  désormais format-aware quel que soit le point d'entrée.
+- **Tests** : `tools/blender/test_publish_glb_headless.py` (Blender headless — projet `XR`, publish
+  d'un cube renommé → `.glb` non vide + entrée manifest `complete` + thumbnail + datablock réaligné ;
+  **hors CI**) ; `tests/test_create_project.py::TestPipelineTarget` (stdlib CI — mapping complet,
+  écriture par `create()`, dérivation legacy, override explicite, défauts tolérants). Le cas
+  offline/`.usd` reste couvert par l'existant.
 
 ### Sync web (`sync_web_assets`)
 `create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB

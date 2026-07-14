@@ -567,5 +567,64 @@ class TestFinalizeThumbnailField(TempProjectTestCase):
         self.assertEqual(entry["thumbnail"], entry["thumb"])  # meme chemin
 
 
+class TestPipelineTarget(unittest.TestCase):
+    """CC#2 volet B : la cible de pipeline (FORMAT d'artifact) est une decision
+    d'orchestrateur. create() ecrit 'pipeline_target' (derive du prod_type) ;
+    get_pipeline_target() le lit tolerablement (champ absent -> derive, defaut 'offline')."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+
+    def _make(self, name, prod_type):
+        info = cp.create(name, root=self._tmp + "/root", cache=self._tmp + "/cache",
+                         prod_type=prod_type)
+        return str(info["source"])
+
+    def test_mapping_covers_all_prod_types(self):
+        # Chaque PROD_TYPE a une cible (pas de KeyError silencieux downstream).
+        for pt in cp.PROD_TYPES:
+            self.assertIn(cp.PROD_TYPE_TO_TARGET.get(pt), ("web", "offline"),
+                          f"{pt} sans cible dans PROD_TYPE_TO_TARGET")
+
+    def test_create_writes_web_for_xr(self):
+        proj = self._make("web_proj", "XR")
+        pj = json.loads((Path(proj) / "_pipeline" / "project.json").read_text())
+        self.assertEqual(pj["pipeline_target"], "web")
+        self.assertEqual(cp.get_pipeline_target(proj), "web")
+
+    def test_create_writes_offline_for_film(self):
+        proj = self._make("film_proj", "FILM")
+        pj = json.loads((Path(proj) / "_pipeline" / "project.json").read_text())
+        self.assertEqual(pj["pipeline_target"], "offline")
+        self.assertEqual(cp.get_pipeline_target(proj), "offline")
+
+    def test_unknown_prod_type_defaults_offline(self):
+        proj = self._make("unk_proj", "ZZ_UNKNOWN")
+        self.assertEqual(cp.get_pipeline_target(proj), "offline")
+
+    def test_missing_field_derives_from_prod_type(self):
+        # Projet legacy 2.0 sans 'pipeline_target' : derive du prod_type, jamais de crash.
+        proj = self._make("legacy_proj", "AR")
+        mpath = Path(proj) / "_pipeline" / "project.json"
+        data = json.loads(mpath.read_text())
+        del data["pipeline_target"]
+        mpath.write_text(json.dumps(data))
+        self.assertEqual(cp.get_pipeline_target(proj), "web")  # AR -> web
+
+    def test_explicit_field_wins_over_prod_type(self):
+        # Un champ explicite prime la derivation (override manuel possible).
+        proj = self._make("override_proj", "FILM")  # FILM -> offline par defaut
+        mpath = Path(proj) / "_pipeline" / "project.json"
+        data = json.loads(mpath.read_text())
+        data["pipeline_target"] = "web"
+        mpath.write_text(json.dumps(data))
+        self.assertEqual(cp.get_pipeline_target(proj), "web")
+
+    def test_unreadable_manifest_defaults_offline(self):
+        # Manifeste absent -> defaut tolerant, jamais d'exception.
+        self.assertEqual(cp.get_pipeline_target(self._tmp + "/nope"), "offline")
+
+
 if __name__ == "__main__":
     unittest.main()
