@@ -31,7 +31,7 @@ def _purge_create_project_module():
             del sys.modules[key]
 
 from . import core
-from .ui import panel_pipeline, panel_asset_list
+from .ui import panel_pipeline, panel_asset_list, menu
 from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
     op_open_context, op_open_wip, op_switch_context,
@@ -62,6 +62,10 @@ _classes = (
     op_scene_check.YLOS_OT_FixAll,
     op_popup.YLOS_OT_OpenPopup,
     op_export_glb.YLOS_OT_ExportGLB,
+    menu.YLOS_OT_OpenProjectBrowser,
+    menu.YLOS_OT_ReloadPipeline,
+    menu.YLOS_OT_About,
+    menu.YLOS_MT_TopbarMenu,
     panel_pipeline.YLOS_PT_PipelinePanel,
     panel_pipeline.YLOS_PT_AssetPanel,
     panel_pipeline.YLOS_PT_SceneSettingsPanel,
@@ -108,9 +112,11 @@ def register():
         bpy.utils.register_class(cls)
 
     bpy.types.VIEW3D_HT_header.append(_draw_header_button)
+    bpy.types.TOPBAR_MT_editor_menus.append(menu.draw_topbar_menu)
 
 
 def unregister():
+    bpy.types.TOPBAR_MT_editor_menus.remove(menu.draw_topbar_menu)
     bpy.types.VIEW3D_HT_header.remove(_draw_header_button)
 
     for cls in reversed(_classes):
