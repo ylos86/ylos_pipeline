@@ -495,5 +495,77 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         self.assertNotIn(fstem, shot_root)
 
 
+class TestListPublishes(TempProjectTestCase):
+    """Volet lecture (CC#1c) : list_publishes fusionne deux-phases (dossier niche) +
+    fichiers plats legacy sans doublon de version ; latest_publish_artifact prend la
+    'complete' de version max. Ne leve jamais pour un cas metier."""
+
+    def setUp(self):
+        super().setUp()
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+
+    def _legacy_flat(self, step, version, ext="usd"):
+        pub = Path(self.project) / "assets" / "PROP_Tente_Default" / step / "publish"
+        pub.mkdir(parents=True, exist_ok=True)
+        f = pub / f"PROP_Tente_Default_{step}_v{version:03d}.{ext}"
+        f.write_bytes(b"legacy usd layer")
+        return f
+
+    def test_two_phase_and_legacy_merge(self):
+        self._publish_step("PROP_Tente_Default", "modeling")   # v1 deux-phases (dossier)
+        self._legacy_flat("modeling", 2)                       # v2 fichier plat legacy
+        pubs = cp.list_publishes(self.project, "PROP_Tente_Default", "modeling")
+        self.assertEqual([(e["version"], e["legacy"]) for e in pubs], [(1, False), (2, True)])
+        self.assertTrue(all(e["exists"] for e in pubs))
+        self.assertTrue(all(Path(e["abs_path"]).is_file() for e in pubs))
+
+    def test_legacy_never_overrides_two_phase_same_version(self):
+        version, _ = self._publish_step("PROP_Tente_Default", "modeling")  # v1 deux-phases
+        self._legacy_flat("modeling", version)                            # meme numero, a plat
+        pubs = cp.list_publishes(self.project, "PROP_Tente_Default", "modeling")
+        self.assertEqual(len(pubs), 1)
+        self.assertFalse(pubs[0]["legacy"])  # le contrat vivant prime
+
+    def test_latest_publish_artifact_is_complete_max(self):
+        self._publish_step("PROP_Tente_Default", "modeling")   # v1 complete (deux-phases)
+        self._legacy_flat("modeling", 3)                       # v3 complete (legacy)
+        latest = cp.latest_publish_artifact(self.project, "PROP_Tente_Default", "modeling")
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest["version"], 3)
+        self.assertTrue(latest["exists"])
+        self.assertTrue(Path(latest["abs_path"]).is_file())
+
+    def test_pending_excluded_from_latest(self):
+        # allocate sans finalize -> entree 'pending' (artifact None), visible mais jamais latest.
+        cp.allocate_publish_version(self.project, "PROP_Tente_Default", comment="", kind="modeling")
+        pubs = cp.list_publishes(self.project, "PROP_Tente_Default", "modeling")
+        self.assertEqual([e["status"] for e in pubs], ["pending"])
+        self.assertIsNone(cp.latest_publish_artifact(self.project, "PROP_Tente_Default", "modeling"))
+
+    def test_missing_entity_or_step_returns_empty_no_raise(self):
+        self.assertEqual(cp.list_publishes(self.project, "NOPE_X_Y", "modeling"), [])
+        self.assertIsNone(cp.latest_publish_artifact(self.project, "NOPE_X_Y", "modeling"))
+        self.assertEqual(cp.list_publishes(self.project, "PROP_Tente_Default", "rigging"), [])
+
+
+class TestFinalizeThumbnailField(TempProjectTestCase):
+    """Volet contrat (CC#1c) : finalize_publish_version renseigne 'thumbnail' (chemin
+    relatif entite) quand thumb.png existe, en plus de 'thumb' (compat lecteurs existants)."""
+
+    def setUp(self):
+        super().setUp()
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+
+    def test_thumbnail_field_populated(self):
+        self._publish_step("PROP_Tente_Default", "modeling")
+        mpath = Path(self.project) / "assets" / "PROP_Tente_Default" / "manifest.json"
+        entry = json.loads(mpath.read_text())["step_publishes"]["modeling"][-1]
+        self.assertEqual(entry["status"], "complete")
+        self.assertTrue(entry["thumbnail"], "'thumbnail' doit etre renseigne")
+        self.assertTrue(entry["thumbnail"].endswith("thumb.png"))
+        self.assertTrue(entry["thumbnail"].startswith("modeling/publish/"))
+        self.assertEqual(entry["thumbnail"], entry["thumb"])  # meme chemin
+
+
 if __name__ == "__main__":
     unittest.main()

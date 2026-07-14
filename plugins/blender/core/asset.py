@@ -4,6 +4,7 @@
 # Creation logic removed — use create_project.py (source of truth).
 
 import os
+import sys
 import re
 from pathlib import Path
 from datetime import datetime
@@ -13,6 +14,19 @@ from .project import (
     SET_STEPS,
     load_project,
 )
+
+# create_project.py (racine du repo) porte la logique UNIQUE de lecture des publishes ; cet
+# addon n'en est qu'un consommateur mince. Import paresseux (le repo root est injecte dans
+# sys.path au register() de l'addon, mais ces helpers peuvent etre appeles hors de ce chemin).
+# core/asset.py -> core -> blender -> plugins -> repo = 4 remontees.
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
+
+
+def _cp():
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    import create_project
+    return create_project
 
 # ---------------------------------------------------------------------------
 # Naming helpers
@@ -115,31 +129,40 @@ def list_wip_versions(project_path: str, entity_name: str, step: str,
     return sorted(results, key=lambda x: x["version"])
 
 
+_USD_PUBLISH_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
+
+
 def list_publish_versions(project_path: str, entity_name: str, step: str,
                           entity_type: str = "asset") -> list:
-    root = _get_entity_root(project_path, entity_name, entity_type)
-    pub_dir = root / step / "publish"
-
-    if not pub_dir.exists():
-        return []
-
+    """Adaptateur mince sur create_project.list_publishes (logique unique) : publishes USD
+    du step (contrat deux-phases niche + fichiers plats legacy fusionnes), forme historique
+    {version, variant, filename, path} conservee (consommee par op_load_publish). Le scan a
+    plat local d'antan (qui rendait invisibles les publishes deux-phases en DOSSIER) est
+    supprime - c'etait la cause du 'No published USD found'."""
     results = []
-    for f in sorted(pub_dir.iterdir()):
-        if f.suffix in (".usd", ".usda", ".usdc", ".usdz"):
-            m = VERSION_VARIANT_PATTERN.search(f.name)
-            if m:
-                results.append({
-                    "version":  int(m.group(1)),
-                    "variant":  m.group(2) or "Default",
-                    "filename": f.name,
-                    "path":     str(f),
-                })
-
+    for e in _cp().list_publishes(project_path, entity_name, step, entity_type):
+        artifact = e.get("artifact")
+        abs_path = e.get("abs_path")
+        if not artifact or not abs_path:
+            continue  # entree 'pending' (pas encore d'artefact)
+        if not str(artifact).lower().endswith(_USD_PUBLISH_EXTS):
+            continue  # op_load_publish importe de l'USD ; un GLB/cache n'y a pas sa place
+        name = os.path.basename(abs_path)
+        m = VERSION_VARIANT_PATTERN.search(name)
+        variant = m.group(2) if (m and m.group(2)) else "Default"
+        results.append({
+            "version":  e.get("version"),
+            "variant":  variant,
+            "filename": name,
+            "path":     abs_path,
+        })
     return sorted(results, key=lambda x: (x["version"], x["variant"]))
 
 
 def get_latest_publish_path(project_path: str, entity_name: str, step: str,
                             entity_type: str = "asset"):
+    """Dernier publish USD du step (chemin absolu) ou None - via list_publish_versions
+    ci-dessus (donc via l'orchestrateur). Corrige le Load Latest casse."""
     versions = list_publish_versions(project_path, entity_name, step, entity_type)
     if not versions:
         return None
@@ -167,10 +190,13 @@ def get_latest_wip_version(project_path: str, entity_name: str, step: str,
 
 def get_latest_publish_version(project_path: str, entity_name: str, step: str,
                                entity_type: str = "asset") -> int:
-    versions = list_publish_versions(project_path, entity_name, step, entity_type)
-    if not versions:
-        return 0
-    return versions[-1]["version"]
+    """Version max PUBLIEE ('complete', tout type d'artefact + legacy) du step, ou 0 - via
+    create_project.latest_publish_artifact. Avant : le scan a plat ne voyait pas les dossiers
+    deux-phases -> retournait 0 et faussait l'estimation de prochaine version du dialog publish
+    (ainsi que get_asset_step_status). Un artefact non-USD (GLB) compte ici : les versions sont
+    partagees par step (cf. allocate_publish_version)."""
+    latest = _cp().latest_publish_artifact(project_path, entity_name, step, entity_type)
+    return latest["version"] if latest else 0
 
 
 # ---------------------------------------------------------------------------

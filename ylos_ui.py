@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,8 +57,12 @@ YLOS_DIR = Path.home() / ".ylos"
 ACTIVE_FILE = YLOS_DIR / "active_project"
 RECENT_FILE = YLOS_DIR / "recent_projects"
 DEFAULT_PORT = 8765
-BLENDER_APP = Path("/Applications/Blender.app/Contents/MacOS/Blender")
+# Binaire Blender : surchargeable par $YLOS_BLENDER (autres OS / installations non standard).
+BLENDER_APP = Path(os.environ.get("YLOS_BLENDER")
+                   or "/Applications/Blender.app/Contents/MacOS/Blender")
 THUMB_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+# Extensions ouvertes par import USD (pas comme mainfile .blend) dans _post_open_blender.
+USD_OPEN_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
 
 # -------------------------------------------------------------------------------------
 # Utilitaires
@@ -129,11 +134,6 @@ def _read_asset_manifest(asset_dir: Path) -> dict | None:
         return None
 
 
-def _last_publish(paths: list[str]) -> str | None:
-    """Retourne le publish avec le numéro de version le plus élevé."""
-    return max(paths, key=create_project._ver) if paths else None
-
-
 def _latest_step_publish_thumb(manifest: dict) -> str | None:
     """Cherche le thumb du publish 'complete' le plus recent dans manifest['step_publishes']
     (contrat deux-phases generalise, cf. create_project.finalize_publish_version — kind=step).
@@ -171,20 +171,18 @@ def _find_thumb(asset_dir: Path, asset_name: str, manifest: dict | None = None) 
     return None
 
 
-def _last_versions(manifest: dict) -> dict:
+def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict:
     """Dernier chemin publie (relatif a l'entite, contenant 'vNNN' - contrat consomme tel
-    quel par app.html::verNum/openBlender) par step. Contrat deux-phases en priorite
-    (manifest['step_publishes'], entree 'complete' de version max -> son 'artifact') puis
-    repli sur l'ancien format a plat (manifest['publishes'], liste de chemins -
-    publish_asset() legacy)."""
+    quel par app.html::verNum/openBlender) par step. Resolu via l'ORCHESTRATEUR
+    (create_project.latest_publish_artifact) : deux-phases niche + fichiers plats legacy
+    fusionnes, entree 'complete' de version max. Plus aucune resolution dupliquee ici
+    (le commentaire 'logique unique, jamais dupliquee' en tete de module devient vrai)."""
+    steps = set(manifest.get("step_publishes", {})) | set(manifest.get("publishes", {}))
     result: dict = {}
-    for step, entries in manifest.get("step_publishes", {}).items():
-        complete = [e for e in entries if e.get("status") == "complete" and e.get("artifact")]
-        if complete:
-            result[step] = max(complete, key=lambda e: e["version"])["artifact"]
-    for step, paths in manifest.get("publishes", {}).items():
-        if paths and step not in result:
-            result[step] = _last_publish(paths)
+    for step in steps:
+        latest = create_project.latest_publish_artifact(project_root, entity_name, step)
+        if latest and latest.get("artifact"):
+            result[step] = latest["artifact"]
     return result
 
 
@@ -207,7 +205,7 @@ def _list_assets(project_dir: Path) -> list[dict]:
                 "entity_type": manifest.get("entity_type"),
                 "type": manifest.get("type"),
                 "steps": manifest.get("steps", []),
-                "last_versions": _last_versions(manifest),
+                "last_versions": _last_versions(project_dir, asset_dir.name, manifest),
                 "thumb": f"/thumb/{thumb}" if thumb else None,
             })
     return result
@@ -594,21 +592,28 @@ class YlosHandler(BaseHTTPRequestHandler):
         if not path:
             _json(self, 400, {"error": "Champ 'path' manquant"})
             return
+
+        # Binaire Blender requis (surchargeable par $YLOS_BLENDER). Introuvable -> erreur
+        # HTTP explicite, jamais de no-op silencieux (cf. lecon d'observabilite CC#1b).
+        if not BLENDER_APP.is_file():
+            _json(self, 500, {
+                "error": f"Binaire Blender introuvable : {BLENDER_APP}. "
+                         f"Definir $YLOS_BLENDER vers l'executable Blender.",
+            })
+            return
+
+        # Action par extension : un .usd/.usda/... ne s'ouvre pas comme mainfile - il s'importe.
+        ext = os.path.splitext(str(path))[1].lower()
+        if ext in USD_OPEN_EXTS:
+            args = [str(BLENDER_APP), "--python-expr",
+                    f"import bpy; bpy.ops.wm.usd_import(filepath={str(path)!r})"]
+        else:  # .blend (WIP) et tout le reste : ouverture comme fichier principal
+            args = [str(BLENDER_APP), str(path)]
+
         try:
-            if BLENDER_APP.is_file():
-                subprocess.Popen(
-                    [str(BLENDER_APP), str(path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                # Fallback macOS : open -a Blender <fichier>
-                subprocess.Popen(
-                    ["open", "-a", "Blender", str(path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            _json(self, 200, {"ok": True, "path": str(path)})
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _json(self, 200, {"ok": True, "path": str(path),
+                              "mode": "usd_import" if ext in USD_OPEN_EXTS else "mainfile"})
         except OSError as e:
             _json(self, 500, {"error": f"Impossible de lancer Blender : {e}"})
 

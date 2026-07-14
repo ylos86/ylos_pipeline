@@ -329,6 +329,44 @@ qui `print`/report le chemin résolu sans ouvrir. Tests : `tests/test_resolve_op
 (stdlib, CI) — manifeste synthétique avec `prod_type="ZZ_UNKNOWN"`, WIP/scene_default/publish,
 entité/projet absents, manifeste corrompu : tous résolvent proprement sans lever.
 
+### Lecture des publishes — API publique de l'orchestrateur (2026-07-14, CC#1c)
+`create_project.py` porte la **logique UNIQUE de lecture** des publishes ; les consommateurs
+(addon Blender, `ylos_ui`) sont des adaptateurs minces. Ne lèvent JAMAIS pour un cas métier.
+- `list_publishes(project_root, entity_name, step, entity_type="asset") -> list[dict]` :
+  **manifest-first** (`step_publishes[step]`, chaque entrée copiée + enrichie `abs_path`/
+  `exists`, `legacy=False`) **fusionné** avec un **fallback fichiers plats legacy** (scan
+  disque de `<step>/publish/` pour les `_vNNN.<ext>` USD — un dossier deux-phases a
+  `is_file()` False, jamais capté ; entrées `legacy=True`). Dédup par numéro de version, le
+  deux-phases prime. Trié par version croissante.
+- `latest_publish_artifact(project_root, entity_name, step, entity_type="asset") -> dict|None` :
+  entrée `complete` de version max (deux-phases + legacy), enrichie `abs_path`/`exists`.
+  Généralisation disque-aware de `_latest_step_publish_rel()` (qui, lui, opère sur un
+  manifeste déjà en mémoire et filtre aux seuls layers USD, pour la composition/ouverture).
+- **Adaptateurs** `plugins/blender/core/asset.py` (signatures conservées) : `list_publish_versions`
+  (USD only, forme `{version, variant, filename, path}`), `get_latest_publish_path` (dernier USD),
+  `get_latest_publish_version` (via `latest_publish_artifact`, version `complete` max — tout type
+  d'artefact). Le **scan à plat local a disparu** (c'était la cause du « No published USD found »
+  du Load Latest et de l'estimation de version faussée du dialog publish : un publish deux-phases
+  en DOSSIER était invisible).
+- `ylos_ui.py::_last_versions(project_root, entity_name, manifest)` passe par
+  `latest_publish_artifact` (plus de résolution dupliquée — le « logique unique, jamais
+  dupliquée » en tête de module devient vrai). Contrat de sortie vers `app.html` inchangé.
+- `_post_open_blender` : **action par extension** — `.blend` → `Popen([BLENDER_APP, path])` ;
+  `.usd/.usda/.usdc/.usdz/.usdnc` → `Popen([BLENDER_APP, "--python-expr", "import bpy;
+  bpy.ops.wm.usd_import(filepath=<repr>)"])` (un USD ne s'ouvre pas comme mainfile). `BLENDER_APP`
+  surchargeable par **`$YLOS_BLENDER`** ; binaire introuvable → **réponse HTTP d'erreur explicite**,
+  jamais de no-op silencieux (leçon CC#1b).
+- `finalize_publish_version` renseigne désormais `entry["thumbnail"]` (même chemin relatif entité
+  que `entry["thumb"]`, conservé pour compat) quand `thumb.png` existe dans le dossier finalisé.
+- Tests stdlib (CI) : `tests/test_create_project.py::TestListPublishes` (fusion deux-phases +
+  legacy, dédup, `complete` max, `pending` exclu, entité absente) et `::TestFinalizeThumbnailField`.
+
+### Backlog — publish hygiene
+- **Normaliser (ou warner) data-name ≠ object-name** avant publish : sans ça les prims USD
+  sortent avec le nom de la *donnée* (`Cube_001`) et non celui de l'objet — divergence de
+  nommage dans les stages publiés. Chantier séparé (probablement côté `scene_checker` / au
+  moment de l'export USD).
+
 ### Sync web (`sync_web_assets`)
 `create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB
 **pinnés** (`project.json["web"]["pinned_assets"]`, jamais "latest") vers

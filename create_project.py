@@ -654,6 +654,87 @@ def _latest_step_publish_rel(manifest, step):
     return max(complete, key=lambda e: e.get("version", 0))["artifact"]
 
 
+# Extensions USD reconnues comme publish a plat legacy (publish_asset() deprecie ecrivait
+# <step>/publish/<name>_<step>_vNNN.<ext>). '.usdz' inclus (livrable) ; les autres = layers
+# composables. Un publish deux-phases est un DOSSIER, jamais un fichier -> jamais confondu.
+_LEGACY_PUBLISH_EXTS = USD_LAYER_EXTENSIONS + (".usdz",)
+
+
+def list_publishes(project_root, entity_name, step, entity_type="asset"):
+    """API publique de LECTURE des publishes d'un step (la logique vit dans l'orchestrateur,
+    les consommateurs DCC/UI sont minces - principe 5). Ne leve JAMAIS pour un cas metier
+    (entite/step introuvable) : retourne []. Fusionne deux sources, sans doublon de version :
+
+    - **manifest-first** : contrat deux-phases (manifest['step_publishes'][step]). Chaque
+      entree est renvoyee telle quelle (copie) + enrichie 'abs_path' (chemin absolu de
+      'artifact', ou None) et 'exists' (bool). 'legacy'=False.
+    - **fallback fichiers plats legacy** : scan disque de <entity>/<step>/publish/ pour les
+      FICHIERS versionnes (pattern '_vNNN.<ext>' USD, cf. _LEGACY_PUBLISH_EXTS - un dossier
+      deux-phases a `f.is_file()` False, jamais capte). Entrees {version, status:'complete',
+      artifact (rel), abs_path, exists:True, legacy:True}. Un numero deja present cote
+      deux-phases n'est PAS ecrase (le contrat vivant prime).
+
+    Retour trie par version croissante."""
+    project_root = Path(project_root)
+    try:
+        entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
+    except FileNotFoundError:
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+
+    by_version = {}  # version -> entree enrichie
+
+    for e in manifest.get(STEP_PUBLISHES_KEY, {}).get(step, []):
+        ver = e.get("version")
+        if ver is None:
+            continue
+        entry = dict(e)
+        artifact = e.get("artifact")
+        abs_path = (entity_dir / artifact) if artifact else None
+        entry["abs_path"] = str(abs_path) if abs_path is not None else None
+        entry["exists"] = bool(abs_path is not None and abs_path.exists())
+        entry["legacy"] = False
+        by_version[ver] = entry
+
+    pub_dir = entity_dir / step / "publish"
+    if pub_dir.is_dir():
+        for f in sorted(pub_dir.iterdir()):
+            if not f.is_file() or f.suffix.lower() not in _LEGACY_PUBLISH_EXTS:
+                continue
+            m = _VER_RE.search(f.name)
+            if not m:
+                continue
+            ver = int(m.group(1))
+            if ver in by_version:
+                continue  # le deux-phases prime a version egale
+            by_version[ver] = {
+                "version": ver,
+                "status": "complete",
+                "artifact": f"{step}/{LOP_PUBLISH_DIR_NAME}/{f.name}",
+                "abs_path": str(f),
+                "exists": True,
+                "legacy": True,
+            }
+
+    return [by_version[v] for v in sorted(by_version)]
+
+
+def latest_publish_artifact(project_root, entity_name, step, entity_type="asset"):
+    """Entree publish 'complete' de version max pour le step (deux-phases + legacy fusionnes,
+    cf. list_publishes), enrichie 'abs_path'/'exists'/'legacy'. dict ou None (aucun publish
+    'complete'). Ne leve jamais pour un cas metier. Generalisation disque-aware de
+    _latest_step_publish_rel() (qui, lui, opere sur un manifeste deja en memoire et filtre
+    aux seuls layers USD pour la composition/ouverture)."""
+    complete = [e for e in list_publishes(project_root, entity_name, step, entity_type)
+                if e.get("status") == "complete"]
+    if not complete:
+        return None
+    return max(complete, key=lambda e: e.get("version", 0))
+
+
 def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None):
     """Resout QUEL fichier un DCC doit ouvrir pour une entite+step. La logique vit dans
     l'orchestrateur (principe 5) : reutilisable par Blender ET Houdini, l'addon ne fait que
@@ -1207,7 +1288,12 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         # pour tout le reste (generique - USD ou GLB selon le DCC appelant).
         artifact_key = "layer" if kind == "lop" else "artifact"
         entry[artifact_key] = f"{rel_dir}/{artifacts[0]}" if artifacts else None
-        entry["thumb"] = f"{rel_dir}/{thumbs[0]}" if thumbs else None
+        thumb_rel = f"{rel_dir}/{thumbs[0]}" if thumbs else None
+        entry["thumb"] = thumb_rel
+        # 'thumbnail' : meme chemin relatif entite que 'thumb', renseigne quand thumb.png
+        # existe dans le dossier finalise (le champ etait absent -> lu None par les
+        # consommateurs qui l'attendent). 'thumb' conserve pour compat (lecteurs existants).
+        entry["thumbnail"] = thumb_rel
         entry["published_utc"] = _now()
         if comment:
             entry["comment"] = comment
