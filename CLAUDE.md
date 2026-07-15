@@ -556,13 +556,30 @@ fait le ménage en miroir (vieilles versions d'assets connus retirées, tout fic
 laissé intact). **Le projet web ne lit jamais la structure du pipeline, uniquement
 `assets.json`.** Schéma `project.json["web"]` : `{target_dir, pinned_assets: {<asset>:
 {step, version}}}` — le `step` est requis car un asset peut avoir des publishes GLB
-indépendants par step. Exposé côté `ylos_ui.py` : `POST /api/set-web-target`,
-`POST /api/sync-web`, et depuis 2026-07-06 le pinning complet — `GET /api/web-pins`
-(pins courants + publishes GLB disponibles par entité, seuls les deux-phases `complete`
-à artefact `.glb` sont pinnables), `POST /api/pin-asset` (refuse tout pin sans publish
-GLB réel correspondant : le pin est un contrat consommé tel quel par `sync_web_assets`,
-un pin cassé n'y produirait qu'un warning tardif), `POST /api/unpin-asset` (idempotent).
-Les mutations de `project.json["web"]` passent par `_update_project_web()` (flock).
+indépendants par step.
+
+**API de pinning dans l'orchestrateur (2026-07-15, INC-6).** La logique de pinning
+(validation + écriture de `project.json["web"]`) vit désormais dans `create_project.py`
+(principe 5 — **importable par un plugin DCC / n8n**, plus seulement par le serveur HTTP) :
+`pin_web_asset(project_root, asset, step, version)` (valide via `list_publishes` qu'un publish
+`complete` à artefact `.glb` existe pour (asset, step, version), refuse sinon avec la liste des
+versions dispo), `unpin_web_asset(project_root, asset)` (idempotent, `was_pinned` dans le
+retour), `set_web_target(project_root, target_dir)` — toutes **ne lèvent JAMAIS** pour un cas
+métier (retour `{"ok": bool, ...}`). Unique writer `_update_web()` (read-modify-write sous
+`acquire_lock`, écriture atomique via `write_manifest`) : plus aucune mutation de
+`project.json["web"]` ailleurs. Le champ `target_dir` mémorise le `web_project_dir` cible
+(consommé par `sync_web_assets` sans le repasser) — INC-6 le nommait `project_dir`, on conserve
+`target_dir` déjà au contrat (renommer = migration inutile, lu par n8n + 2 plugins). Tests :
+`tests/test_create_project.py::TestPinWebAsset` (pin valide/version inexistante/step USD/mauvais
+type, unpin idempotent, set-target, cycle complet pin → sync).
+
+Exposé côté `ylos_ui.py` (adaptateurs **minces** qui délèguent à l'orchestrateur, contrat HTTP
+inchangé) : `POST /api/set-web-target`, `POST /api/sync-web`, `GET /api/web-pins` (pins courants
++ publishes GLB disponibles par entité, seuls les deux-phases `complete` à artefact `.glb` sont
+pinnables), `POST /api/pin-asset` (un pin refusé → 400 avec la liste de ce qui existe : le pin
+est un contrat consommé tel quel par `sync_web_assets`, un pin cassé n'y produirait qu'un
+warning tardif), `POST /api/unpin-asset` (idempotent). L'ancien writer dupliqué
+`ylos_ui._update_project_web()` a été **retiré** (la logique est passée dans `_update_web`).
 UI : le modal "Sync Web" d'`app.html` liste les entités à publishes GLB avec un select
 step/version par entité — pin/unpin immédiat au changement, plus d'édition manuelle de
 `pinned_assets`. Un pin pointant vers un publish disparu s'affiche "(introuvable)"
