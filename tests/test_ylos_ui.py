@@ -194,6 +194,56 @@ class TestApiConfig(ServerTestCase):
         self.assertEqual(families["set"]["steps"], cp.DEFAULT_SET_STEPS)
 
 
+class TestAssetScenefiles(ServerTestCase):
+    """/api/asset/<name> expose 'scenefiles' (historique WIP + commentaire/user du sidecar
+    '<wip>.blend.json' écrit par ylos.save_wip, INC-4) — lecture seule, tolérante à un
+    sidecar absent/corrompu."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_scenefiles", root=str(cls._tmp / "sroot"),
+                         cache=str(cls._tmp / "scache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+
+        wip_dir = cls.project / "assets" / "PROP_Tente_Default" / "modeling" / "wip"
+        wip_dir.mkdir(parents=True, exist_ok=True)
+
+        # v001 : sidecar conforme.
+        (wip_dir / "PROP_Tente_Default_modeling_v001.blend").write_bytes(b"blend")
+        (wip_dir / "PROP_Tente_Default_modeling_v001.blend.json").write_text(
+            json.dumps({"comment": "blocking pass", "user": "seb",
+                       "date": "2026-07-15T00:00:00+00:00", "blender_version": "5.1.1"}),
+            encoding="utf-8")
+
+        # v002 : PAS de sidecar (WIP legacy, avant INC-4) - ne doit jamais lever.
+        (wip_dir / "PROP_Tente_Default_modeling_v002.blend").write_bytes(b"blend")
+
+        cls._set_active(cls.project)
+
+    def test_scenefiles_merges_sidecar_and_tolerates_missing(self):
+        status, _, body = self._request("/api/asset/PROP_Tente_Default")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        sf = data["scenefiles"]["modeling"]
+        self.assertEqual([v["version"] for v in sf], [1, 2])
+
+        v1 = sf[0]
+        self.assertEqual(v1["comment"], "blocking pass")
+        self.assertEqual(v1["user"], "seb")
+        self.assertEqual(v1["blender_version"], "5.1.1")
+
+        v2 = sf[1]
+        self.assertEqual(v2["comment"], "")
+        self.assertEqual(v2["user"], "")
+
+    def test_scenefiles_absent_for_unknown_step(self):
+        status, _, body = self._request("/api/asset/PROP_Tente_Default")
+        data = json.loads(body)
+        self.assertNotIn("lookdev", data["scenefiles"])  # aucun WIP -> pas de cle
+
+
 class TestThumbSecurity(ServerTestCase):
     """Garde anti path-traversal de /thumb/ + service d'un thumb deux-phases légitime."""
 

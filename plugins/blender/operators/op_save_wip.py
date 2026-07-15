@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 import bpy
+import getpass
 import os
-from bpy.props import IntProperty, EnumProperty
+import sys
+from bpy.props import IntProperty, EnumProperty, StringProperty
 from ..core.asset import (
     resolve_wip_save_path,
     get_latest_wip_version,
@@ -9,6 +11,15 @@ from ..core.asset import (
 )
 from ..core import vocab
 from ..core.thumbnails import generate_thumbnail, reload_thumb_icon
+
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
+
+
+def _cp():
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+    import create_project
+    return create_project
 
 
 class YLOS_OT_SaveWip(bpy.types.Operator):
@@ -31,6 +42,13 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         default="modeling",
     )
 
+    comment: StringProperty(
+        name="Comment",
+        description="Note for this version (Prism-style), saved to a sidecar "
+                    "<wip>.blend.json next to the file",
+        default="",
+    )
+
     def invoke(self, context, event):
         scene = context.scene
         if not scene.ylos_project_path or not scene.ylos_current_asset:
@@ -43,6 +61,8 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
             self.step, scene.ylos_context_type.lower(),
         )
         self.version = latest + 1
+        # Reprend la note deja tapee dans le panel (Scenefile), editable ici.
+        self.comment = scene.ylos_wip_comment
         return context.window_manager.invoke_props_dialog(self, width=360)
 
     def draw(self, context):
@@ -55,6 +75,7 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         layout.separator()
         layout.prop(self, "step")
         layout.prop(self, "version")
+        layout.prop(self, "comment")
 
         save_path = resolve_wip_save_path(
             scene.ylos_project_path, scene.ylos_current_asset,
@@ -95,6 +116,20 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
             self.report({"ERROR"}, f"Save failed: {e}")
             return {"CANCELLED"}
 
+        # Sidecar Prism-style '<wip>.blend.json' - ecriture atomique (meme motif que
+        # create_project.py pour tout fichier de metadonnees, cf. CLAUDE.md). Best-effort :
+        # une erreur d'ecriture ne doit jamais faire perdre le .blend deja sauve.
+        try:
+            sidecar = {
+                "comment": self.comment,
+                "user": getpass.getuser(),
+                "date": _cp()._now(),
+                "blender_version": bpy.app.version_string,
+            }
+            _cp()._atomic_write_json(save_path + ".json", sidecar)
+        except Exception as e:
+            self.report({"WARNING"}, f"Sidecar (comment) not saved: {e}")
+
         thumb = generate_thumbnail(save_path, context)
         if thumb:
             reload_thumb_icon(save_path)
@@ -104,5 +139,8 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
 
         scene.ylos_current_step = self.step
         scene.name = f"SCENE_{asset_name}_{self.step}"
+        # La note s'applique a CETTE version, pas aux suivantes (pattern Prism) - vide le
+        # champ du panel une fois consomme.
+        scene.ylos_wip_comment = ""
 
         return {"FINISHED"}

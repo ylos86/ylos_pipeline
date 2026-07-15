@@ -9,7 +9,7 @@ import os
 import sys
 import bpy
 
-from ..core.asset import get_latest_wip_version, get_latest_publish_version
+from ..core.asset import get_latest_wip_version, get_latest_publish_version, list_wip_versions
 from ..core.thumbnails import load_icon
 from ..core import thumbnails, vocab
 
@@ -154,17 +154,25 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
         ver.alignment = "RIGHT"
         ver.label(text=f"v{latest_wip:03d}" if latest_wip else "none yet")
 
+        if latest_wip:
+            versions = list_wip_versions(
+                scene.ylos_project_path, scene.ylos_current_asset,
+                scene.ylos_current_step, scene.ylos_context_type.lower(),
+            )
+            last_comment = versions[-1].get("comment") if versions else ""
+            if last_comment:
+                layout.box().label(text=last_comment, icon="TEXT")
+
+        layout.separator(factor=0.4)
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        layout.prop(scene, "ylos_wip_comment", text="Comment")
+        layout.use_property_split = False
+
         layout.separator(factor=0.3)
         save_row = layout.row(align=True)
         save_row.scale_y = 1.2
         save_row.operator("ylos.save_wip", text="Save Version", icon="FILE_TICK")
-
-        layout.separator(factor=0.4)
-        comment_box = layout.box()
-        comment_row = comment_box.row()
-        comment_row.enabled = False
-        comment_row.prop(scene, "ylos_wip_comment", text="Comment")
-        comment_box.label(text="Prepared for INC-4 (not saved yet).", icon="INFO")
 
         layout.separator(factor=0.4)
         open_row = layout.row(align=True)

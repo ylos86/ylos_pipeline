@@ -21,7 +21,8 @@ Endpoints:
     GET  /api/config           types/steps par famille (source unique : create_project.py,
                                steps surchargés par le pipeline du projet actif)
     GET  /api/assets           liste assets/* sets/* (manifest + dernière version + thumb)
-    GET  /api/asset/<name>     détail + toutes les versions par step
+    GET  /api/asset/<name>     détail + toutes les versions par step + scenefiles (WIP,
+                               commentaire/user/date du sidecar '<wip>.blend.json')
     POST /api/open-blender     {entity, step?} ouvre la scène (WIP-first) OU
                                {entity, step, version} importe un publish précis —
                                résolu côté serveur (create_project), jamais de chemin
@@ -40,6 +41,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -201,6 +203,47 @@ def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict
     return result
 
 
+_WIP_VER_RE = re.compile(r"_v(\d{3})\.blend$")
+
+
+def _list_scenefiles(asset_dir: Path, steps: list) -> dict:
+    """{step: [{version, filename, comment, user, date, blender_version}]} — scan disque de
+    <asset_dir>/<step>/wip/*.blend (lecture seule, jamais de manifeste : un WIP n'est pas une
+    donnée versionnée du pipeline, cf. CLAUDE.md). Sidecar '<wip>.blend.json' (écrit par
+    ylos.save_wip, INC-4) fusionné quand présent — absent/illisible -> champs vides, jamais
+    d'exception (même tolérance que le reste du module)."""
+    result: dict = {}
+    for step in steps:
+        wip_dir = asset_dir / step / "wip"
+        if not wip_dir.is_dir():
+            continue
+        versions = []
+        for f in sorted(wip_dir.iterdir()):
+            if not f.is_file():
+                continue
+            m = _WIP_VER_RE.search(f.name)
+            if not m:
+                continue
+            sidecar = f.with_name(f.name + ".json")
+            meta: dict = {}
+            if sidecar.is_file():
+                try:
+                    meta = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    meta = {}
+            versions.append({
+                "version": int(m.group(1)),
+                "filename": f.name,
+                "comment": meta.get("comment", ""),
+                "user": meta.get("user", ""),
+                "date": meta.get("date", ""),
+                "blender_version": meta.get("blender_version", ""),
+            })
+        if versions:
+            result[step] = sorted(versions, key=lambda v: v["version"])
+    return result
+
+
 def _list_assets(project_dir: Path) -> list[dict]:
     result: list[dict] = []
     for family in ("assets", "sets"):
@@ -234,15 +277,17 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
         manifest = _read_asset_manifest(asset_dir)
         if manifest is None:
             return None
+        steps = manifest.get("steps", [])
         return {
             "name": name,
             "family": family,
             "path": str(asset_dir),
             "entity_type": manifest.get("entity_type"),
             "type": manifest.get("type"),
-            "steps": manifest.get("steps", []),
+            "steps": steps,
             "publishes": manifest.get("publishes", {}),
             "step_publishes": manifest.get("step_publishes", {}),
+            "scenefiles": _list_scenefiles(asset_dir, steps),
             "created_utc": manifest.get("created_utc"),
             "modified_utc": manifest.get("modified_utc"),
         }

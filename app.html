@@ -334,6 +334,35 @@
     .ws-pin-row select:focus { border-color: var(--accent); outline: none; }
     .ws-pins-empty { font-size: 12.5px; color: var(--text-muted); }
 
+    /* Scenefiles (historique WIP + commentaires) */
+    .icon-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; padding: 0; flex-shrink: 0;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text-dim); cursor: pointer; transition: border-color .15s, color .15s;
+    }
+    .icon-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    .sf-body { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+    .sf-step-label {
+      font-size: 11px; color: var(--text-dim); text-transform: uppercase;
+      letter-spacing: .5px; margin-bottom: 6px;
+    }
+    .sf-row {
+      padding: 7px 10px; border-radius: 7px;
+      background: var(--bg-3); border: 1px solid var(--border);
+    }
+    .sf-row + .sf-row { margin-top: 5px; }
+    .sf-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .sf-ver {
+      font-size: 12px; color: var(--accent); font-weight: 600;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    }
+    .sf-meta { font-size: 11px; color: var(--text-dim); }
+    .sf-comment { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+    .sf-comment.sf-comment-empty { font-style: italic; color: var(--text-dim); }
+    .sf-empty { font-size: 12.5px; color: var(--text-muted); }
+
     .hidden { display: none !important; pointer-events: none !important; }
 
     /* ── Recent dropdown ─────────────────────────────── */
@@ -515,6 +544,19 @@
     <div class="modal-actions">
       <button class="btn btn-ghost"   type="button" id="js-ws-cancel">Annuler</button>
       <button class="btn btn-primary" type="button" id="js-ws-ok">Synchroniser</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Modal scenefiles (historique WIP + commentaires) ── -->
+<div class="modal-overlay hidden" id="js-modal-scenefiles">
+  <div class="modal">
+    <h2 id="js-sf-title">Scenefiles</h2>
+    <p class="subtitle">Historique des versions WIP (<code>.blend</code>), commentaire de
+      chaque <em>Save Version</em>.</p>
+    <div class="sf-body" id="js-sf-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" id="js-sf-close">Fermer</button>
     </div>
   </div>
 </div>
@@ -750,6 +792,12 @@ function render() {
     row.addEventListener('click', () => importPublish(
       row.dataset.importEntity, row.dataset.importStep, row.dataset.importVersion))
   );
+  GRID.querySelectorAll('[data-scenefiles-entity]').forEach(btn =>
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openScenefilesModal(btn.dataset.scenefilesEntity);
+    })
+  );
 }
 
 // ── Card HTML ────────────────────────────────────────
@@ -789,7 +837,12 @@ function cardHTML(asset) {
       <div class="card-body">
         <div class="card-head">
           <span class="card-name">${esc(name)}</span>
-          ${type ? `<span class="badge" style="background:${color}22;color:${color};border-color:${color}44">${esc(type)}</span>` : ''}
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+            ${type ? `<span class="badge" style="background:${color}22;color:${color};border-color:${color}44">${esc(type)}</span>` : ''}
+            <button class="icon-btn" type="button" data-scenefiles-entity="${esc(name)}" title="Scenefiles (historique WIP)">
+              ${iconHistory(13)}
+            </button>
+          </span>
         </div>
         <div class="steps-list">${stepsSection}</div>
         <div class="card-footer">
@@ -815,6 +868,13 @@ function iconBox(s) {
     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
     <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
     <line x1="12" y1="22.08" x2="12" y2="12"/>
+  </svg>`;
+}
+function iconHistory(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+    <path d="M3 12a9 9 0 1 0 3-6.7"/>
+    <polyline points="3 4 3 9 8 9"/>
+    <polyline points="12 7 12 12 16 14"/>
   </svg>`;
 }
 
@@ -1248,6 +1308,59 @@ MODAL_WS.addEventListener('click', e => { if (e.target === MODAL_WS) closeWebSyn
 el('js-ws-target').addEventListener('keydown', e => {
   if (e.key === 'Enter') confirmWebSync(); if (e.key === 'Escape') closeWebSyncModal();
 });
+
+// ── Scenefiles (historique WIP + commentaires, INC-4) ─
+const MODAL_SF = el('js-modal-scenefiles');
+
+function openScenefilesModal(entity) {
+  el('js-sf-title').textContent = `Scenefiles — ${entity}`;
+  el('js-sf-body').innerHTML = '<div class="sf-empty">Chargement…</div>';
+  MODAL_SF.classList.remove('hidden');
+  loadScenefiles(entity);
+}
+function closeScenefilesModal() { MODAL_SF.classList.add('hidden'); }
+
+async function loadScenefiles(entity) {
+  try {
+    const { ok, data } = await api(`/api/asset/${encodeURIComponent(entity)}`);
+    if (!ok) {
+      el('js-sf-body').innerHTML = `<div class="sf-empty">${esc(data.error || 'Erreur')}</div>`;
+      return;
+    }
+    renderScenefiles(data.scenefiles || {});
+  } catch {
+    el('js-sf-body').innerHTML = '<div class="sf-empty">Serveur non disponible</div>';
+  }
+}
+
+function renderScenefiles(scenefiles) {
+  const steps = Object.keys(scenefiles).sort();
+  if (!steps.length) {
+    el('js-sf-body').innerHTML = '<div class="sf-empty">Aucun WIP sauvé pour cette entité.</div>';
+    return;
+  }
+  el('js-sf-body').innerHTML = steps.map(step => {
+    const versions = [...scenefiles[step]].sort((a, b) => b.version - a.version);
+    const rows = versions.map(v => {
+      const ver = `v${String(v.version).padStart(3, '0')}`;
+      const meta = [v.user, v.date].filter(Boolean).join(' · ');
+      const comment = v.comment
+        ? `<div class="sf-comment">${esc(v.comment)}</div>`
+        : '<div class="sf-comment sf-comment-empty">Pas de commentaire</div>';
+      return `<div class="sf-row">
+                <div class="sf-row-head">
+                  <span class="sf-ver">${esc(ver)}</span>
+                  <span class="sf-meta">${esc(meta)}</span>
+                </div>
+                ${comment}
+              </div>`;
+    }).join('');
+    return `<div><div class="sf-step-label">${esc(step)}</div>${rows}</div>`;
+  }).join('');
+}
+
+el('js-sf-close').addEventListener('click', closeScenefilesModal);
+MODAL_SF.addEventListener('click', e => { if (e.target === MODAL_SF) closeScenefilesModal(); });
 
 el('js-btn-new-project').addEventListener('click', openNewProjectModal);
 el('js-np-cancel').addEventListener('click', closeNewProjectModal);

@@ -3,6 +3,7 @@
 # Read-only helpers: path resolution, version detection, entity listing.
 # Creation logic removed — use create_project.py (source of truth).
 
+import json
 import os
 import sys
 import re
@@ -103,6 +104,19 @@ VERSION_PATTERN         = re.compile(r"_v(\d{3})\.blend$")
 VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(?:usd[az]?)$")
 
 
+def _read_wip_sidecar(blend_path: Path) -> dict:
+    """Sidecar '<wip>.blend.json' (comment/user/date/blender_version, ecrit par
+    ylos.save_wip) - {} si absent ou illisible, jamais d'exception (meme convention
+    tolerante que le reste du module)."""
+    sidecar = blend_path.with_name(blend_path.name + ".json")
+    if not sidecar.is_file():
+        return {}
+    try:
+        return json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def list_wip_versions(project_path: str, entity_name: str, step: str,
                       entity_type: str = "asset") -> list:
     root = _get_entity_root(project_path, entity_name, entity_type)
@@ -119,11 +133,14 @@ def list_wip_versions(project_path: str, entity_name: str, step: str,
         if m:
             mtime = f.stat().st_mtime
             date_str = datetime.fromtimestamp(mtime).strftime("%b %d, %H:%M")
+            sidecar = _read_wip_sidecar(f)
             results.append({
                 "version":  int(m.group(1)),
                 "filename": f.name,
                 "path":     str(f),
                 "date":     date_str,
+                "comment":  sidecar.get("comment", ""),
+                "user":     sidecar.get("user", ""),
             })
 
     return sorted(results, key=lambda x: x["version"])
