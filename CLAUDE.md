@@ -296,11 +296,14 @@ Le vocabulaire pipeline (asset/set/shot types, steps, prod types, context types)
   et les enums d'**UI pure** (`ylos_popup_tab` dans `__init__.py` — onglets du popup, pas du
   vocabulaire pipeline). Garde : `grep -rn "items=\[" plugins/blender` → seulement
   `__init__.py` (`ylos_popup_tab`).
-- **Résiduel connu (hors scope)** : `core/project.py` porte encore des LISTES de steps
-  `SHOT_STEPS`/`SET_STEPS` **dérivées à la main** (et légèrement driftées vs `DEFAULT_*_STEPS`)
-  consommées par les `BoolVectorProperty` (taille codée en dur) d'`op_new_asset` et par
-  `is_step_valid_for_context`/`get_asset_step_status`. Les retirer = refonte de l'UI de
-  sélection de steps (chantier séparé).
+- **Résolu (2026-07-15, Incrément 2 de « Refonte UI Blender + web » plus bas)** : le résiduel
+  ci-dessous a été traité — `ASSET_STEPS`/`SHOT_STEPS`/`SET_STEPS` sont maintenant dérivées de
+  `vocab.STEP_ITEMS`, et les `BoolVectorProperty` à taille figée d'`op_new_asset` ont été
+  remplacées par une `CollectionProperty` dynamique. Description originale du résiduel, conservée
+  pour l'historique : `core/project.py` portait des LISTES de steps `SHOT_STEPS`/`SET_STEPS`
+  **dérivées à la main** (et driftées vs `DEFAULT_*_STEPS`) consommées par les
+  `BoolVectorProperty` (taille codée en dur) d'`op_new_asset` et par
+  `is_step_valid_for_context`/`get_asset_step_status`.
 - Test headless : `tools/blender/test_vocab_sync.py` (`"$BLENDER" --background --python …`)
   asserte `*_ITEMS == constantes create_project` (valeurs ET ordre), active l'addon sans
   exception, et vérifie que `scene.ylos_prod_type = "XR"` ne lève plus.
@@ -359,6 +362,9 @@ entité/projet absents, manifeste corrompu : tous résolvent proprement sans lev
   **ou** `entity` requis (au moins un fichier à résoudre), `project` → projet actif à défaut, `step`
   optionnel. Réponse JSON : `argv` lancé. Sortie du Popen → `~/.ylos/launch-server.log` (append,
   fini `DEVNULL`).
+  > **Caduc (2026-07-15)** : accepter `path` depuis le client était exactement la cause du bug
+  > corrigé à l'Incrément 3 (cf. « Refonte UI Blender + web » plus bas) — le contrat actuel
+  > n'accepte plus que `{entity, step?}` ou `{entity, step, version}`, jamais de chemin.
 - `finalize_publish_version` renseigne désormais `entry["thumbnail"]` (même chemin relatif entité
   que `entry["thumb"]`, conservé pour compat) quand `thumb.png` existe dans le dossier finalisé.
 - Tests stdlib (CI) : `tests/test_create_project.py::TestListPublishes` (fusion deux-phases +
@@ -436,6 +442,111 @@ console)` — jamais silencieux. Les publishes déjà bakés (vN sales) restent 
   **hors CI**) ; `tests/test_create_project.py::TestPipelineTarget` (stdlib CI — mapping complet,
   écriture par `create()`, dérivation legacy, override explicite, défauts tolérants). Le cas
   offline/`.usd` reste couvert par l'existant.
+
+> **Caduc** : la phrase « `op_export_glb` (bouton dédié du panel pour target web) et le routage
+> du panel restent inchangés » ci-dessus ne tient plus — `op_export_glb.py` est supprimé
+> (Incrément 2 ci-dessous, code mort qui crashait à l'usage). `op_publish` reste l'unique point
+> d'entrée format-aware, comme décrit.
+
+### Refonte UI Blender + web : panel unifié, résolution serveur, import states — terminé (2026-07-15)
+Cinq incréments (numérotation propre à ce chantier, sans rapport avec les « Incréments »
+historiques ni les Incréments shots) : menu top bar (1), refonte N-panel + purge de dette (2),
+fix résolution serveur web + verbes Ouvrir/Importer (3), Save Version + commentaires sidecar (4),
+import states (5). Validation : suite stdlib CI (139 tests), 9 scripts headless Blender
+(`tools/blender/test_*.py`), launcher e2e à 3 invocations — tous verts ; Incréments 3 et 4
+vérifiés en direct dans le navigateur/Blender sur le projet réel `Ylos__Test`.
+
+**Incrément 1 — Menu top bar « Ylos ».** `plugins/blender/ui/menu.py` : pull-down accroché à
+`TOPBAR_MT_editor_menus` (pattern Prism), zéro logique dans `draw()` — réutilise `ylos.save_wip`,
+`wm.save_as_mainfile` (natif Blender, pas d'équivalent pipeline), `ylos.open_context`,
+`ylos.publish`. Trois petits opérateurs sans équivalent existant : `ylos.open_project_browser`
+(`webbrowser.open` vers le serveur web local), `ylos.reload_pipeline` (disable/enable — la purge
+`sys.modules` de `create_project` est déjà gérée par `register()`/`unregister()`, cf. section
+dédiée plus haut), `ylos.about` (version addon + `git rev-parse --short HEAD`, tolérant). Test :
+`tools/blender/test_menu_headless.py`.
+
+**Incrément 2 — N-panel unifié + purge de dette.** `plugins/blender/ui/panel.py` remplace
+`panel_pipeline.py` (4 panels empilés Project/Asset Context/Scene Settings/Tools) par 4 sections
+Context/Scenefile/Publish/Imports — Scene Settings (redondant avec les Properties natives) et
+Tools/migration (ex-Incrément 3 abandonné) ne sont pas reconduits (`ylos.convert_legacy` reste
+enregistré, accessible via F3, sans bouton dédié). Purges :
+- `core/project.py` : `ASSET_STEPS`/`SHOT_STEPS`/`SET_STEPS` dérivées de `vocab.STEP_ITEMS` (donc
+  `create_project.DEFAULT_*_STEPS`) au lieu de listes recopiées à la main — **résout le résiduel
+  connu documenté dans la section « Vocabulaire pipeline centralisé » ci-dessus** (`SHOT_STEPS`
+  avait `layout`/`render`/`composite`, absents du vocabulaire réel ; `SET_STEPS` avait `modeling`
+  au lieu de `layout`).
+- `op_new_asset.py` : les 3 `BoolVectorProperty` à taille figée (Shot=6, drifté vs les 4 steps
+  réels — aurait cassé l'import de l'addon au prochain changement de vocabulaire) remplacées par
+  une `CollectionProperty` (`YLOS_PG_StepToggle`) reconstruite depuis `vocab.STEP_ITEMS[ctx]` à
+  chaque changement de `context_type` — ne peut plus driver, par construction.
+- `op_export_glb.py` **supprimé** (`export_selected=` inexistant sur l'exporter gltf actuel,
+  crash garanti à l'usage) — `op_publish.py` couvre déjà le besoin, format-aware via
+  `get_pipeline_target` (cf. CC#2 ci-dessus).
+Résiduel connu (hors scope, non traité) : le popup header (`op_popup.py`,
+`bpy.ops.ylos.open_popup`) porte encore ses propres onglets PIPELINE/ASSETS/SCENE, dupliquant
+l'information désormais dans le N-panel — candidat à une consolidation future.
+
+**Incrément 3 — Web UI : résolution 100% serveur + verbes Ouvrir/Importer.** Bug réel reproduit
+sur le projet `Ylos__Test`/`PROP_Tente_Default` (log `launch.log` observé avant fix) :
+`app.html` construisait `fullPath = projPath + '/' + last_versions[step]`, mais le chemin de
+publish est relatif à l'**entité**, pas au projet — la concaténation naïve sautait le segment
+`assets/<entité>` (`.../Ylos__Test/modeling/publish/...` au lieu de
+`.../Ylos__Test/assets/PROP_Tente_Default/modeling/publish/...`).
+- Le client n'envoie plus jamais de chemin. `POST /api/open-blender` accepte `{entity, step?}`
+  (« Ouvrir la scène », résolu via `create_project.resolve_open_target`, WIP-first) ou
+  `{entity, step, version}` (« Importer » une version **exacte**, résolu via `list_publishes`) —
+  **remplace le contrat décrit dans la section CC#1c plus haut** (qui acceptait encore
+  `path`/`entity`, cause du bug). `_build_launch_argv()` (fonction pure, testée stdlib) construit
+  l'argv à partir d'un chemin déjà résolu, jamais de reconstruction manuelle ni côté client ni
+  côté serveur.
+- `launch_context.py` : routage par extension étendu aux `.glb`/`.gltf` (`import_scene.gltf`,
+  même ordre contexte-puis-import que l'USD) — sans ce fix, Importer un GLB tentait un
+  `open_mainfile` et échouait.
+- `app.html` : `last_versions` expose désormais `{version, ext, thumb}` (jamais un chemin) ;
+  boutons renommés « Ouvrir la scène » / « Importer (nouvelle session) », vignette
+  (`manifest.thumbnail`) + badge d'extension par ligne, badge cible (web/offline) dans le pill
+  projet (`get_pipeline_target` exposé sur `/api/project`).
+- Tests : stdlib sur `_build_launch_argv` + résolution serveur (`subprocess.Popen` mocké, jamais
+  de Blender lancé en test) ; `tools/blender/test_launch_context.py` étendu d'une invocation C
+  (publish GLB réel + import via le launcher). Vérifié en direct sur `Ylos__Test` : chemins
+  canoniques (segment `assets/<entité>` présent) confirmés dans `launch.log` pour les deux
+  verbes.
+
+**Incrément 4 — Save Version + commentaires (sidecar JSON).** `op_save_wip.py` : `StringProperty
+comment` (pré-rempli depuis `scene.ylos_wip_comment`, posé par le panel Scenefile), version-up
+automatique inchangé (`get_latest_wip_version()+1`). Sidecar `<wip>.blend.json` `{comment, user,
+date, blender_version}` écrit atomiquement (`create_project._atomic_write_json`) juste après le
+save réussi — best-effort (un échec d'écriture du sidecar ne fait jamais perdre le `.blend` déjà
+sauvé). La note est consommée (vidée) après chaque save, pas sticky pour la version suivante
+(pattern Prism). `core/asset.py::list_wip_versions()` fusionne le sidecar quand présent, tolérant
+si absent (WIP legacy pré-Incrément 4). `ylos_ui.py`/`app.html` : nouveau champ `scenefiles` sur
+`/api/asset/<name>` (scan disque des WIP + sidecar par step, jamais de manifeste — un WIP n'est
+pas une donnée versionnée du pipeline) + modal « Scenefiles » (bouton historique par carte)
+listant version/commentaire/user/date. Test : `tools/blender/test_save_wip_comment_headless.py`
+(deux Save Version successifs → v001 puis v002, sidecars distincts et non écrasés, forme exacte
+vérifiée sur disque).
+
+**Incrément 5 — Import states (State-Manager-lite).** `op_import_product.py` (nouveau) absorbe
+`op_load_publish.py` (**supprimé** — USD-only, import à plat par chemin, aucun suivi) :
+`ylos.import_product(entity, step, version)` résout via `core.asset.resolve_publish_entry`
+(`version=0` = dernière, sinon **exactement** celle demandée), route par extension (même logique
+que `launch_context.py`), crée une collection **taguée** (custom props
+`ylos_import_entity`/`step`/`version`/`path`) sous le même parent que la création d'entité
+(`core.project.resolve_parent_collection`). Identité stable `'<entity>_<step>'` : un second
+import du même couple est refusé (→ Update Import), pour que les références externes (caméras,
+animation) restent valides d'une version à l'autre. `op_update_imports.py` (nouveau) :
+`ylos.check_updates` compare chaque collection taguée à `latest_publish_artifact` (cache
+module-level, pattern `op_scene_check.py` — jamais de scan à chaque redraw du panel) ;
+`ylos.update_import` v1 = remplacement pur (retire tout, réimporte à neuf dans la même
+collection), **aucun** remap d'overrides (matériaux/contraintes/animation ajoutés manuellement),
+signalé explicitement dans le rapport (N objets avant/après). `core/project.py` récupère les
+helpers de hiérarchie de collections (déplacés depuis `op_new_asset.py`, partagés avec l'import ;
+import paresseux de `core.asset` pour éviter un cycle) :
+`get_or_create_collection`/`link_collection`/`resolve_parent_collection`/
+`collection_target_label`/`set_active_collection`. Test :
+`tools/blender/test_import_states_headless.py` (scénario exact : publier v1 → importer (props
+vérifiées sur disque) → re-import refusé → publier v2 → `check_updates` détecte (current=1,
+latest=2) → `update_import` remplace (1→2 objets) → update répété = no-op propre).
 
 ### Sync web (`sync_web_assets`)
 `create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB
