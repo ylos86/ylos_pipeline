@@ -62,6 +62,12 @@
     .status-dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .status-dot.offline { background: var(--red); }
 
+    .badge-target {
+      font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+      padding: 1px 6px; border-radius: 3px; flex-shrink: 0;
+      background: var(--bg); border: 1px solid var(--border); color: var(--text-dim);
+    }
+
     .status-label { font-size: 12px; color: var(--text-muted); }
 
     /* ── Buttons ─────────────────────────────────── */
@@ -359,6 +365,7 @@
     <span class="project-pill">
       <span class="status-dot" id="js-dot"></span>
       <span id="js-project-name">Aucun projet</span>
+      <span id="js-project-target" class="badge-target hidden"></span>
     </span>
     <div id="js-recent-wrap" style="position:relative;display:inline-block">
       <button id="js-recent-btn" class="btn btn-secondary hidden" type="button">Récents ▾</button>
@@ -582,6 +589,7 @@ const el = id => document.getElementById(id);
 const DOT          = el('js-dot');
 const STATUS_LBL   = el('js-status-label');
 const PROJECT_NAME = el('js-project-name');
+const PROJECT_TARGET = el('js-project-target');
 const ERR_BANNER   = el('js-error-banner');
 const TOOLBAR      = el('js-toolbar');
 const NO_PROJECT   = el('js-no-project');
@@ -643,10 +651,13 @@ async function checkServer() {
     PROJECT_NAME.textContent = ok
       ? (data.display_name || data.name || data._project_path?.split('/').pop() || '—')
       : 'Aucun projet';
+    PROJECT_TARGET.textContent = ok ? (data.pipeline_target || '') : '';
+    PROJECT_TARGET.classList.toggle('hidden', !ok || !data.pipeline_target);
   } catch {
     setOnline(false);
     S.project = null;
     PROJECT_NAME.textContent = 'Aucun projet';
+    PROJECT_TARGET.classList.add('hidden');
   }
 }
 
