@@ -1471,6 +1471,83 @@ def _known_entity_names(project_root):
     return names
 
 
+# --- API de pinning web (principe 5 : la logique vit dans l'orchestrateur, IMPORTABLE par un
+# plugin DCC ou n8n - pas seulement par le serveur HTTP ylos_ui). Toutes NE LEVENT JAMAIS pour
+# un cas metier (asset/version inconnu, pin d'un publish non-GLB...) : elles retournent un dict
+# {"ok": bool, ...}. project.json['web'] a la forme {target_dir, pinned_assets: {<asset>:
+# {step, version}}} - 'target_dir' memorise le web_project_dir cible (consomme par
+# sync_web_assets ; INC-6 le nomme 'project_dir', on conserve 'target_dir' deja au contrat).
+
+def _update_web(project_root, mutate):
+    """Read-modify-write de project.json['web'] sous flock (le serveur HTTP multi-thread ET les
+    plugins DCC ecrivent le meme manifeste - meme discipline que le reste du module). 'mutate'
+    recoit le dict web (cree si absent, forme {target_dir, pinned_assets}) et le modifie en
+    place ; ecriture atomique via write_manifest (_atomic_write_json en interne)."""
+    project_root = Path(project_root)
+    manifest_path = project_root / PIPELINE_DIR / MANIFEST_NAME
+    with acquire_lock(manifest_path):
+        manifest = read_manifest(project_root)
+        web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
+        mutate(web)
+        manifest["modified_utc"] = _now()
+        write_manifest(project_root / PIPELINE_DIR, manifest)
+
+
+def _pinnable_glb_versions(project_root, entity_name, step):
+    """Versions (triees) des publishes 'complete' a artefact .glb pour ce step - les SEULES
+    pinnables pour le web (sync_web_assets resout le GLB via (step, version)). Un publish USD
+    n'apparait jamais. [] si entite/step introuvable (list_publishes ne leve jamais)."""
+    return sorted(
+        e["version"] for e in list_publishes(project_root, entity_name, step)
+        if e.get("status") == "complete" and (e.get("artifact") or "").endswith(".glb")
+    )
+
+
+def pin_web_asset(project_root, asset, step, version):
+    """Pinne un GLB publie pour la sync web : ecrit project.json['web']['pinned_assets'][asset]
+    = {step, version}, apres avoir valide qu'un publish 'complete' a artefact .glb existe pour
+    (asset, step, version). Le pin est un contrat consomme TEL QUEL par sync_web_assets (un pin
+    casse n'y produirait qu'un warning tardif) : on le refuse ici, avec la liste de ce qui
+    existe. NE LEVE JAMAIS pour un cas metier : retourne
+    {"ok": True, "asset", "step", "version"} ou {"ok": False, "error": <str>}."""
+    project_root = Path(project_root)
+    asset = (asset or "").strip()
+    step = (step or "").strip()
+    # bool est un int en Python : version=True matcherait la version 1 - on l'exclut.
+    if not asset or not step or not isinstance(version, int) or isinstance(version, bool):
+        return {"ok": False, "error": "asset (str), step (str) et version (int) requis."}
+    available = _pinnable_glb_versions(project_root, asset, step)
+    if version not in available:
+        return {"ok": False, "error": (
+            f"Aucun publish GLB 'complete' pour {asset!r} en {step} v{version:03d}. "
+            f"Disponibles : {available or 'aucun'}")}
+    _update_web(project_root, lambda web: web.setdefault("pinned_assets", {}).__setitem__(
+        asset, {"step": step, "version": version}))
+    return {"ok": True, "asset": asset, "step": step, "version": version}
+
+
+def unpin_web_asset(project_root, asset):
+    """Retire le pin web d'un asset. Idempotent : de-pinner un asset non pinne est un succes.
+    NE LEVE JAMAIS : {"ok": True, "asset", "was_pinned": bool} ou {"ok": False, "error"} si
+    'asset' est vide."""
+    asset = (asset or "").strip()
+    if not asset:
+        return {"ok": False, "error": "asset (str) requis."}
+    removed = []
+    _update_web(project_root, lambda web: removed.append(
+        web.setdefault("pinned_assets", {}).pop(asset, None)))
+    return {"ok": True, "asset": asset, "was_pinned": bool(removed and removed[0] is not None)}
+
+
+def set_web_target(project_root, target_dir):
+    """Memorise le web_project_dir cible dans project.json['web']['target_dir'] (consomme par
+    sync_web_assets sans avoir a le repasser). '' -> None (efface la cible). NE LEVE JAMAIS :
+    {"ok": True, "target_dir": <str|None>}."""
+    target_dir = (target_dir or "").strip() or None
+    _update_web(project_root, lambda web: web.__setitem__("target_dir", target_dir))
+    return {"ok": True, "target_dir": target_dir}
+
+
 def sync_web_assets(project_root, web_project_dir):
     """Synchronise les GLB PINNES (project.json['web']['pinned_assets'], jamais 'latest')
     vers {web_project_dir}/public/assets/. Le projet web est un consommateur passif : il ne

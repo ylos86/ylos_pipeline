@@ -309,19 +309,6 @@ def _glb_publishes(manifest: dict) -> dict:
     return out
 
 
-def _update_project_web(project_dir: Path, mutate) -> None:
-    """Read-modify-write de project.json['web'] sous flock (serveur multi-thread +
-    plugins DCC écrivent le même manifeste — même discipline que create_project).
-    'mutate' reçoit le dict web (créé si absent) et le modifie en place."""
-    manifest_path = project_dir / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME
-    with create_project.acquire_lock(manifest_path):
-        manifest = create_project.read_manifest(project_dir)
-        web = manifest.setdefault("web", {"target_dir": None, "pinned_assets": {}})
-        mutate(web)
-        manifest["modified_utc"] = create_project._now()
-        create_project.write_manifest(project_dir / create_project.PIPELINE_DIR, manifest)
-
-
 def _is_project(path: Path) -> bool:
     return (path / create_project.PIPELINE_DIR / create_project.MANIFEST_NAME).is_file()
 
@@ -876,19 +863,18 @@ class YlosHandler(BaseHTTPRequestHandler):
         if project_dir is None:
             _json(self, 404, {"error": "Aucun projet actif"})
             return
-        target_dir = (body.get("target_dir") or "").strip() or None
         try:
-            _update_project_web(project_dir, lambda web: web.__setitem__("target_dir", target_dir))
+            result = create_project.set_web_target(project_dir, body.get("target_dir") or "")
         except (OSError, ValueError) as e:
             _json(self, 500, {"error": str(e)})
             return
-        _json(self, 200, {"ok": True, "target_dir": target_dir})
+        _json(self, 200, {"ok": True, "target_dir": result["target_dir"]})
 
     def _post_pin_asset(self):
-        """Pinne un GLB publié : {name, step, version}. Refuse tout pin qui ne correspond
-        pas à un publish GLB 'complete' réel (le pin est un contrat consommé tel quel par
-        sync_web_assets — un pin cassé n'y produirait qu'un warning tardif, autant le
-        refuser ici avec la liste de ce qui existe)."""
+        """Pinne un GLB publié : {name, step, version}. Adaptateur mince — la validation
+        (publish GLB 'complete' réel) et l'écriture atomique vivent dans l'orchestrateur
+        (create_project.pin_web_asset, principe 5). Un pin refusé → 400 avec la liste de ce
+        qui existe (jamais d'exception métier remontée du module)."""
         body = self._body()
         if body is None:
             _json(self, 400, {"error": "JSON invalide dans le body"})
@@ -897,36 +883,21 @@ class YlosHandler(BaseHTTPRequestHandler):
         if project_dir is None:
             _json(self, 404, {"error": "Aucun projet actif"})
             return
-        name = (body.get("name") or "").strip()
-        step = (body.get("step") or "").strip()
-        version = body.get("version")
-        if not name or not step or not isinstance(version, int):
-            _json(self, 400, {"error": "Champs requis : name (str), step (str), version (int)"})
-            return
         try:
-            entity_dir, _ = create_project._find_asset_entity(project_dir, name)
-        except FileNotFoundError as e:
-            _json(self, 400, {"error": str(e)})
-            return
-        asset_manifest = _read_asset_manifest(entity_dir)
-        glb = _glb_publishes(asset_manifest or {})
-        if version not in glb.get(step, []):
-            _json(self, 400, {"error": f"Aucun publish GLB 'complete' pour {name!r} en "
-                                       f"{step} v{version:03d}. Disponibles : {glb or 'aucun'}"})
-            return
-        try:
-            _update_project_web(
-                project_dir,
-                lambda web: web.setdefault("pinned_assets", {}).__setitem__(
-                    name, {"step": step, "version": version}),
-            )
+            result = create_project.pin_web_asset(
+                project_dir, body.get("name"), body.get("step"), body.get("version"))
         except (OSError, ValueError) as e:
             _json(self, 500, {"error": str(e)})
             return
-        _json(self, 200, {"ok": True, "name": name, "step": step, "version": version})
+        if not result.get("ok"):
+            _json(self, 400, {"error": result.get("error", "pin refusé")})
+            return
+        _json(self, 200, {"ok": True, "name": result["asset"],
+                          "step": result["step"], "version": result["version"]})
 
     def _post_unpin_asset(self):
-        """Retire le pin d'un asset. Idempotent : dé-pinner un asset non pinné est un ok."""
+        """Retire le pin d'un asset. Idempotent. Adaptateur mince vers
+        create_project.unpin_web_asset (dé-pinner un asset non pinné reste un ok)."""
         body = self._body()
         if body is None:
             _json(self, 400, {"error": "JSON invalide dans le body"})
@@ -940,14 +911,11 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 400, {"error": "Champ 'name' manquant"})
             return
         try:
-            _update_project_web(
-                project_dir,
-                lambda web: web.setdefault("pinned_assets", {}).pop(name, None),
-            )
+            result = create_project.unpin_web_asset(project_dir, name)
         except (OSError, ValueError) as e:
             _json(self, 500, {"error": str(e)})
             return
-        _json(self, 200, {"ok": True, "name": name})
+        _json(self, 200, {"ok": True, "name": name, "was_pinned": result["was_pinned"]})
 
     def _post_sync_web(self):
         project_dir = self._active()

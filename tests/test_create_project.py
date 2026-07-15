@@ -255,6 +255,81 @@ class TestSyncWebAssets(TempProjectTestCase):
         self.assertTrue(foreign.is_file())
 
 
+class TestPinWebAsset(TempProjectTestCase):
+    """INC-6 : API de pinning web dans l'orchestrateur (pin_web_asset / unpin_web_asset /
+    set_web_target). Valide contre les publishes GLB reels, ecrit project.json['web']
+    atomiquement, ne leve JAMAIS pour un cas metier (retour {"ok": bool, ...})."""
+
+    def setUp(self):
+        super().setUp()
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+        self._publish_step("PROP_Tente_Default", "lookdev", ext="glb")   # v1
+        self._publish_step("PROP_Tente_Default", "lookdev", ext="glb")   # v2
+        self._publish_step("PROP_Tente_Default", "modeling", ext="usd")  # USD : jamais pinnable
+
+    def _pins(self):
+        return cp.read_manifest(self.project).get("web", {}).get("pinned_assets", {})
+
+    def test_pin_valid_glb_writes_manifest(self):
+        result = cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 2)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["version"], 2)
+        self.assertEqual(self._pins()["PROP_Tente_Default"], {"step": "lookdev", "version": 2})
+
+    def test_pin_nonexistent_version_clean_warning(self):
+        result = cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 99)
+        self.assertFalse(result["ok"])
+        self.assertIn("lookdev", result["error"])  # message liste le step / les disponibles
+        self.assertEqual(self._pins(), {})          # rien ecrit au manifeste
+
+    def test_pin_usd_step_rejected(self):
+        # Un publish USD n'est jamais un GLB pinnable, meme s'il existe.
+        result = cp.pin_web_asset(self.project, "PROP_Tente_Default", "modeling", 1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(self._pins(), {})
+
+    def test_pin_unknown_asset_no_raise(self):
+        result = cp.pin_web_asset(self.project, "PROP_Fantome_Default", "lookdev", 1)
+        self.assertFalse(result["ok"])  # ok=False, jamais d'exception
+
+    def test_pin_bad_types_rejected(self):
+        self.assertFalse(
+            cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", "2")["ok"])
+        self.assertFalse(cp.pin_web_asset(self.project, "", "lookdev", 1)["ok"])
+        # bool est un int en Python : version=True ne doit pas matcher la v1.
+        self.assertFalse(
+            cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", True)["ok"])
+
+    def test_unpin_idempotent(self):
+        r0 = cp.unpin_web_asset(self.project, "PROP_Tente_Default")
+        self.assertTrue(r0["ok"])
+        self.assertFalse(r0["was_pinned"])  # de-pinner un non-pinne : ok, was_pinned False
+        cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 2)
+        r1 = cp.unpin_web_asset(self.project, "PROP_Tente_Default")
+        self.assertTrue(r1["was_pinned"])
+        self.assertEqual(self._pins(), {})
+
+    def test_set_web_target_roundtrip(self):
+        r = cp.set_web_target(self.project, "/tmp/some/web")
+        self.assertEqual(r["target_dir"], "/tmp/some/web")
+        self.assertEqual(cp.read_manifest(self.project)["web"]["target_dir"], "/tmp/some/web")
+        cp.set_web_target(self.project, "")  # '' efface la cible
+        self.assertIsNone(cp.read_manifest(self.project)["web"]["target_dir"])
+
+    def test_pin_then_sync_cycle(self):
+        # Circuit complet : pin via l'API -> set target -> sync copie le GLB pinne.
+        self.assertTrue(
+            cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 2)["ok"])
+        web_dir = tempfile.mkdtemp(prefix="ylos_web_")
+        self.addCleanup(shutil.rmtree, web_dir, ignore_errors=True)
+        cp.set_web_target(self.project, web_dir)
+        result = cp.sync_web_assets(self.project, web_dir)
+        self.assertEqual(result["warnings"], [])
+        self.assertIn("PROP_Tente_Default", result["synced"])
+        self.assertTrue(
+            (Path(web_dir) / "public" / "assets" / "PROP_Tente_Default_v002.glb").is_file())
+
+
 class TestCleanStaleStaging(TempProjectTestCase):
     """Sweep des allocations orphelines : clean_stale_staging()."""
 
