@@ -692,6 +692,29 @@ Miroir des gotchas Houdini ci-dessus, vérifiés en live (à compléter à mesur
    (`--background`, exit code) : `_pick_render_engine` retourne un moteur affectable + cube →
    `thumb.png` non vide. `generate_thumbnail()` (preview WIP, `render.opengl` viewport) est un
    chemin distinct, non concerné.
+   - **2e site du même bug — `core/project.py::apply_scene_preset` (portage 5.2, 2026-07-15).**
+     Les presets AR/VR de `SCENE_PRESETS` portaient `"renderer": "BLENDER_EEVEE_NEXT"` posé **en
+     dur** (`scene.render.engine = preset["renderer"]`) — non protégé, contrairement à
+     `thumbnails.py`. Créer **ou** ouvrir un projet AR/VR (`op_new_project` / `op_open_context`,
+     les deux appellent `apply_scene_preset`) faisait donc planter l'opérateur sous 5.2
+     (`TypeError`). Fix : `_resolve_render_engine(scene, desired)` (même probe par affectation
+     `try/except TypeError`, chaîne de repli `_EEVEE_FALLBACKS = (NEXT, EEVEE, WORKBENCH)`) —
+     un moteur non-EEVEE (CYCLES pour FILM) est affecté tel quel, `prod_type` inconnu reste
+     no-op. Régression : `tools/blender/test_scene_preset_headless.py` (AR/VR → engine
+     affectable sans TypeError, FILM → CYCLES préservé, inconnu → no-op).
+
+2. **Portage Blender 5.2.0 LTS validé end-to-end (2026-07-15).** Machine passée de ≤5.1 à
+   **5.2.0 LTS** (Python 3.13). Seule cassure de code trouvée = le 2e site `BLENDER_EEVEE_NEXT`
+   ci-dessus ; le reste de l'addon tourne inchangé (USD/glTF import-export, contrat deux-phases,
+   composition, launcher). Validation : CI stdlib (147 tests) + **toute** la batterie headless
+   `tools/blender/test_*.py` (10 scripts, dont le nouveau scene_preset) + launcher e2e 3
+   invocations, tous verts sous 5.2. **Install** (même pattern que sous 5.1, réplicable pour toute
+   version future) : symlink `~/Library/Application Support/Blender/5.2/scripts/addons/ylos_pipeline
+   -> <repo>/plugins/blender` (l'addon calcule `_REPO_ROOT` via `os.path.realpath(__file__)`, donc
+   un **symlink** — jamais une copie — résout vers le repo et garde `create_project` importable) +
+   startup `scripts/startup/ylos_enable.py` (active l'addon au 1er lancement, `save_userpref`, garde
+   `not in prefs`). `bl_info["version"]` bumpé `(0,3,0)→(0,3,1)`. Le launcher web (`ylos_ui.BLENDER_APP`)
+   pointe `/Applications/Blender.app` par défaut = 5.2, surchargeable par `$YLOS_BLENDER`.
 
 ## Verrouillage (fcntl.flock)
 `acquire_lock(path)` (`create_project.py`) est le **seul** point du module qui touche

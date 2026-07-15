@@ -115,6 +115,32 @@ def find_project_root(start_path: str) -> str | None:
     return None
 
 
+# Chaine de repli EEVEE, du plus recent au plus universel. BLENDER_EEVEE_NEXT n'existe
+# qu'en Blender 4.2-4.4 (retire en 5.x, ou EEVEE Next reprend l'identifiant BLENDER_EEVEE) ;
+# BLENDER_EEVEE couvre 5.x ; BLENDER_WORKBENCH est le dernier recours. Meme raisonnement que
+# thumbnails._pick_render_engine (cf. CLAUDE.md, bugs empiriques Blender #1).
+_EEVEE_FALLBACKS = ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE", "BLENDER_WORKBENCH")
+
+
+def _resolve_render_engine(scene: bpy.types.Scene, desired: str) -> str:
+    """Affecte 'desired' a scene.render.engine ; si l'identifiant n'existe pas dans cette
+    version de Blender (ex BLENDER_EEVEE_NEXT sous 5.x -> TypeError), retombe sur la chaine
+    EEVEE-compatible. L'affectation est le probe fiable : l'enum des moteurs est dynamique
+    entre versions, l'introspection RNA ne suffit pas. Retourne le moteur retenu (inchange
+    si aucun candidat n'est affectable, cas improbable). Un moteur non-EEVEE (CYCLES) est
+    affecte tel quel."""
+    candidates = [desired]
+    if desired in _EEVEE_FALLBACKS:
+        candidates += [e for e in _EEVEE_FALLBACKS if e != desired]
+    for engine in candidates:
+        try:
+            scene.render.engine = engine
+            return engine
+        except TypeError:
+            continue
+    return scene.render.engine
+
+
 def apply_scene_preset(scene: bpy.types.Scene, prod_type: str) -> None:
     if prod_type not in SCENE_PRESETS:
         return
@@ -132,7 +158,7 @@ def apply_scene_preset(scene: bpy.types.Scene, prod_type: str) -> None:
     scene.render.resolution_y          = preset["resolution_y"]
     scene.render.resolution_percentage = 100
 
-    scene.render.engine = preset["renderer"]
+    _resolve_render_engine(scene, preset["renderer"])
 
     if prod_type == "FILM":
         scene.view_settings.view_transform = "AgX"
