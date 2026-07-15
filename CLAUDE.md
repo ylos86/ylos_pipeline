@@ -600,6 +600,33 @@ exécute tous, comme le State Manager de Prism.
   par state limité à convention+full-scene (raffinement futur) ; remap d'overrides sur Update Import
   inchangé (v1).
 
+### Panel Import / Export à la demande (`ylos.open_io`) — terminé (2026-07-16)
+Suite immédiate du State Manager. **Régression corrigée** : en consolidant l'ancien `YLOS_PT_Imports`
+dans le State Manager, seule la liste « imports déjà en scène » avait été conservée — la liste
+« Available publishes → import » (déclencher un import d'un nouveau product) était **perdue**, plus
+aucun point d'entrée UI pour importer. Restauré + étendu au raw file I/O, dans un **popup ouvert à la
+demande** (choix utilisateur « les deux » : products pipeline ET fichiers bruts).
+- `operators/op_io.py` : `ylos.open_io` (popup `invoke_popup` width 460, draw délégué à
+  `ui/io_panel.draw_io` en **import paresseux** anti-cycle) ; `ylos.refresh_products` +
+  cache module-level `_product_cache` (`compute_products(project_path, ctx_type)` = latest publish
+  `complete` par (entité, step) de la **famille de contexte courante** — cohérent avec
+  `ylos.import_product` qui résout via ce même `ctx_type` ; calculé sur invoke/refresh, **jamais en
+  draw**, pattern `op_scene_check`/`op_update_imports`) ; `ylos.raw_import`/`ylos.raw_export`
+  (délèguent aux opérateurs natifs OBJ/USD/glTF/FBX : `filepath` vide → `INVOKE_DEFAULT` = file
+  browser natif ; `filepath` fourni → `EXEC_DEFAULT` = usage programmatique/tests ; le résultat natif
+  est propagé, un format indisponible → `CANCELLED` propre). Export = **sélection courante**
+  (`export_selected_objects`/`selected_objects_only`/`use_selection`), hors versioning pipeline.
+- `ui/io_panel.py::draw_io(layout, context)` : 3 blocs — **Import Product** (browser filtré par
+  `Scene.ylos_io_search`, vignette `thumb.png` via `load_icon`, bouton Import → `ylos.import_product`),
+  **Import File** et **Export Selection** (boutons OBJ/USD/glTF/FBX). `create_project.resolve_entity`
+  fournit les steps de chaque entité au browser.
+- Points d'entrée : menu top bar « Import / Export… », bouton **« Import… »** dans la section Import
+  States du State Manager (restaure le point d'entrée perdu). `Scene.ylos_io_search` enregistré dans
+  `core/project.register_properties`.
+- Test : `tools/blender/test_io_headless.py` (browser vide → publish → browser peuplé + `draw_io` sans
+  exception ; roundtrip **raw OBJ** export sélection → fichier non vide → import → objets en plus ;
+  OBJ = core, aucun addon requis). Validé sous 5.2 : CI stdlib (151) + 11 headless + launcher, verts.
+
 ### Sync web (`sync_web_assets`)
 `create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB
 **pinnés** (`project.json["web"]["pinned_assets"]`, jamais "latest") vers

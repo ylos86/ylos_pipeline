@@ -344,13 +344,21 @@ def register_properties():
         description="Note for the next Save Version - not yet persisted (wired in INC-4)",
         default="",
     )
+    # Filtre du Product Browser (panel Import / Export, ylos.open_io). Sur Scene pour que
+    # draw_io le lise quel que soit le point de montage.
+    bpy.types.Scene.ylos_io_search = bpy.props.StringProperty(
+        name="Search",
+        description="Filter published products by entity or step name",
+        default="",
+        options={"TEXTEDIT_UPDATE"},
+    )
 
 
 def unregister_properties():
     props = [
         "ylos_project_path", "ylos_project_name", "ylos_prod_type",
         "ylos_current_asset", "ylos_current_step", "ylos_context_type",
-        "ylos_asset_type", "ylos_wip_comment",
+        "ylos_asset_type", "ylos_wip_comment", "ylos_io_search",
     ]
     for prop in props:
         if hasattr(bpy.types.Scene, prop):

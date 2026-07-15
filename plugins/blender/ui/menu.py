@@ -93,6 +93,7 @@ class YLOS_MT_TopbarMenu(bpy.types.Menu):
         layout.operator("ylos.open_context", text="Open Context…", icon="FILE_FOLDER")
         layout.separator()
         layout.operator("ylos.open_state_manager", text="State Manager…", icon="PRESET")
+        layout.operator("ylos.open_io", text="Import / Export…", icon="IMPORT")
         layout.operator("ylos.publish", text="Quick Publish (current step)…", icon="EXPORT")
         layout.operator("ylos.run_scene_check", text="Check Scene", icon="VIEWZOOM")
         layout.separator()

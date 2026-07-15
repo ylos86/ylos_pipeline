@@ -37,7 +37,7 @@ from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
     op_open_context, op_open_wip, op_switch_context,
     op_import_product, op_update_imports, op_asset_list, op_scene_check,
-    op_state_manager,
+    op_state_manager, op_io,
 )
 
 _classes = (
@@ -72,6 +72,11 @@ _classes = (
     op_state_manager.YLOS_OT_StateMoveExport,
     op_state_manager.YLOS_OT_PublishStates,
     op_state_manager.YLOS_OT_OpenStateManager,
+    # Import / Export (Product Browser + raw file I/O) - panel a la demande (ylos.open_io).
+    op_io.YLOS_OT_RefreshProducts,
+    op_io.YLOS_OT_OpenIO,
+    op_io.YLOS_OT_RawImport,
+    op_io.YLOS_OT_RawExport,
     menu.YLOS_OT_OpenProjectBrowser,
     menu.YLOS_OT_ReloadPipeline,
     menu.YLOS_OT_About,

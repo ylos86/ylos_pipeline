@@ -70,6 +70,8 @@ def _draw_export_states(layout, scene):
 def _draw_import_states(layout, context):
     header = layout.row(align=True)
     header.label(text="Import States", icon="IMPORT")
+    # Point d'entree pour importer un nouveau product / fichier (panel Import / Export).
+    header.operator("ylos.open_io", text="Import…", icon="IMPORT")
     header.operator("ylos.check_updates", text="", icon="FILE_REFRESH")
 
     tagged = tagged_import_collections()
