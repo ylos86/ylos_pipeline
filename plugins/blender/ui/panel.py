@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
-# N-panel unifie "Ylos" (categorie sidebar). Remplace panel_pipeline.py (4 panels empiles
-# Project / Asset Context / Scene Settings / Tools) par 4 sections alignees sur le cycle de
-# production : Context, Scenefile, Publish, Imports. Scene Settings (infos deja visibles
-# dans les Properties natives de Blender) et Tools/migration (ex-Increment 3 abandonne, cf.
-# CLAUDE.md) ne sont pas reconduites ici.
+# N-panel unifie "Ylos" (categorie sidebar). Sections alignees sur le cycle de production :
+# Context, Assets (panel_asset_list.py), Scenefile, State Manager, Scene Check. Les sections
+# Publish + Imports d'origine sont subsumees par le State Manager (facon Prism : states
+# export empilables + un unique Publish + import states) - draw dans ui/state_manager.py.
+# Scene Check recueille le scene-checker de l'ancien popup a onglets (op_popup.py) retire.
 
 import os
 import sys
 import bpy
 
-from ..core.asset import get_latest_wip_version, get_latest_publish_version, list_wip_versions
-from ..core.thumbnails import load_icon
-from ..core import thumbnails, vocab
-from ..operators.op_import_product import import_state_collection_name
-from ..operators.op_update_imports import tagged_import_collections, get_cached_update_results
+from ..core.asset import get_latest_wip_version, list_wip_versions
+from ..core import vocab
+from .state_manager import draw_state_manager
+from ..operators.op_scene_check import get_cached_results
+
+_SEVERITY_ICONS = {
+    "ERROR":   "CANCEL",
+    "WARNING": "ERROR",
+    "OK":      "CHECKMARK",
+}
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -187,12 +192,13 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
 
 
 # ---------------------------------------------------------------------------
-# Section: Publish
+# Section: State Manager (facon Prism - draw unique dans ui/state_manager.py, monte aussi
+# en popup via ylos.open_state_manager). Subsume les anciennes sections Publish + Imports.
 # ---------------------------------------------------------------------------
 
-class YLOS_PT_Publish(bpy.types.Panel):
-    bl_label = "Publish"
-    bl_idname = "YLOS_PT_publish"
+class YLOS_PT_StateManager(bpy.types.Panel):
+    bl_label = "State Manager"
+    bl_idname = "YLOS_PT_state_manager"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Ylos"
@@ -200,80 +206,26 @@ class YLOS_PT_Publish(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return _has_asset(context.scene)
+        return _has_project(context.scene)
 
     def draw(self, context):
-        layout = self.layout
-        scene  = context.scene
-        cp = _cp()
-
-        project_path = scene.ylos_project_path
-        asset_name   = scene.ylos_current_asset
-        step         = scene.ylos_current_step
-        ctx_type     = scene.ylos_context_type.lower()
-
-        target = cp.get_pipeline_target(project_path)
-        ext = ".glb" if target == "web" else ".usd"
-        next_ver = get_latest_publish_version(project_path, asset_name, step, ctx_type) + 1
-
-        box = layout.box()
-        box.label(text="Next publish:", icon="EXPORT")
-        box.label(text=f"{asset_name}_{step}_v{next_ver:03d}{ext} ({target})")
-
-        layout.separator(factor=0.3)
-        pub_row = layout.row(align=True)
-        pub_row.scale_y = 1.2
-        pub_row.operator("ylos.publish", text="Publish Step", icon="EXPORT")
-
-        if thumbnails.LAST_ERROR:
-            err = layout.box().row()
-            err.alert = True
-            err.label(text=thumbnails.LAST_ERROR, icon="ERROR")
-
-        layout.separator(factor=0.4)
-
-        latest = cp.latest_publish_artifact(project_path, asset_name, step, ctx_type)
-        last_box = layout.box()
-        if latest:
-            row = last_box.row(align=True)
-            icon_id = 0
-            abs_path = latest.get("abs_path")
-            if abs_path:
-                icon_id = load_icon(os.path.join(os.path.dirname(abs_path), "thumb.png"))
-            if icon_id:
-                row.template_icon(icon_value=icon_id, scale=4.0)
-            info = row.column(align=True)
-            info.label(text=f"v{latest.get('version', 0):03d}", icon="FILE")
-            info.label(text=os.path.basename(latest.get("artifact") or ""))
-        else:
-            last_box.label(text="No publish yet for this step", icon="INFO")
-
-        layout.separator(factor=0.3)
-        load_row = layout.row(align=True)
-        # ylos.load_latest_publish/ylos.load_publish absorbes par ylos.import_product
-        # (INC-5, tague la collection creee) - version=0 = derniere. Le choix d'une
-        # version precise se fait desormais dans la section Imports ci-dessous.
-        op = load_row.operator("ylos.import_product", text="Load Latest", icon="IMPORT")
-        op.entity = asset_name
-        op.step = step
-        op.version = 0
-
-        op = layout.operator("ylos.open_folder", text="Open Publish Folder",
-                             icon="FOLDER_REDIRECT")
-        op.folder_path = _step_folder(scene, "publish")
+        draw_state_manager(self.layout, context)
 
 
 # ---------------------------------------------------------------------------
-# Section: Imports (import states - State-Manager-lite, INC-5)
+# Section: Scene Check - recueille le scene-checker de l'ancien popup a onglets
+# (op_popup._draw_scene, retire). Les operateurs (ylos.run_scene_check / fix_all / auto_fix)
+# sont deja enregistres (op_scene_check.py) - cette section n'est que du layout.
 # ---------------------------------------------------------------------------
 
-class YLOS_PT_Imports(bpy.types.Panel):
-    bl_label = "Imports"
-    bl_idname = "YLOS_PT_imports"
+class YLOS_PT_SceneCheck(bpy.types.Panel):
+    bl_label = "Scene Check"
+    bl_idname = "YLOS_PT_scene_check"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Ylos"
     bl_order = 4
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
@@ -281,84 +233,70 @@ class YLOS_PT_Imports(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene  = context.scene
-        cp = _cp()
 
-        project_path = scene.ylos_project_path
-        asset_name   = scene.ylos_current_asset
-        ctx_type     = scene.ylos_context_type.lower()
+        actions = layout.row(align=True)
+        actions.scale_y = 1.2
+        actions.operator("ylos.run_scene_check", text="Scan Scene", icon="VIEWZOOM")
+        actions.operator("ylos.fix_all",         text="Fix All",    icon="CHECKMARK")
 
-        steps = vocab.values(vocab.STEP_ITEMS.get(scene.ylos_context_type, vocab.STEP_ITEMS["ASSET"]))
-
-        rows = []
-        for step in steps:
-            for entry in cp.list_publishes(project_path, asset_name, step, ctx_type):
-                if entry.get("status") == "complete":
-                    rows.append((step, entry))
-
-        layout.label(text="Available publishes", icon="EXPORT")
-        if not rows:
-            layout.label(text="No publishes yet for this entity", icon="INFO")
-        else:
-            rows.sort(key=lambda pair: pair[1].get("published_utc") or "", reverse=True)
-
-            col = layout.column(align=True)
-            for step, entry in rows[:8]:
-                artifact = entry.get("artifact") or ""
-                ext = os.path.splitext(artifact)[1]
-                version = entry.get("version", 0)
-
-                row = col.row(align=True)
-                row.label(text=step, icon="SEQUENCE")
-                right = row.row()
-                right.alignment = "RIGHT"
-                right.label(text=f"v{version:03d}{ext}")
-
-                existing = bpy.data.collections.get(
-                    import_state_collection_name(asset_name, step))
-                if existing and existing.get("ylos_import_version") == version:
-                    row.label(text="", icon="CHECKMARK")
-                else:
-                    op = row.operator("ylos.import_product", text="", icon="IMPORT")
-                    op.entity = asset_name
-                    op.step = step
-                    op.version = version
-
-            if len(rows) > 8:
-                foot = layout.row()
-                foot.alignment = "RIGHT"
-                foot.label(text=f"+{len(rows) - 8} more")
-
-        layout.separator(factor=0.5)
-        header = layout.row(align=True)
-        header.label(text="Imported in scene", icon="OUTLINER_COLLECTION")
-        header.operator("ylos.check_updates", text="", icon="FILE_REFRESH")
-
-        tagged = tagged_import_collections()
-        if not tagged:
-            layout.label(text="Nothing imported yet", icon="INFO")
+        results = get_cached_results()
+        if not results:
+            layout.separator(factor=0.3)
+            layout.box().label(text="Scan the scene to check naming and readiness.", icon="INFO")
             return
 
-        cache = get_cached_update_results()
-        col2 = layout.column(align=True)
-        for coll in sorted(tagged, key=lambda c: c.name):
-            entity  = coll.get("ylos_import_entity", "?")
-            istep   = coll.get("ylos_import_step", "?")
-            version = coll.get("ylos_import_version", 0)
+        layout.separator(factor=0.4)
+        err  = results["error_count"]
+        warn = results["warning_count"]
+        summary = layout.box().row(align=True)
+        summary.label(text=f"Step: {results['current_step']}", icon="SEQUENCE")
+        counts = summary.row(align=True)
+        counts.alignment = "RIGHT"
+        e = counts.row()
+        e.alert = err > 0
+        e.label(text=str(err), icon="CANCEL")
+        counts.label(text=str(warn), icon="ERROR")
 
-            row = col2.row(align=True)
-            row.label(text=f"{entity} / {istep}", icon="OUTLINER_COLLECTION")
-            right = row.row()
-            right.alignment = "RIGHT"
-            right.label(text=f"v{version:03d}")
+        self._draw_issue_group(layout, "This step", results.get("current_issues", []),
+                               ok_text="Naming looks clean.")
+        next_step = results.get("next_step")
+        if next_step:
+            self._draw_issue_group(layout, f"Ready for {next_step}?",
+                                   results.get("next_issues", []),
+                                   ok_text="Scene is ready for the next step.")
 
-            status = cache.get(coll.name)
-            if status and status.get("has_update"):
-                upd = col2.row(align=True)
-                warn = upd.row()
-                warn.alert = True
-                warn.label(text=f"Update available: v{status['latest']:03d}", icon="ERROR")
-                op = upd.operator("ylos.update_import", text="Update", icon="FILE_REFRESH")
-                op.collection_name = coll.name
+    def _draw_issue_group(self, layout, title, issues, ok_text):
+        layout.separator(factor=0.3)
+        box = layout.box()
+        head = box.row(align=True)
+        head.label(text=title, icon="DOT")
+        tag = head.row()
+        tag.alignment = "RIGHT"
+        if not issues:
+            tag.label(text="OK", icon="CHECKMARK")
+            box.label(text=ok_text)
+            return
+        blocking = sum(1 for i in issues if i["severity"] == "ERROR")
+        if blocking:
+            t = tag.row(); t.alert = True
+            t.label(text=f"{blocking} blocking", icon="CANCEL")
+        else:
+            tag.label(text=f"{len(issues)} to review", icon="ERROR")
+        for issue in issues:
+            self._draw_issue(box, issue)
 
-            col2.separator(factor=0.2)
+    def _draw_issue(self, parent, issue):
+        cell = parent.column(align=True)
+        cell.separator(factor=0.2)
+        is_error = issue["severity"] == "ERROR"
+        line1 = cell.row(align=True)
+        line1.alert = is_error
+        line1.label(text=issue["obj_name"] or "(scene-level)",
+                    icon=_SEVERITY_ICONS.get(issue["severity"], "DOT"))
+        if issue.get("fix_id"):
+            fixr = line1.row()
+            fixr.alignment = "RIGHT"
+            op = fixr.operator("ylos.auto_fix", text="Fix", icon="TOOL_SETTINGS")
+            op.fix_id = issue["fix_id"]
+        msg = cell.row(align=True)
+        msg.label(text="    " + issue["message"])

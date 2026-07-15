@@ -5,10 +5,10 @@
 bl_info = {
     "name": "Ylos Pipeline",
     "author": "Ylos Prod",
-    "version": (0, 3, 0),
+    "version": (0, 3, 2),
     "blender": (4, 2, 0),
-    "location": "3D Viewport Header > Ylos button",
-    "description": "Production pipeline - USD publish, WIP versioning, scene naming checker",
+    "location": "3D Viewport Header > Ylos button / Sidebar > Ylos",
+    "description": "Production pipeline - State Manager, USD/GLB publish, WIP versioning, scene checker",
     "category": "Pipeline",
 }
 
@@ -31,18 +31,21 @@ def _purge_create_project_module():
             del sys.modules[key]
 
 from . import core
+from .core import states
 from .ui import panel, panel_asset_list, menu
 from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
     op_open_context, op_open_wip, op_switch_context,
-    op_import_product, op_update_imports, op_asset_list, op_scene_check, op_popup,
+    op_import_product, op_update_imports, op_asset_list, op_scene_check,
+    op_state_manager,
 )
 
 _classes = (
     op_new_project.YLOS_OT_NewProject,
-    # PropertyGroup avant l'operateur qui le reference via CollectionProperty(type=...) -
-    # Blender exige l'ordre d'enregistrement (cf. op_new_asset.py, purge INC-2).
+    # PropertyGroups avant tout ce qui les reference via CollectionProperty(type=...) -
+    # Blender exige l'ordre d'enregistrement (cf. op_new_asset.py + states.py, purge INC-2).
     op_new_asset.YLOS_PG_StepToggle,
+    states.YLOS_PG_ExportState,
     op_new_asset.YLOS_OT_NewAsset,
     op_save_wip.YLOS_OT_SaveWip,
     op_publish.YLOS_OT_Publish,
@@ -62,7 +65,13 @@ _classes = (
     op_scene_check.YLOS_OT_RunSceneCheck,
     op_scene_check.YLOS_OT_AutoFix,
     op_scene_check.YLOS_OT_FixAll,
-    op_popup.YLOS_OT_OpenPopup,
+    # State Manager (facon Prism) - UIList avant le reste (reference par bl_idname a l'usage).
+    op_state_manager.YLOS_UL_ExportStates,
+    op_state_manager.YLOS_OT_StateAddExport,
+    op_state_manager.YLOS_OT_StateRemoveExport,
+    op_state_manager.YLOS_OT_StateMoveExport,
+    op_state_manager.YLOS_OT_PublishStates,
+    op_state_manager.YLOS_OT_OpenStateManager,
     menu.YLOS_OT_OpenProjectBrowser,
     menu.YLOS_OT_ReloadPipeline,
     menu.YLOS_OT_About,
@@ -70,8 +79,8 @@ _classes = (
     panel.YLOS_PT_Context,
     panel_asset_list.YLOS_PT_AssetListPanel,
     panel.YLOS_PT_Scenefile,
-    panel.YLOS_PT_Publish,
-    panel.YLOS_PT_Imports,
+    panel.YLOS_PT_StateManager,
+    panel.YLOS_PT_SceneCheck,
 )
 
 
@@ -82,7 +91,9 @@ def _draw_header_button(self, context):
     layout.separator()
 
     row = layout.row(align=True)
-    row.operator("ylos.open_popup", text="Ylos", icon="FUND")
+    # Repurpose : le bouton header ouvre desormais le State Manager (fenetre), remplace
+    # l'ancien popup a onglets (op_popup.py) retire - meme draw que la section N-panel.
+    row.operator("ylos.open_state_manager", text="Ylos", icon="PRESET")
 
     if scene.ylos_project_name and scene.ylos_current_asset:
         row.label(text=f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}")
@@ -96,21 +107,15 @@ def register():
     from .core import project as proj_module
     proj_module.register_properties()
 
-    bpy.types.Scene.ylos_popup_tab = bpy.props.EnumProperty(
-        name="Tab",
-        items=[
-            ("PIPELINE", "Pipeline", ""),
-            ("ASSETS",   "Assets",   ""),
-            ("SCENE",    "Scene",    ""),
-        ],
-        default="PIPELINE",
-    )
-
     from .core.thumbnails import init_previews
     init_previews()
 
     for cls in _classes:
         bpy.utils.register_class(cls)
+
+    # APRES l'enregistrement des classes : CollectionProperty(type=YLOS_PG_ExportState) exige
+    # que le PropertyGroup soit deja enregistre.
+    states.register_properties()
 
     bpy.types.VIEW3D_HT_header.append(_draw_header_button)
     bpy.types.TOPBAR_MT_editor_menus.append(menu.draw_topbar_menu)
@@ -120,14 +125,15 @@ def unregister():
     bpy.types.TOPBAR_MT_editor_menus.remove(menu.draw_topbar_menu)
     bpy.types.VIEW3D_HT_header.remove(_draw_header_button)
 
+    # AVANT d'unregistrer les classes : retirer la CollectionProperty avant le PropertyGroup
+    # qu'elle reference.
+    states.unregister_properties()
+
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
 
     from .core import project as proj_module
     proj_module.unregister_properties()
-
-    if hasattr(bpy.types.Scene, "ylos_popup_tab"):
-        del bpy.types.Scene.ylos_popup_tab
 
     from .core.thumbnails import clear_previews
     clear_previews()

@@ -701,5 +701,44 @@ class TestPipelineTarget(unittest.TestCase):
         self.assertEqual(cp.get_pipeline_target(self._tmp + "/nope"), "offline")
 
 
+class TestResolveEntity(TempProjectTestCase):
+    """resolve_entity : wrapper PUBLIC de _find_asset_entity (principe 5) - localise une
+    entite quelle que soit sa famille (assets/sets/shots), ne leve JAMAIS (None si absente
+    ou manifeste illisible). Consomme par le State Manager Blender (famille d'un state)."""
+
+    def setUp(self):
+        super().setUp()
+        cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
+        cp.create_asset(self.project, "EXTERIOR_Cour_Default",
+                        entity_type="set", asset_type="EXTERIOR")
+        cp.create_asset(self.project, "ANIMATION_Sh010_Default",
+                        entity_type="shot", asset_type="ANIMATION")
+
+    def test_asset_family(self):
+        r = cp.resolve_entity(self.project, "PROP_Tente_Default")
+        self.assertIsNotNone(r)
+        self.assertEqual(r["name"], "PROP_Tente_Default")
+        self.assertEqual(r["family"], "asset")           # cle ENTITY_DIR
+        self.assertEqual(r["entity_type"], "PROP")        # sous-type
+        self.assertEqual(os.path.basename(r["dir"]), "PROP_Tente_Default")
+        self.assertEqual(os.path.basename(os.path.dirname(r["dir"])), "assets")
+        self.assertIsInstance(r["manifest"], dict)
+
+    def test_set_family(self):
+        r = cp.resolve_entity(self.project, "EXTERIOR_Cour_Default")
+        self.assertEqual(r["family"], "set")
+        self.assertEqual(r["entity_type"], "EXTERIOR")
+        self.assertEqual(os.path.basename(os.path.dirname(r["dir"])), "sets")
+
+    def test_shot_family(self):
+        r = cp.resolve_entity(self.project, "ANIMATION_Sh010_Default")
+        self.assertEqual(r["family"], "shot")
+        self.assertEqual(r["entity_type"], "ANIMATION")
+        self.assertEqual(os.path.basename(os.path.dirname(r["dir"])), "shots")
+
+    def test_missing_returns_none(self):
+        self.assertIsNone(cp.resolve_entity(self.project, "NOPE_Absent_Default"))
+
+
 if __name__ == "__main__":
     unittest.main()

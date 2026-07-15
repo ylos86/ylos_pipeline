@@ -119,6 +119,107 @@ def _usd_export(filepath: str, context, objects: list) -> tuple:
         context.view_layer.objects.active = prev_active
 
 
+def publish_entity_step(context, project_path, entity, step, *,
+                        allow_full_scene=False, comment="", load_after=False):
+    """Coeur de publish REUTILISABLE : le bouton simple (ylos.publish, step courant) ET le
+    batch du State Manager (ylos.publish_states, states empiles) passent par ici - logique
+    unique, principe 5. La famille de l'entite est resolue par create_project.resolve_entity
+    (un state peut cibler asset/set/shot, pas seulement le contexte scene courant). Ne leve
+    JAMAIS pour un cas metier : retourne un dict
+    {ok, version, message, path, method, warning}. Contrat deux-phases inchange (allocate ->
+    export USD/GLB selon la cible -> thumbnail requis -> finalize)."""
+    cp = _cp()
+    scene = context.scene
+
+    def _fail(msg, method="", warning=""):
+        return {"ok": False, "version": 0, "message": msg, "path": "",
+                "method": method, "warning": warning}
+
+    if not project_path or not entity:
+        return _fail("No active project or entity.")
+
+    resolved = cp.resolve_entity(project_path, entity)
+    if resolved is None:
+        return _fail(f"Entity '{entity}' not found under project.")
+    ctx_type = resolved["family"]
+
+    if not is_step_valid_for_context(step, ctx_type):
+        return _fail(f"Step '{step}' is not valid for a {ctx_type}.")
+
+    objects, method = get_asset_objects_for_publish(scene, entity, step)
+    if not objects and not allow_full_scene:
+        return _fail(
+            f"Publish aborted: no objects resolved for '{entity}' (step '{step}'). Expected "
+            f"a collection named '{entity}' or objects named GEO_{entity}_*.",
+            method=method,
+        )
+
+    # Hygiene des noms AVANT export : un datablock mono-user non renomme ('Cube.001') sort en
+    # prim USD / node glTF errone. Jamais silencieux. Full-scene -> normalise toute la scene.
+    export_objects = objects if objects else list(scene.objects)
+    n_renamed, shared = _normalize_datablock_names(export_objects)
+    for s in shared:
+        print(f"[Ylos publish] datablock partage non renomme (nom d'objet conserve): {s}")
+
+    # Format d'artifact = decision d'orchestrateur (cible pipeline), jamais du DCC.
+    target = cp.get_pipeline_target(project_path)
+    ext = ".glb" if target == "web" else ".usd"
+
+    try:
+        staging_dir, final_dir = cp.allocate_publish_version(
+            project_path, entity, comment=comment, kind=step,
+        )
+    except Exception as e:
+        return _fail(str(e), method=method)
+
+    version = cp.publish_version_from_dir(final_dir)
+    stem = f"{entity}_{step}_v{version:03d}"
+    art_path = os.path.join(str(staging_dir), stem + ext)
+
+    if target == "web":
+        ok, err = _glb_export(art_path, context, objects)
+    else:
+        ok, err = _usd_export(art_path, context, objects)
+    if not ok:
+        return _fail(f"{target} export failed: {err} (staging preserved: {staging_dir})",
+                     method=method)
+
+    thumb_objects = objects or _fallback_objects(scene)
+    thumb = render_publish_thumbnail(thumb_objects, str(staging_dir))
+    warning = ""
+    if not thumb:
+        cause = thumbnails.LAST_ERROR or "unknown cause"
+        warning = (f"Thumbnail render failed ({cause}) - publish will be rejected "
+                   f"(staging preserved: {staging_dir})")
+
+    try:
+        info = cp.finalize_publish_version(
+            project_path, entity, staging_dir, final_dir, version,
+            expected_artifacts=[stem, "thumb.png"],
+        )
+    except Exception as e:
+        return _fail(str(e), method=method, warning=warning)
+
+    pub_path = os.path.join(info["final_dir"], stem + ext)
+    message = (
+        f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}] - "
+        f"{n_renamed} datablocks renommes, {len(shared)} partages non touches (voir console)"
+    )
+
+    if load_after:
+        try:
+            if ext == ".glb":
+                bpy.ops.import_scene.gltf(filepath=pub_path)
+            else:
+                bpy.ops.wm.usd_import(filepath=pub_path)
+            message += f"  |  Loaded: {os.path.basename(pub_path)}"
+        except Exception as e:
+            warning = (warning + " | " if warning else "") + f"import failed: {e}"
+
+    return {"ok": True, "version": info["version"], "message": message,
+            "path": pub_path, "method": method, "warning": warning}
+
+
 class YLOS_OT_Publish(bpy.types.Operator):
     bl_idname  = "ylos.publish"
     bl_label   = "Publish Step"
@@ -191,111 +292,27 @@ class YLOS_OT_Publish(bpy.types.Operator):
         box.label(text="Version assigned by create_project.py", icon="INFO")
 
     def execute(self, context):
-        scene        = context.scene
-        project_path = scene.ylos_project_path
-        asset_name   = scene.ylos_current_asset
-        ctx_type     = scene.ylos_context_type.lower()
-        step         = self.step
-
-        if not project_path or not asset_name:
-            self.report({"ERROR"}, "No active project or asset.")
-            return {"CANCELLED"}
-
-        if not is_step_valid_for_context(step, ctx_type):
-            self.report(
-                {"ERROR"},
-                f"Step '{step}' is not valid for a {ctx_type}.",
-            )
-            return {"CANCELLED"}
-
-        objects = []
-        if asset_name:
-            objects, method = get_asset_objects_for_publish(scene, asset_name, step)
-        else:
-            method = "full scene"
-
-        if asset_name and not objects and not self.allow_full_scene:
-            self.report(
-                {"ERROR"},
-                f"USD export aborted: no objects resolved for asset '{asset_name}' (step "
-                f"'{step}'). Expected a collection named '{asset_name}' or objects named "
-                f"GEO_{asset_name}_*.",
-            )
-            return {"CANCELLED"}
-
-        cp = _cp()
-
-        # Hygiene des noms AVANT export : sans ca, un datablock mono-user non renomme
-        # ('Cube.001') sort en prim USD / node glTF errone. Jamais silencieux (rapporte plus
-        # bas). Full-scene -> normalise toute la scene exportee.
-        export_objects = objects if objects else list(scene.objects)
-        n_renamed, shared = _normalize_datablock_names(export_objects)
-        for s in shared:
-            print(f"[Ylos publish] datablock partage non renomme (nom d'objet conserve): {s}")
-
-        # Format d'artifact = decision d'orchestrateur (cible pipeline), jamais du DCC.
-        target = cp.get_pipeline_target(project_path)
-        ext = ".glb" if target == "web" else ".usd"
-
-        try:
-            staging_dir, final_dir = cp.allocate_publish_version(
-                project_path, asset_name, comment="", kind=step,
-            )
-        except Exception as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-        version = cp.publish_version_from_dir(final_dir)
-        stem = f"{asset_name}_{step}_v{version:03d}"
-        art_path = os.path.join(str(staging_dir), stem + ext)
-
-        if target == "web":
-            ok, err = _glb_export(art_path, context, objects)
-        else:
-            ok, err = _usd_export(art_path, context, objects)
-        if not ok:
-            self.report(
-                {"ERROR"},
-                f"{target} export failed: {err} (staging preserved: {staging_dir})",
-            )
-            return {"CANCELLED"}
-
-        thumb_objects = objects or _fallback_objects(scene)
-        thumb = render_publish_thumbnail(thumb_objects, str(staging_dir))
-        if not thumb:
-            cause = thumbnails.LAST_ERROR or "unknown cause"
-            self.report(
-                {"WARNING"},
-                f"Thumbnail render failed ({cause}) - publish will be rejected "
-                f"(staging preserved: {staging_dir})",
-            )
-
-        try:
-            info = cp.finalize_publish_version(
-                project_path, asset_name, staging_dir, final_dir, version,
-                expected_artifacts=[stem, "thumb.png"],
-            )
-        except Exception as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-        pub_path = os.path.join(info["final_dir"], stem + ext)
-        scene.ylos_current_step = step
-
-        self.report(
-            {"INFO"},
-            f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}] - "
-            f"{n_renamed} datablocks renommes, {len(shared)} partages non touches (voir console)",
+        # Wrapper mince : toute la logique vit dans publish_entity_step (partagee avec le
+        # State Manager batch, principe 5). Ici : lire le contexte scene, reporter, et
+        # aligner scene.ylos_current_step sur le step publie (UX du bouton simple - le dialog
+        # autorise un step != courant).
+        scene = context.scene
+        result = publish_entity_step(
+            context,
+            scene.ylos_project_path,
+            scene.ylos_current_asset,
+            self.step,
+            allow_full_scene=self.allow_full_scene,
+            comment="",
+            load_after=self.load_after,
         )
 
-        if self.load_after:
-            try:
-                if ext == ".glb":
-                    bpy.ops.import_scene.gltf(filepath=pub_path)
-                else:
-                    bpy.ops.wm.usd_import(filepath=pub_path)
-                self.report({"INFO"}, f"Loaded: {os.path.basename(pub_path)}")
-            except Exception as e:
-                self.report({"WARNING"}, f"Publish OK - import failed: {e}")
+        if result["warning"]:
+            self.report({"WARNING"}, result["warning"])
+        if not result["ok"]:
+            self.report({"ERROR"}, result["message"])
+            return {"CANCELLED"}
 
+        scene.ylos_current_step = self.step
+        self.report({"INFO"}, result["message"])
         return {"FINISHED"}

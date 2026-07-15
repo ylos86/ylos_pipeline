@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Test headless Blender : les 4 sections du N-panel unifie (plugins/blender/ui/panel.py -
-Context/Scenefile/Publish/Imports, INC-2) executent REELLEMENT leur draw() sans exception,
-sur un projet/entite fixture, dans les etats vide (rien publie/sauve) ET peuple (WIP + publish
-reels). Blender '--background' n'a pas de fenetre -> pas de vrai bpy.types.UILayout
+"""Test headless Blender : les sections du N-panel unifie (plugins/blender/ui/panel.py -
+Context/Scenefile/State Manager/Scene Check ; State Manager via ui/state_manager.py) executent
+REELLEMENT leur draw() sans exception, sur un projet/entite fixture, dans les etats vide (rien
+publie/sauve) ET peuple (WIP + publish reels). Blender '--background' n'a pas de fenetre -> pas de vrai bpy.types.UILayout
 disponible : draw() est appele avec un layout FACTICE (duck-type, accepte tout appel/attribut)
 qui n'attrape PAS les erreurs d'API Blender (mauvaise signature de widget) mais attrape tout le
 reste (cle de dict fautive, faute de frappe, exception d'un appel a create_project.py) - c'est
@@ -115,11 +115,11 @@ def main():
         try:
             _draw(panel.YLOS_PT_Context, context)
             _draw(panel.YLOS_PT_Scenefile, context)
-            _draw(panel.YLOS_PT_Publish, context)
-            _draw(panel.YLOS_PT_Imports, context)
+            _draw(panel.YLOS_PT_StateManager, context)  # subsume Publish + Imports
+            _draw(panel.YLOS_PT_SceneCheck, context)
         except Exception as e:
             _fail("draw() a leve (etat: asset actif, rien sauve/publie)", e)
-        print("ok  4 sections draw() : etat 'asset actif, rien sauve/publie' sans exception")
+        print("ok  sections draw() : etat 'asset actif, rien sauve/publie' sans exception")
 
         # --- Fixture reelle : WIP + publish (branches peuplees) ---
         res = bpy.ops.ylos.save_wip('EXEC_DEFAULT', step="modeling", version=1)
@@ -134,26 +134,21 @@ def main():
             _fail(f"ylos.publish a retourne {res} (attendu FINISHED) - "
                   f"thumbnails.LAST_ERROR={thumbnails.LAST_ERROR!r}")
 
-        # --- Etat 4 : asset actif, WIP + publish presents (branches peuplees + vignette) ---
+        # --- Etat 4 : asset actif, WIP + publish presents + un export state actif ---
+        # Un export state peuple la branche 'reglages du state actif' du State Manager.
+        st = scene.ylos_export_states.add()
+        st.entity = entity
+        st.step = "modeling"
+        scene.ylos_export_states_index = 0
         try:
             _draw(panel.YLOS_PT_Context, context)
             _draw(panel.YLOS_PT_Scenefile, context)
-            _draw(panel.YLOS_PT_Publish, context)
-            _draw(panel.YLOS_PT_Imports, context)
+            _draw(panel.YLOS_PT_StateManager, context)
+            _draw(panel.YLOS_PT_SceneCheck, context)
         except Exception as e:
             _fail("draw() a leve (etat: WIP + publish presents)", e)
-        print("ok  4 sections draw() : etat 'WIP + publish presents' sans exception "
+        print("ok  sections draw() : etat 'WIP + publish + export state' sans exception "
               f"(target=web -> .glb, LAST_ERROR={thumbnails.LAST_ERROR!r})")
-
-        # --- Branche LAST_ERROR non vide (message d'echec affiche) ---
-        thumbnails.LAST_ERROR = "boom (test force)"
-        try:
-            _draw(panel.YLOS_PT_Publish, context)
-        except Exception as e:
-            _fail("YLOS_PT_Publish.draw() a leve (branche LAST_ERROR non vide)", e)
-        finally:
-            thumbnails.LAST_ERROR = ""
-        print("ok  YLOS_PT_Publish.draw() : branche thumbnails.LAST_ERROR non vide sans exception")
 
         # --- Etat 5 : import taggue present + mise a jour disponible (INC-5) ---
         res = bpy.ops.ylos.import_product(
@@ -174,10 +169,10 @@ def main():
             _fail(f"ylos.check_updates a retourne {res} (attendu FINISHED)")
 
         try:
-            _draw(panel.YLOS_PT_Imports, context)
+            _draw(panel.YLOS_PT_StateManager, context)
         except Exception as e:
-            _fail("YLOS_PT_Imports.draw() a leve (branche import taggue + update dispo)", e)
-        print("ok  YLOS_PT_Imports.draw() : import taggue + update disponible sans exception")
+            _fail("YLOS_PT_StateManager.draw() a leve (branche import taggue + update dispo)", e)
+        print("ok  YLOS_PT_StateManager.draw() : import taggue + update disponible sans exception")
 
         try:
             addon.unregister()
@@ -185,7 +180,7 @@ def main():
             _fail("addon.unregister() a leve", e)
         print("ok  addon.unregister() sans exception")
 
-        print("\nPASS: draw() des 4 sections du panel Ylos (etats vide + peuple) headless OK")
+        print("\nPASS: draw() des sections du panel Ylos (Context/Scenefile/State Manager/Scene Check) headless OK")
         sys.exit(0)
     finally:
         shutil.rmtree(work, ignore_errors=True)

@@ -482,9 +482,10 @@ enregistré, accessible via F3, sans bouton dédié). Purges :
 - `op_export_glb.py` **supprimé** (`export_selected=` inexistant sur l'exporter gltf actuel,
   crash garanti à l'usage) — `op_publish.py` couvre déjà le besoin, format-aware via
   `get_pipeline_target` (cf. CC#2 ci-dessus).
-Résiduel connu (hors scope, non traité) : le popup header (`op_popup.py`,
-`bpy.ops.ylos.open_popup`) porte encore ses propres onglets PIPELINE/ASSETS/SCENE, dupliquant
-l'information désormais dans le N-panel — candidat à une consolidation future.
+Résiduel connu — **résolu le 2026-07-16** (cf. « State Manager Blender » plus bas) : le popup
+header (`op_popup.py`, `bpy.ops.ylos.open_popup`) portait ses propres onglets PIPELINE/ASSETS/SCENE,
+dupliquant le N-panel ET un `_STEP_MAP` codé en dur périmé (steps shot bidon). Il a été **retiré**
+(fichier supprimé), son contenu subsumé par le State Manager + une section Scene Check.
 
 **Incrément 3 — Web UI : résolution 100% serveur + verbes Ouvrir/Importer.** Bug réel reproduit
 sur le projet `Ylos__Test`/`PROP_Tente_Default` (log `launch.log` observé avant fix) :
@@ -547,6 +548,57 @@ import paresseux de `core.asset` pour éviter un cycle) :
 `tools/blender/test_import_states_headless.py` (scénario exact : publier v1 → importer (props
 vérifiées sur disque) → re-import refusé → publier v2 → `check_updates` détecte (current=1,
 latest=2) → `update_import` remplace (1→2 objets) → update répété = no-op propre).
+
+### State Manager Blender (façon Prism) — terminé (2026-07-16)
+Suite du rapprochement UI/Prism (l'utilisateur est passé sous Blender 5.2 LTS, cf. section portage
+plus haut). Un **vrai State Manager** remplace le publish mono-step + la dette du popup : des
+**export states empilables** (persistés dans le `.blend`) et **un unique bouton Publish** qui les
+exécute tous, comme le State Manager de Prism.
+- **Cœur de publish unique** : `op_publish.py::publish_entity_step(context, project_path, entity,
+  step, *, allow_full_scene, comment, load_after) -> dict` extrait de l'ancien `execute()` (contrat
+  deux-phases inchangé : allocate → export USD/GLB selon `get_pipeline_target` → thumbnail requis →
+  finalize). Ne lève JAMAIS pour un cas métier. Le bouton simple `ylos.publish` (dialog, step
+  courant) ET le batch `ylos.publish_states` passent par lui — principe 5, plus aucune duplication.
+  La **famille** de l'entité (asset/set/shot, pour `is_step_valid_for_context`) est résolue par le
+  nouveau `create_project.resolve_entity(project_root, name)` — wrapper PUBLIC de `_find_asset_entity`
+  (scan des familles, déjà utilisé par allocate/finalize) : un state ne stocke pas sa famille, et un
+  bridge n8n/Houdini pourra réutiliser ce résolveur (principe 5, résolution d'entité dans
+  l'orchestrateur). `resolve_entity` retourne `None` si absente/illisible, jamais d'exception.
+- **Modèle de données** : `plugins/blender/core/states.py::YLOS_PG_ExportState`
+  (`enabled/entity/step/allow_full_scene/comment` + `last_result`/`last_version` affichage seul).
+  `Scene.ylos_export_states` (`CollectionProperty`) + `..._index` enregistrés dans
+  `states.register_properties()` appelé **après** le loop `register_class` (`CollectionProperty(type=
+  YLOS_PG_ExportState)` exige le PG déjà enregistré ; PG placé avant tout référent dans `_classes`,
+  comme `YLOS_PG_StepToggle`). `step` = `vocab.STEP_ITEMS_ALL` (domaine complet, validé à
+  l'exécution — même pattern qu'`op_publish`).
+- **Opérateurs** `operators/op_state_manager.py` : `YLOS_UL_ExportStates` (UIList),
+  `ylos.state_add_export` (pré-rempli asset/step courant), `state_remove_export`,
+  `state_move_export` (UP/DOWN), **`ylos.publish_states`** (itère les states `enabled`, délègue
+  chacun à `publish_entity_step`, un échec n'interrompt pas les suivants — staging préservé, détail
+  console ; `CANCELLED` si aucun `ok`), `ylos.open_state_manager` (`invoke_popup` width 500 →
+  fenêtre façon Prism).
+- **Draw unique** `ui/state_manager.py::draw_state_manager(layout, context)` — export states
+  (template_list + add/remove/move + réglages du state actif + bouton Publish) puis import states
+  (collections taguées + `check_updates`/`update_import`, repris de l'ancien `YLOS_PT_Imports`).
+  Monté en DEUX points sans copie : section N-panel `YLOS_PT_StateManager` (`ui/panel.py`) ET popup
+  `YLOS_OT_OpenStateManager`. **Import paresseux** de `draw_state_manager` dans le `draw()` du popup
+  (sinon cycle : `ui.state_manager` charge le package `operators`, qui charge `op_state_manager`,
+  avant que `draw_state_manager` n'existe).
+- **`ui/panel.py`** : sections `Context`(0) · `Assets`(1, `panel_asset_list`) · `Scenefile`(2) ·
+  **`State Manager`**(3, subsume Publish+Imports) · **`Scene Check`**(4, `DEFAULT_CLOSED`, recueille
+  le scene-checker de l'ex-onglet Scene du popup). Menu top bar : « State Manager… », « Quick Publish
+  (current step)… », « Check Scene ». Bouton header repurposé sur `ylos.open_state_manager`. La prop
+  `ylos_popup_tab` retirée. `bl_info` bumpé `(0,3,1)→(0,3,2)`.
+- **`op_popup.py` supprimé** (dernier `_STEP_MAP` codé en dur + icône `ENVIRONMENT` périmée résorbés).
+- **Tests** : `tests/test_create_project.py::TestResolveEntity` (stdlib CI — familles asset/set/shot,
+  absente → None) ; `tools/blender/test_state_manager_headless.py` (add×2 → reorder → remove → **1
+  Publish → 2 versions `complete` sur disque** → state désactivé sauté → aucun enabled = CANCELLED) ;
+  `test_panel_draw_headless.py` étendu aux nouvelles sections. Validé sous 5.2 : CI stdlib (151) + 10
+  headless + launcher e2e, tous verts.
+- **Hors scope (choix utilisateur)** : Project Browser reste **web** (app.html = orchestrateur, choix
+  « hybride ») ; states Playblast/Render non repris (le rendu Karma est côté Houdini) ; scope objet
+  par state limité à convention+full-scene (raffinement futur) ; remap d'overrides sur Update Import
+  inchangé (v1).
 
 ### Sync web (`sync_web_assets`)
 `create_project.py::sync_web_assets(project_root, web_project_dir)` copie les GLB

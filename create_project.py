@@ -1127,6 +1127,38 @@ def _find_asset_entity(project_root, asset_name):
     )
 
 
+def resolve_entity(project_root, name):
+    """Resout une entite deja creee par son nom, quelle que soit sa famille (assets/sets/
+    shots) - wrapper PUBLIC de _find_asset_entity pour les consommateurs DCC (le State
+    Manager Blender doit connaitre la famille d'une entite ciblee sans la stocker sur le
+    state ; un bridge n8n en aura aussi besoin). Principe 5 : la resolution d'entite vit
+    dans l'orchestrateur, pas dans le plugin. Ne leve JAMAIS pour un cas metier : retourne
+    None si l'entite est introuvable OU son manifeste illisible. Retour :
+    {"name","family","entity_type","dir","manifest"} - 'family' = cle ENTITY_DIR
+    ('asset'|'set'|'shot', pour is_step_valid_for_context), 'entity_type' = sous-type
+    (CHARACTER/PROP/...) du manifeste."""
+    try:
+        entity_dir, manifest_path = _find_asset_entity(project_root, name)
+    except FileNotFoundError:
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    family = manifest.get("entity_type", "asset")
+    if family not in ENTITY_DIR:
+        # Manifeste incoherent -> le dossier disque fait foi (principe : source lisible).
+        parent = entity_dir.parent.name
+        family = next((k for k, v in ENTITY_DIR.items() if v == parent), "asset")
+    return {
+        "name": name,
+        "family": family,
+        "entity_type": manifest.get("type", ""),
+        "dir": str(entity_dir),
+        "manifest": manifest,
+    }
+
+
 def publish_version_from_dir(final_dir):
     """Extrait le numero de version d'un final_dir retourne par allocate_publish_version()
     (ex: 'CHARACTER_Lina_Default_lop_v003' -> 3). Distinct de _ver() : un final_dir est un
