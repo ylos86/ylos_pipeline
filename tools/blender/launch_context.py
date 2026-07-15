@@ -48,6 +48,9 @@ LOG_PATH = os.environ.get("YLOS_LAUNCH_LOG") or str(Path.home() / ".ylos" / "lau
 
 # Extensions ouvertes par import USD (le reste = mainfile .blend). Miroir de ylos_ui.py.
 USD_OPEN_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
+# Cible pipeline 'web' (cf. create_project.PROD_TYPE_TO_TARGET) : publish = .glb, importe via
+# import_scene.gltf (meme merge-dans-la-scene que l'USD, jamais un open_mainfile).
+GLB_OPEN_EXTS = (".glb", ".gltf")
 
 
 # --------------------------------------------------------------------------------------
@@ -197,12 +200,18 @@ def _do_launch(args):
 
     ext = os.path.splitext(path)[1].lower()
     is_usd = ext in USD_OPEN_EXTS
+    is_glb = ext in GLB_OPEN_EXTS
     try:
-        if is_usd:
-            # USD : contexte D'ABORD (open_context + enums), puis import (merge dans la scene).
+        if is_usd or is_glb:
+            # USD/GLB : contexte D'ABORD (open_context + enums), puis import (merge dans la
+            # scene) - meme ordre pour les deux, seul l'operateur d'import differe.
             _apply_context(args.project, args.entity, args.step)
-            bpy.ops.wm.usd_import(filepath=path)
-            _log(f"open: usd_import({path!r}) OK")
+            if is_usd:
+                bpy.ops.wm.usd_import(filepath=path)
+                _log(f"open: usd_import({path!r}) OK")
+            else:
+                bpy.ops.import_scene.gltf(filepath=path)
+                _log(f"open: import_scene.gltf({path!r}) OK")
         else:
             # .blend : open_mainfile D'ABORD (remplace la scene), puis contexte.
             bpy.ops.wm.open_mainfile(filepath=path)
@@ -213,7 +222,7 @@ def _do_launch(args):
         return 1
 
     n_objects = len(bpy.data.objects)
-    mode = "usd_import" if is_usd else "mainfile"
+    mode = "usd_import" if is_usd else ("gltf_import" if is_glb else "mainfile")
     _log(f"LAUNCH SUCCESS: [{mode}] {path} objects={n_objects}")
     return 0
 

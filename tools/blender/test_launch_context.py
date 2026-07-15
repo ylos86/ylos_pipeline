@@ -90,6 +90,57 @@ def _assert_success(rc, log, label):
     print(f"ok  {label}: exit 0, LAUNCH SUCCESS, objects={n}")
 
 
+_PUBLISH_GLB_FIXTURE_SCRIPT = """
+import bpy, json, os, sys
+sys.path.insert(0, {repo_root!r})
+sys.path.insert(0, os.path.join({repo_root!r}, "plugins"))
+import create_project as cp
+import blender as addon
+
+addon.register()
+scene = bpy.context.scene
+scene.ylos_project_path  = {project_dir!r}
+scene.ylos_project_name  = "GlbFixture"
+scene.ylos_current_asset = {entity!r}
+scene.ylos_current_step  = {step!r}
+scene.ylos_context_type  = "ASSET"
+
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.object.delete()
+bpy.ops.mesh.primitive_cube_add(size=2.0)
+
+res = bpy.ops.ylos.publish('EXEC_DEFAULT', step={step!r}, allow_full_scene=True, load_after=False)
+assert res == {{"FINISHED"}}, res
+
+latest = cp.latest_publish_artifact({project_dir!r}, {entity!r}, {step!r})
+assert latest and latest.get("abs_path"), latest
+with open({out_json!r}, "w") as fh:
+    json.dump({{"glb_path": latest["abs_path"]}}, fh)
+"""
+
+
+def _publish_glb_fixture(blender, project_dir, entity, step, work):
+    """Genere un VRAI .glb (pipeline_target='web') via le pipeline de publish reel (bpy.ops.
+    ylos.publish, meme chemin que le bouton Publish), pas un fichier ecrit a la main - le GLB
+    est un format binaire, contrairement au cube USDA en dur utilise pour les autres
+    invocations. Retourne le chemin absolu de l'artefact publie."""
+    script_path = os.path.join(work, "publish_glb_fixture.py")
+    out_json = os.path.join(work, "glb_fixture.json")
+    with open(script_path, "w", encoding="utf-8") as fh:
+        fh.write(_PUBLISH_GLB_FIXTURE_SCRIPT.format(
+            repo_root=REPO_ROOT, project_dir=project_dir, entity=entity, step=step,
+            out_json=out_json,
+        ))
+    cmd = [blender, "--background", "--factory-startup", "--python", script_path]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if proc.returncode != 0 or not os.path.isfile(out_json):
+        print("--- STDOUT ---\n", proc.stdout)
+        print("--- STDERR ---\n", proc.stderr)
+        _fail(f"fixture GLB : publish reel a echoue (exit {proc.returncode})")
+    with open(out_json, encoding="utf-8") as fh:
+        return json.load(fh)["glb_path"]
+
+
 def main():
     import create_project as cp
 
@@ -157,6 +208,36 @@ def main():
                 _fail(f"invocation B: contexte non pose - marqueur absent {marker!r}:\n{log}")
         print("ok  invocation B: addon enregistre + contexte pipeline pose "
               "(asset/context_type/asset_type)")
+
+        # 6. Invocation C - projet web (GLB) : publish REEL puis import_scene.gltf via le
+        #    launcher (regression du bug INC-3 - le launcher ouvrait un .glb en open_mainfile,
+        #    faute de routage par extension ; acceptance : 'Importer' une version importe le
+        #    GLB dans une session contextualisee).
+        web_root = os.path.join(work, "web_src")
+        web_cache = os.path.join(work, "web_cache")
+        os.makedirs(web_root)
+        os.makedirs(web_cache)
+        web_proj = cp.create("LaunchTestWeb", root=web_root, cache=web_cache, prod_type="XR")
+        web_project_dir = str(web_proj["source"])
+        web_entity = "PROP_Cube_Default"
+        cp.create_asset(web_project_dir, web_entity, entity_type="asset", asset_type="PROP")
+        with open(os.path.join(web_project_dir, "assets", web_entity, "manifest.json"),
+                  encoding="utf-8") as fh:
+            web_step = json.load(fh)["steps"][0]
+
+        glb_path = _publish_glb_fixture(blender, web_project_dir, web_entity, web_step, work)
+        if not glb_path.lower().endswith(".glb"):
+            _fail(f"fixture GLB : extension inattendue : {glb_path}")
+
+        logC = os.path.join(work, "launchC.log")
+        rc, log = _run_launcher(blender, logC, [
+            "--project", web_project_dir, "--entity", web_entity, "--step", web_step,
+            "--path", glb_path, "--kind", "publish"])
+        _assert_success(rc, log, "invocation C (--path GLB publish reel)")
+        if "gltf_import" not in log:
+            _fail(f"invocation C: mode 'gltf_import' absent du log (routage extension "
+                  f"casse ?):\n{log}")
+        print("ok  invocation C: routage GLB -> import_scene.gltf trace dans le log")
 
         print("\nPASS: launcher contextualise e2e OK")
         sys.exit(0)

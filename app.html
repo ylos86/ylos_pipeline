@@ -189,7 +189,7 @@
     .steps-list { display: flex; flex-direction: column; gap: 3px; }
 
     .step-row {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: center; gap: 8px;
       padding: 4px 8px; border-radius: 5px;
       background: var(--bg-3); border: 1px solid var(--border);
       cursor: pointer; transition: border-color .15s, background .15s;
@@ -197,9 +197,20 @@
     .step-row:hover { border-color: var(--accent); background: var(--accent-glow); }
     .step-row:hover .step-name { color: var(--text); }
 
-    .step-name { font-size: 11px; color: var(--text-muted); text-transform: capitalize; }
+    .step-thumb {
+      width: 20px; height: 20px; border-radius: 4px; object-fit: cover;
+      flex-shrink: 0; background: var(--bg); display: block;
+    }
+    .step-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+
+    .step-name { font-size: 11px; color: var(--text-muted); text-transform: capitalize; flex: 1; min-width: 0; }
+    .step-ext {
+      font-size: 9px; font-weight: 700; letter-spacing: .4px; color: var(--text-dim);
+      background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+      padding: 1px 5px; flex-shrink: 0;
+    }
     .step-ver  {
-      font-size: 11px; color: var(--accent);
+      font-size: 11px; color: var(--accent); flex-shrink: 0;
       font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
     }
 
@@ -683,13 +694,9 @@ function sorted(list) {
   return cp;
 }
 
-function verNum(path) {
-  return +(path?.match(/v(\d+)/i)?.[1] ?? 0);
-}
-
 function maxVer(asset) {
   const vals = Object.values(asset.last_versions || {});
-  return vals.length ? Math.max(...vals.map(verNum)) : 0;
+  return vals.length ? Math.max(...vals.map(v => v.version || 0)) : 0;
 }
 
 // ── Render ──────────────────────────────────────────
@@ -723,19 +730,22 @@ function render() {
     }
   }, true);
 
-  GRID.querySelectorAll('[data-open]').forEach(btn =>
-    btn.addEventListener('click', () => openBlender(btn.dataset.open, {
-      entity: btn.dataset.entity, step: btn.dataset.step, project: btn.dataset.project,
-    }))
+  // Deux verbes, jamais de chemin construit ici (cf. INC-3) : le serveur résout
+  // {entity, step?} ('Ouvrir la scène') ou {entity, step, version} ('Importer').
+  GRID.querySelectorAll('[data-open-entity]').forEach(btn =>
+    btn.addEventListener('click', () => openScene(btn.dataset.openEntity, btn.dataset.openStep))
+  );
+  GRID.querySelectorAll('[data-import-entity]').forEach(row =>
+    row.addEventListener('click', () => importPublish(
+      row.dataset.importEntity, row.dataset.importStep, row.dataset.importVersion))
   );
 }
 
 // ── Card HTML ────────────────────────────────────────
 function cardHTML(asset) {
   const { name, type, last_versions = {}, thumb } = asset;
-  const steps     = Object.entries(last_versions);
-  const color     = TYPE_COLORS[type] || '#7070a0';
-  const projPath  = S.project._project_path;
+  const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
+  const color = TYPE_COLORS[type] || '#7070a0';
 
   const thumbSection = thumb
     ? `<img src="${BASE}${esc(thumb)}" alt="${esc(name)}" loading="lazy">
@@ -743,21 +753,24 @@ function cardHTML(asset) {
     : `<div class="thumb-placeholder">${placeholderInner(type)}</div>`;
 
   const stepsSection = steps.length
-    ? steps.map(([step, path]) => {
-        const ver      = path?.match(/v\d+/i)?.[0] ?? '—';
-        const fullPath = `${projPath}/${path}`;
-        return `<div class="step-row" data-open="${esc(fullPath)}" data-entity="${esc(name)}" data-step="${esc(step)}" data-project="${esc(projPath)}" title="Ouvrir ${esc(step)} dans Blender">
+    ? steps.map(([step, v]) => {
+        const ver = v.version ? `v${String(v.version).padStart(3, '0')}` : '—';
+        const rowThumb = v.thumb
+          ? `<img class="step-thumb" src="${BASE}${esc(v.thumb)}" alt="" loading="lazy">`
+          : `<span class="step-thumb step-thumb-empty">${iconBox(11)}</span>`;
+        return `<div class="step-row" data-import-entity="${esc(name)}" data-import-step="${esc(step)}" data-import-version="${v.version ?? ''}" title="Importer ${esc(step)} ${ver} (nouvelle session)">
+                  ${rowThumb}
                   <span class="step-name">${esc(step)}</span>
+                  ${v.ext ? `<span class="step-ext">${esc(v.ext.toUpperCase())}</span>` : ''}
                   <span class="step-ver">${esc(ver)}</span>
                 </div>`;
       }).join('')
     : `<span style="font-size:11px;color:var(--text-dim)">Aucun publish</span>`;
 
   // step dont le numéro de version est le plus élevé parmi last_versions
-  const bestEntry = steps.length
-    ? steps.reduce((best, cur) => verNum(cur[1]) > verNum(best[1]) ? cur : best)
+  const bestStep = steps.length
+    ? steps.reduce((best, cur) => (cur[1].version || 0) > (best[1].version || 0) ? cur : best)[0]
     : null;
-  const bestPath = bestEntry ? `${projPath}/${bestEntry[1]}` : null;
 
   return `
     <div class="card">
@@ -769,9 +782,9 @@ function cardHTML(asset) {
         </div>
         <div class="steps-list">${stepsSection}</div>
         <div class="card-footer">
-          ${bestPath
-            ? `<button class="btn btn-primary" type="button" data-open="${esc(bestPath)}" data-entity="${esc(name)}" data-step="${esc(bestEntry[0])}" data-project="${esc(projPath)}">
-                 ${iconPlay(13)} Ouvrir dans Blender
+          ${bestStep
+            ? `<button class="btn btn-primary" type="button" data-open-entity="${esc(name)}" data-open-step="${esc(bestStep)}">
+                 ${iconPlay(13)} Ouvrir la scène
                </button>`
             : `<button class="btn btn-secondary" type="button" disabled>Aucun publish</button>`}
         </div>
@@ -824,20 +837,32 @@ function rebuildTypeFilter() {
   );
 }
 
-// ── Open Blender ─────────────────────────────────────
-// ctx (optionnel) : { entity, step, project } - envoyes au launcher quand la vue les
-// connait (boutons de version + bouton d'entite) pour contextualiser l'instance Blender.
-async function openBlender(path, ctx = {}) {
-  const payload = { path };
-  for (const k of ['entity', 'step', 'project']) {
-    if (ctx[k]) payload[k] = ctx[k];
+// ── Open / Import (DCC) ───────────────────────────────
+// Deux verbes, jamais de chemin construit ici : le serveur résout {entity, step?} ou
+// {entity, step, version} contre l'orchestrateur (create_project) et construit lui-même
+// le chemin canonique + l'argv du launcher (cf. INC-3 - fini la reconstruction
+// project_root + rel côté client, cause du bug : segment 'assets/<entité>' manquant).
+async function openScene(entity, step) {
+  const payload = { entity };
+  if (step) payload.step = step;
+  await _launchDcc(payload, 'Scène ouverte');
+}
+
+async function importPublish(entity, step, version) {
+  if (!step || version === undefined || version === '') {
+    toast('Version manquante', 'err');
+    return;
   }
+  await _launchDcc({ entity, step, version: Number(version) }, 'Import lancé (nouvelle session)');
+}
+
+async function _launchDcc(payload, okMessage) {
   try {
     const { ok, data } = await api('/api/open-blender', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    ok ? toast('Blender lancé', 'ok') : toast(data.error || 'Erreur', 'err');
+    ok ? toast(okMessage, 'ok') : toast(data.error || 'Erreur', 'err');
   } catch {
     toast('Serveur non disponible', 'err');
   }
@@ -1076,7 +1101,7 @@ async function confirmNewAsset() {
     });
     if (ok) {
       closeNewAssetModal();
-      if (data.wip_path) await openBlender(data.wip_path);
+      if (data.first_step) await openScene(name, data.first_step);
       await loadAssets();
       toast('Asset créé', 'ok');
     } else {

@@ -22,7 +22,10 @@ Endpoints:
                                steps surchargés par le pipeline du projet actif)
     GET  /api/assets           liste assets/* sets/* (manifest + dernière version + thumb)
     GET  /api/asset/<name>     détail + toutes les versions par step
-    POST /api/open-blender     {path} ouvre Blender.app (non-bloquant)
+    POST /api/open-blender     {entity, step?} ouvre la scène (WIP-first) OU
+                               {entity, step, version} importe un publish précis —
+                               résolu côté serveur (create_project), jamais de chemin
+                               envoyé par le client (non-bloquant)
     POST /api/set-project      {path} définit le projet actif
     POST /api/set-web-target   {target_dir} persiste project.json["web"]["target_dir"]
     GET  /api/web-pins         pins courants + publishes GLB disponibles par asset
@@ -174,17 +177,27 @@ def _find_thumb(asset_dir: Path, asset_name: str, manifest: dict | None = None) 
 
 
 def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict:
-    """Dernier chemin publie (relatif a l'entite, contenant 'vNNN' - contrat consomme tel
-    quel par app.html::verNum/openBlender) par step. Resolu via l'ORCHESTRATEUR
-    (create_project.latest_publish_artifact) : deux-phases niche + fichiers plats legacy
-    fusionnes, entree 'complete' de version max. Plus aucune resolution dupliquee ici
-    (le commentaire 'logique unique, jamais dupliquee' en tete de module devient vrai)."""
+    """Dernier publish 'complete' par step - donnees CANONIQUES uniquement (numero de
+    version, extension, URL de vignette), JAMAIS un chemin de fichier ou un chemin relatif :
+    le client ne reconstruit plus jamais 'project_root + rel' pour ouvrir/importer (cause
+    exacte du bug corrige, cf. INC-3 - le rel d'un publish deux-phases est relatif a
+    l'ENTITE, pas au projet ; la concatenation naive sautait le segment 'assets/<entite>').
+    Resolu via l'ORCHESTRATEUR (create_project.latest_publish_artifact) : deux-phases niche +
+    fichiers plats legacy fusionnes, entree 'complete' de version max. L'ouverture/import
+    passe par POST /api/open-blender {entity, step[, version]}, resolu cote serveur au moment
+    du clic (jamais a la construction de cette liste)."""
     steps = set(manifest.get("step_publishes", {})) | set(manifest.get("publishes", {}))
     result: dict = {}
     for step in steps:
         latest = create_project.latest_publish_artifact(project_root, entity_name, step)
-        if latest and latest.get("artifact"):
-            result[step] = latest["artifact"]
+        if not latest or not latest.get("artifact"):
+            continue
+        thumb_rel = latest.get("thumbnail") or latest.get("thumb")
+        result[step] = {
+            "version": latest.get("version"),
+            "ext": os.path.splitext(latest["artifact"])[1].lstrip("."),
+            "thumb": f"/thumb/{entity_name}/{thumb_rel}" if thumb_rel else None,
+        }
     return result
 
 
@@ -276,6 +289,46 @@ def _is_user_volume(p: Path) -> bool:
                     str(real).startswith('/private/'))
     except Exception:
         return False
+
+
+# -------------------------------------------------------------------------------------
+# Ouverture/import DCC — résolution serveur + construction d'argv (INC-3).
+#
+# Le client n'envoie PLUS JAMAIS de chemin : deux verbes, résolus ici contre
+# l'orchestrateur, jamais par reconstruction 'project_root + rel' (c'est exactement la
+# cause du bug corrigé — un chemin de publish est relatif à l'ENTITÉ, pas au projet ; la
+# concaténation naïve sautait le segment 'assets/<entité>' et pouvait driver de casse du
+# root selon la source du chemin côté client).
+#   - 'Ouvrir la scène'  : {entity, step?}          -> resolve_open_target (WIP-first).
+#   - 'Importer'         : {entity, step, version}  -> version EXACTE (jamais 'latest'),
+#                           via list_publishes (abs_path déjà canonique).
+# -------------------------------------------------------------------------------------
+
+def _resolve_publish_entry(project_dir: Path, entity: str, step: str, version: int) -> dict | None:
+    """Entrée 'complete' EXACTE (numéro de version demandé, pas la dernière — Importer peut
+    cibler n'importe quelle version passée) pour (entity, step, version). None si introuvable.
+    'abs_path' vient tel quel de create_project.list_publishes (déjà résolu par
+    l'orchestrateur) : aucune concaténation ici."""
+    if not step:
+        return None
+    for entry in create_project.list_publishes(project_dir, entity, step):
+        if entry.get("version") == version and entry.get("status") == "complete":
+            return entry
+    return None
+
+
+def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: str, kind: str,
+                       entity: str | None = None, step: str | None = None) -> list[str]:
+    """Argv du subprocess Blender — fonction PURE : 'path' est déjà un chemin ABSOLU
+    canonique fourni par l'appelant (resolve_open_target / list_publishes), aucune
+    résolution ni concaténation de chemin ici."""
+    argv = [str(blender_app), "--python", str(launcher), "--", "--project", str(project)]
+    if entity:
+        argv += ["--entity", str(entity)]
+    if step:
+        argv += ["--step", str(step)]
+    argv += ["--path", str(path), "--kind", kind]
+    return argv
 
 
 # -------------------------------------------------------------------------------------
@@ -425,6 +478,9 @@ class YlosHandler(BaseHTTPRequestHandler):
         try:
             manifest = create_project.read_manifest(project_dir)
             manifest["_project_path"] = str(project_dir)
+            # Resolu (jamais le champ brut, absent/stale sur un vieux projet) - la carte
+            # d'asset en tire le badge cible (web -> .glb / offline -> .usd).
+            manifest["pipeline_target"] = create_project.get_pipeline_target(project_dir)
             _json(self, 200, manifest)
         except FileNotFoundError:
             _json(self, 404, {"error": f"project.json introuvable dans {project_dir}/_pipeline/"})
@@ -586,30 +642,34 @@ class YlosHandler(BaseHTTPRequestHandler):
     # --- POST handlers
 
     def _post_open_blender(self):
+        """POST /api/open-blender - deux verbes selon le body, JAMAIS de chemin envoye par
+        le client (cf. INC-3) :
+          - {entity, step?}          -> 'Ouvrir la scene' (WIP-first, resolve_open_target).
+          - {entity, step, version}  -> 'Importer' une version PRECISE (list_publishes).
+        Le launcher versionne (tools/blender/launch_context.py) porte TOUTE l'ouverture DCC :
+        contexte pipeline pose + ops differees au 1er tick timer (contexte pret) +
+        journalisation. Le SERVEUR resout un chemin ABSOLU canonique avant de construire
+        l'argv (_build_launch_argv, fonction pure) - aucune reconstruction manuelle."""
         body = self._body()
         if body is None:
             _json(self, 400, {"error": "JSON invalide dans le body"})
             return
 
-        # Le launcher versionne (tools/blender/launch_context.py) porte TOUTE l'ouverture
-        # DCC : contexte pipeline pose + ops differees au 1er tick timer (contexte pret) +
-        # journalisation. Fini les --python-expr inline (echec silencieux au boot, diag CC#1d).
-        # Le body accepte path/entity/step/project (tous optionnels sauf le besoin d'AU MOINS
-        # un fichier a resoudre) ; --project est requis par le launcher -> projet actif a defaut.
-        path = body.get("path")
         entity = body.get("entity")
         step = body.get("step")
+        version = body.get("version")
         project = body.get("project")
+
+        if not entity:
+            _json(self, 400, {"error": "Champ 'entity' manquant"})
+            return
+
         if project:
-            project = str(Path(project).expanduser())
+            project_dir = Path(project).expanduser().resolve()
         else:
             active = self._active()
-            project = str(active) if active is not None else None
-
-        if not path and not entity:
-            _json(self, 400, {"error": "Fournir 'path' ou 'entity' (a resoudre)"})
-            return
-        if not project:
+            project_dir = active.resolve() if active is not None else None
+        if not project_dir:
             _json(self, 400, {"error": "Aucun projet : fournir 'project' ou definir le "
                                        "projet actif"})
             return
@@ -626,21 +686,44 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 500, {"error": f"Launcher introuvable : {LAUNCHER}"})
             return
 
-        # Meme commande pour TOUS les cas (.blend inclus) : uniformite du contexte.
-        args = [str(BLENDER_APP), "--python", str(LAUNCHER), "--", "--project", project]
-        if entity:
-            args += ["--entity", str(entity)]
-        if step:
-            args += ["--step", str(step)]
-        if path:
-            args += ["--path", str(path)]
+        if version is not None:
+            try:
+                version = int(version)
+            except (TypeError, ValueError):
+                _json(self, 400, {"error": f"'version' invalide : {version!r}"})
+                return
+            if not step:
+                _json(self, 400, {"error": "Champ 'step' requis avec 'version' (Importer)"})
+                return
+            entry = _resolve_publish_entry(project_dir, entity, step, version)
+            if entry is None or not entry.get("abs_path"):
+                _json(self, 404, {
+                    "error": f"Publish introuvable : {entity}/{step} v{version:03d}",
+                })
+                return
+            path, kind, resolved_step = entry["abs_path"], "publish", step
+        else:
+            target = create_project.resolve_open_target(
+                entity, "blender", step, project_root=project_dir,
+            )
+            if not target.get("exists"):
+                _json(self, 404, {
+                    "error": target.get("reason") or f"Rien a ouvrir pour {entity!r}",
+                })
+                return
+            path, kind = target["path"], target["kind"]
+            resolved_step = target.get("step") or step
+
+        args = _build_launch_argv(BLENDER_APP, LAUNCHER, project_dir, path, kind,
+                                  entity=entity, step=resolved_step)
 
         try:
             YLOS_DIR.mkdir(parents=True, exist_ok=True)
-            log_fh = open(SERVER_LOG, "a", encoding="utf-8")  # herite par l'enfant, fini DEVNULL
-            subprocess.Popen(args, stdout=log_fh, stderr=log_fh)
-            _json(self, 200, {"ok": True, "path": path, "project": project,
-                              "entity": entity, "step": step, "argv": args})
+            with open(SERVER_LOG, "a", encoding="utf-8") as log_fh:  # herite par l'enfant, fini DEVNULL
+                subprocess.Popen(args, stdout=log_fh, stderr=log_fh)
+            _json(self, 200, {"ok": True, "path": path, "kind": kind,
+                              "project": str(project_dir), "entity": entity,
+                              "step": resolved_step, "argv": args})
         except OSError as e:
             _json(self, 500, {"error": f"Impossible de lancer Blender : {e}"})
 
@@ -730,10 +813,14 @@ class YlosHandler(BaseHTTPRequestHandler):
         try:
             asset_manifest = json.loads(Path(info["manifest"]).read_text(encoding="utf-8"))
             used_steps = asset_manifest.get("steps", [])
-            wip_path = str(Path(info["path"]) / used_steps[0] / "wip") if used_steps else None
+            first_step = used_steps[0] if used_steps else None
         except (OSError, json.JSONDecodeError):
-            wip_path = None
-        _json(self, 200, {"ok": True, "asset_path": info["path"], "wip_path": wip_path})
+            first_step = None
+        # Pas de chemin construit ici (cf. INC-3) : le client rouvre via
+        # POST /api/open-blender {entity: name, step: first_step}, resolu canoniquement
+        # (resolve_open_target degrade proprement sur une entite fraiche sans WIP -> ouvre
+        # scene_default, le stub asset_root/shot_root deja ecrit par create_asset()).
+        _json(self, 200, {"ok": True, "asset_path": info["path"], "first_step": first_step})
 
     def _post_set_web_target(self):
         body = self._body()

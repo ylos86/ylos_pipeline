@@ -10,6 +10,11 @@ Couvre :
     le pipeline du projet actif.
   - /thumb/ : garde anti path-traversal ('..' interdit sur tout le chemin, asset_name
     compris), chemin legitime deux-phases servi.
+  - _build_launch_argv : fonction pure de construction d'argv (INC-3).
+  - POST /api/open-blender : resolution 100% serveur (create_project), jamais de chemin
+    envoye par le client — regression du bug (segment 'assets/<entite>' manquant sur une
+    concatenation naive project_root + rel) et verification qu'Importer cible la version
+    EXACTE demandee, jamais 'latest'.
 
 Usage : python3 tests/test_ylos_ui.py
      ou : python3 -m unittest tests.test_ylos_ui
@@ -26,6 +31,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -323,6 +329,152 @@ class TestWebPins(ServerTestCase):
         self.assertEqual(result["warnings"], [])
         glb = self._tmp / "webproj" / "public" / "assets" / "PROP_Tente_Default_v001.glb"
         self.assertTrue(glb.is_file())
+
+
+class TestBuildLaunchArgv(unittest.TestCase):
+    """_build_launch_argv est une fonction PURE (INC-3) : 'path' est déjà résolu par
+    l'appelant, aucune reconstruction/concaténation de chemin ici."""
+
+    def test_argv_includes_project_path_kind_entity_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project  = Path(tmp) / "MyProject"
+            blender  = Path(tmp) / "Blender"
+            launcher = Path(tmp) / "launch_context.py"
+            path = str(project / "assets" / "PROP_Foo_Default" / "modeling" / "publish" /
+                      "PROP_Foo_Default_modeling_v003" / "PROP_Foo_Default_modeling_v003.usd")
+
+            argv = ylos_ui._build_launch_argv(
+                blender, launcher, project, path, "publish",
+                entity="PROP_Foo_Default", step="modeling",
+            )
+
+            self.assertEqual(argv, [
+                str(blender), "--python", str(launcher), "--",
+                "--project", str(project),
+                "--entity", "PROP_Foo_Default",
+                "--step", "modeling",
+                "--path", path,
+                "--kind", "publish",
+            ])
+
+    def test_argv_omits_optional_entity_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "Proj"
+            argv = ylos_ui._build_launch_argv(
+                Path(tmp) / "b", Path(tmp) / "l.py", project,
+                "/some/resolved/path.usda", "scene_default",
+            )
+            self.assertNotIn("--entity", argv)
+            self.assertNotIn("--step", argv)
+            self.assertIn("--path", argv)
+            self.assertIn("--kind", argv)
+
+
+class TestOpenBlenderResolution(ServerTestCase):
+    """POST /api/open-blender — résolution 100% serveur (create_project), jamais de chemin
+    envoyé par le client (cf. INC-3). subprocess.Popen mocké : on vérifie le chemin RÉSOLU
+    (canonique, absolu, incluant le segment 'assets/<entité>' — c'était la cause du bug),
+    jamais une vraie instance Blender lancée pendant les tests."""
+
+    @classmethod
+    def _publish(cls, step, ext):
+        staging, final = cp.allocate_publish_version(
+            cls.project, "PROP_Tente_Default", comment="", kind=step)
+        version = cp.publish_version_from_dir(final)
+        stem = f"PROP_Tente_Default_{step}_v{version:03d}"
+        (staging / f"{stem}.{ext}").write_bytes(f"artifact v{version}".encode())
+        (staging / "thumb.png").write_bytes(b"png")
+        cp.finalize_publish_version(cls.project, "PROP_Tente_Default", staging, final,
+                                    version, expected_artifacts=[stem, "thumb.png"])
+        return final / f"{stem}.{ext}"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_open", root=str(cls._tmp / "oroot"),
+                         cache=str(cls._tmp / "ocache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+
+        # WIP réel pour 'Ouvrir la scène' (kind='wip', ordre de résolution #1).
+        wip_dir = cls.project / "assets" / "PROP_Tente_Default" / "modeling" / "wip"
+        wip_dir.mkdir(parents=True, exist_ok=True)
+        cls.wip_file = wip_dir / "PROP_Tente_Default_modeling_v001.blend"
+        cls.wip_file.write_bytes(b"fake blend")
+
+        # Deux versions publiées (lookdev) pour 'Importer' une version PRÉCISE (pas latest).
+        cls.pub_v1 = cls._publish("lookdev", "usd")
+        cls.pub_v2 = cls._publish("lookdev", "usd")
+
+        cls._set_active(cls.project)
+
+        cls._fake_blender = cls._tmp / "fake_blender_app"
+        cls._fake_blender.write_bytes(b"")
+        cls._fake_launcher = cls._tmp / "fake_launch_context.py"
+        cls._fake_launcher.write_bytes(b"")
+
+    def setUp(self):
+        # Jamais de vraie instance Blender lancee pendant les tests : Popen mocke, binaire/
+        # launcher pointes sur des fichiers factices (seul '.is_file()' compte ici). YLOS_DIR/
+        # SERVER_LOG rediriges vers le tmpdir - jamais toucher ~/.ylos reel (meme discipline
+        # que ServerTestCase pour RECENT_FILE/ACTIVE_FILE).
+        self._patches = [
+            patch.object(ylos_ui, "BLENDER_APP", self._fake_blender),
+            patch.object(ylos_ui, "LAUNCHER", self._fake_launcher),
+            patch.object(ylos_ui, "YLOS_DIR", self._tmp / "ylos_home"),
+            patch.object(ylos_ui, "SERVER_LOG", self._tmp / "ylos_home" / "launch-server.log"),
+            patch.object(ylos_ui.subprocess, "Popen"),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+
+    def test_open_scene_resolves_wip_canonical_absolute_path(self):
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": "modeling"})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["kind"], "wip")
+        # Régression du bug : le chemin résolu DOIT être le fichier WIP réel, segment
+        # 'assets/<entité>' inclus (une concaténation naïve project_root + rel le sautait).
+        self.assertEqual(Path(data["path"]), self.wip_file)
+        norm = data["path"].replace("\\", "/")
+        self.assertIn("assets/PROP_Tente_Default/modeling/wip", norm)
+
+    def test_import_publish_targets_exact_version_not_latest(self):
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": "lookdev", "version": 1})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["kind"], "publish")
+        self.assertEqual(Path(data["path"]), self.pub_v1)
+        self.assertNotEqual(Path(data["path"]), self.pub_v2)
+
+    def test_import_publish_nonexistent_version_404(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": "lookdev", "version": 99})
+        self.assertEqual(status, 404)
+
+    def test_import_without_step_400(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "version": 1})
+        self.assertEqual(status, 400)
+
+    def test_open_scene_missing_entity_400(self):
+        status, _, _ = self._request("/api/open-blender", method="POST", body={})
+        self.assertEqual(status, 400)
+
+    def test_open_scene_unknown_entity_404(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST", body={"entity": "PROP_Fantome_Default"})
+        self.assertEqual(status, 404)
 
 
 if __name__ == "__main__":
