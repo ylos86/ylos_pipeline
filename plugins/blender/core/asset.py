@@ -153,7 +153,8 @@ def list_publish_versions(project_path: str, entity_name: str, step: str,
                           entity_type: str = "asset") -> list:
     """Adaptateur mince sur create_project.list_publishes (logique unique) : publishes USD
     du step (contrat deux-phases niche + fichiers plats legacy fusionnes), forme historique
-    {version, variant, filename, path} conservee (consommee par op_load_publish). Le scan a
+    {version, variant, filename, path} conservee (USD uniquement - un import de produit
+    generique, GLB inclus, passe par resolve_publish_entry ci-dessous, cf. INC-5). Le scan a
     plat local d'antan (qui rendait invisibles les publishes deux-phases en DOSSIER) est
     supprime - c'etait la cause du 'No published USD found'."""
     results = []
@@ -163,7 +164,7 @@ def list_publish_versions(project_path: str, entity_name: str, step: str,
         if not artifact or not abs_path:
             continue  # entree 'pending' (pas encore d'artefact)
         if not str(artifact).lower().endswith(_USD_PUBLISH_EXTS):
-            continue  # op_load_publish importe de l'USD ; un GLB/cache n'y a pas sa place
+            continue  # cette fonction est USD-only ; un GLB/cache n'y a pas sa place
         name = os.path.basename(abs_path)
         m = VERSION_VARIANT_PATTERN.search(name)
         variant = m.group(2) if (m and m.group(2)) else "Default"
@@ -214,6 +215,36 @@ def get_latest_publish_version(project_path: str, entity_name: str, step: str,
     partagees par step (cf. allocate_publish_version)."""
     latest = _cp().latest_publish_artifact(project_path, entity_name, step, entity_type)
     return latest["version"] if latest else 0
+
+
+def read_entity_manifest(project_path: str, entity_name: str, entity_type: str = "asset") -> dict:
+    """Manifeste brut de l'entite (type/entity_type/steps...) - {} si absent/illisible,
+    jamais d'exception (meme tolerance que le reste du module). Utilise pour connaitre le
+    type reel (PROP/CHARACTER/...) d'un import, cf. core.project.resolve_parent_collection."""
+    root = _get_entity_root(project_path, entity_name, entity_type)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        return {}
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def resolve_publish_entry(project_path: str, entity_name: str, step: str, version: int = None,
+                          entity_type: str = "asset") -> dict | None:
+    """Entree publish 'complete' pour (entity, step[, version]) - INC-5 (import states).
+    version None/0 -> la derniere (create_project.latest_publish_artifact) ; version
+    explicite -> EXACTEMENT celle-la, jamais un repli sur la derniere (via
+    create_project.list_publishes). 'abs_path' est deja fourni par l'orchestrateur - aucune
+    reconstruction de chemin ici (meme discipline que ylos_ui.py, cf. CLAUDE.md)."""
+    cp = _cp()
+    if not version:
+        return cp.latest_publish_artifact(project_path, entity_name, step, entity_type)
+    for entry in cp.list_publishes(project_path, entity_name, step, entity_type):
+        if entry.get("version") == version and entry.get("status") == "complete":
+            return entry
+    return None
 
 
 # ---------------------------------------------------------------------------

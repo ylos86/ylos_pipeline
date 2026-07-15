@@ -35,7 +35,7 @@ from .ui import panel, panel_asset_list, menu
 from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_publish,
     op_open_context, op_open_wip, op_switch_context,
-    op_load_publish, op_asset_list, op_scene_check, op_popup,
+    op_import_product, op_update_imports, op_asset_list, op_scene_check, op_popup,
 )
 
 _classes = (
@@ -54,9 +54,9 @@ _classes = (
     op_open_wip.YLOS_OT_OpenLatestWip,
     op_switch_context.YLOS_OT_SwitchAsset,
     op_switch_context.YLOS_OT_SwitchStep,
-    op_load_publish.YLOS_OT_LoadPublishFile,
-    op_load_publish.YLOS_OT_LoadLatestPublish,
-    op_load_publish.YLOS_OT_LoadPublish,
+    op_import_product.YLOS_OT_ImportProduct,
+    op_update_imports.YLOS_OT_CheckUpdates,
+    op_update_imports.YLOS_OT_UpdateImport,
     op_asset_list.YLOS_OT_AssetBrowser,
     op_asset_list.YLOS_OT_RefreshAssetList,
     op_scene_check.YLOS_OT_RunSceneCheck,

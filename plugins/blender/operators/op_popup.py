@@ -191,8 +191,12 @@ class YLOS_OT_OpenPopup(bpy.types.Operator):
         pbtn.scale_y = 1.25
         pbtn.operator("ylos.publish", text="Publish Step", icon="EXPORT")
         load_row = pub.row(align=True)
-        load_row.operator("ylos.load_latest_publish", text="Load Latest", icon="IMPORT")
-        load_row.operator("ylos.load_publish", text="", icon="DOWNARROW_HLT")
+        # ylos.load_latest_publish/ylos.load_publish absorbes par ylos.import_product
+        # (INC-5) : entity/step/version explicites, version=0 = derniere.
+        op = load_row.operator("ylos.import_product", text="Load Latest", icon="IMPORT")
+        op.entity = scene.ylos_current_asset
+        op.step = scene.ylos_current_step
+        op.version = 0
 
     def _draw_assets(self, layout, context):
         scene = context.scene

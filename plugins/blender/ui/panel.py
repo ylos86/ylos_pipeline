@@ -12,6 +12,8 @@ import bpy
 from ..core.asset import get_latest_wip_version, get_latest_publish_version, list_wip_versions
 from ..core.thumbnails import load_icon
 from ..core import thumbnails, vocab
+from ..operators.op_import_product import import_state_collection_name
+from ..operators.op_update_imports import tagged_import_collections, get_cached_update_results
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -248,8 +250,13 @@ class YLOS_PT_Publish(bpy.types.Panel):
 
         layout.separator(factor=0.3)
         load_row = layout.row(align=True)
-        load_row.operator("ylos.load_latest_publish", text="Load Latest", icon="IMPORT")
-        load_row.operator("ylos.load_publish", text="", icon="TRIA_DOWN")
+        # ylos.load_latest_publish/ylos.load_publish absorbes par ylos.import_product
+        # (INC-5, tague la collection creee) - version=0 = derniere. Le choix d'une
+        # version precise se fait desormais dans la section Imports ci-dessous.
+        op = load_row.operator("ylos.import_product", text="Load Latest", icon="IMPORT")
+        op.entity = asset_name
+        op.step = step
+        op.version = 0
 
         op = layout.operator("ylos.open_folder", text="Open Publish Folder",
                              icon="FOLDER_REDIRECT")
@@ -257,7 +264,7 @@ class YLOS_PT_Publish(bpy.types.Panel):
 
 
 # ---------------------------------------------------------------------------
-# Section: Imports (read-only - prepare INC-5)
+# Section: Imports (import states - State-Manager-lite, INC-5)
 # ---------------------------------------------------------------------------
 
 class YLOS_PT_Imports(bpy.types.Panel):
@@ -289,23 +296,69 @@ class YLOS_PT_Imports(bpy.types.Panel):
                 if entry.get("status") == "complete":
                     rows.append((step, entry))
 
+        layout.label(text="Available publishes", icon="EXPORT")
         if not rows:
             layout.label(text="No publishes yet for this entity", icon="INFO")
+        else:
+            rows.sort(key=lambda pair: pair[1].get("published_utc") or "", reverse=True)
+
+            col = layout.column(align=True)
+            for step, entry in rows[:8]:
+                artifact = entry.get("artifact") or ""
+                ext = os.path.splitext(artifact)[1]
+                version = entry.get("version", 0)
+
+                row = col.row(align=True)
+                row.label(text=step, icon="SEQUENCE")
+                right = row.row()
+                right.alignment = "RIGHT"
+                right.label(text=f"v{version:03d}{ext}")
+
+                existing = bpy.data.collections.get(
+                    import_state_collection_name(asset_name, step))
+                if existing and existing.get("ylos_import_version") == version:
+                    row.label(text="", icon="CHECKMARK")
+                else:
+                    op = row.operator("ylos.import_product", text="", icon="IMPORT")
+                    op.entity = asset_name
+                    op.step = step
+                    op.version = version
+
+            if len(rows) > 8:
+                foot = layout.row()
+                foot.alignment = "RIGHT"
+                foot.label(text=f"+{len(rows) - 8} more")
+
+        layout.separator(factor=0.5)
+        header = layout.row(align=True)
+        header.label(text="Imported in scene", icon="OUTLINER_COLLECTION")
+        header.operator("ylos.check_updates", text="", icon="FILE_REFRESH")
+
+        tagged = tagged_import_collections()
+        if not tagged:
+            layout.label(text="Nothing imported yet", icon="INFO")
             return
 
-        rows.sort(key=lambda pair: pair[1].get("published_utc") or "", reverse=True)
+        cache = get_cached_update_results()
+        col2 = layout.column(align=True)
+        for coll in sorted(tagged, key=lambda c: c.name):
+            entity  = coll.get("ylos_import_entity", "?")
+            istep   = coll.get("ylos_import_step", "?")
+            version = coll.get("ylos_import_version", 0)
 
-        col = layout.column(align=True)
-        for step, entry in rows[:8]:
-            artifact = entry.get("artifact") or ""
-            ext = os.path.splitext(artifact)[1]
-            row = col.row(align=True)
-            row.label(text=step, icon="SEQUENCE")
+            row = col2.row(align=True)
+            row.label(text=f"{entity} / {istep}", icon="OUTLINER_COLLECTION")
             right = row.row()
             right.alignment = "RIGHT"
-            right.label(text=f"v{entry.get('version', 0):03d}{ext}")
+            right.label(text=f"v{version:03d}")
 
-        if len(rows) > 8:
-            foot = layout.row()
-            foot.alignment = "RIGHT"
-            foot.label(text=f"+{len(rows) - 8} more")
+            status = cache.get(coll.name)
+            if status and status.get("has_update"):
+                upd = col2.row(align=True)
+                warn = upd.row()
+                warn.alert = True
+                warn.label(text=f"Update available: v{status['latest']:03d}", icon="ERROR")
+                op = upd.operator("ylos.update_import", text="Update", icon="FILE_REFRESH")
+                op.collection_name = coll.name
+
+            col2.separator(factor=0.2)

@@ -186,6 +186,89 @@ def _find_layer_collection(layer_col, name: str):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Collection hierarchy - partagee entre op_new_asset.py (creation) et
+# op_import_product.py (import d'un product publie, INC-5) : les deux doivent ranger
+# une entite au MEME endroit selon son type, une seule fois (principe 5). Deplace ici
+# (etait duplique dans op_new_asset.py) car ce module possede deja la logique de
+# collections de scene (setup_scene_collections/_find_layer_collection ci-dessus).
+# ---------------------------------------------------------------------------
+
+def get_or_create_collection(name: str):
+    col = bpy.data.collections.get(name)
+    if col is None:
+        col = bpy.data.collections.new(name)
+    return col
+
+
+def link_collection(child, parent) -> None:
+    if child.name not in {c.name for c in parent.children}:
+        parent.children.link(child)
+
+
+def resolve_parent_collection(asset_type: str, context_type: str, scene: bpy.types.Scene):
+    """Collection parent adaptee au type d'entite (COL_CHAR/COL_ENV_Props pour un asset
+    selon ASSET_TYPE_PARENT_COL, COL_SHOTS pour un shot, COL_ENV/COL_SETS pour un set) -
+    meme convention que la creation (op_new_asset.py) et l'import (op_import_product.py).
+    Retourne (collection, libelle_affichage). Import paresseux de core.asset : core/asset.py
+    importe deja depuis ce module au niveau module (ASSET_STEPS...), un import top-level
+    dans l'autre sens serait circulaire."""
+    from .asset import ASSET_TYPE_PARENT_COL
+    root = scene.collection
+
+    if context_type == "ASSET":
+        parent_name = ASSET_TYPE_PARENT_COL.get(asset_type, "COL_ASSETS")
+
+        if parent_name == "COL_ENV_Props":
+            col_env = get_or_create_collection("COL_ENV")
+            link_collection(col_env, root)
+            col_props = get_or_create_collection("COL_ENV_Props")
+            link_collection(col_props, col_env)
+            return col_props, "COL_ENV / COL_ENV_Props"
+
+        parent = get_or_create_collection(parent_name)
+        link_collection(parent, root)
+        return parent, parent_name
+
+    elif context_type == "SHOT":
+        col = get_or_create_collection("COL_SHOTS")
+        link_collection(col, root)
+        return col, "COL_SHOTS"
+
+    else:
+        col_env = get_or_create_collection("COL_ENV")
+        link_collection(col_env, root)
+        col_sets = get_or_create_collection("COL_SETS")
+        link_collection(col_sets, col_env)
+        return col_sets, "COL_ENV / COL_SETS"
+
+
+def collection_target_label(asset_type: str, context_type: str) -> str:
+    from .asset import ASSET_TYPE_PARENT_COL
+    if context_type == "ASSET":
+        parent_name = ASSET_TYPE_PARENT_COL.get(asset_type, "COL_ASSETS")
+        if parent_name == "COL_ENV_Props":
+            return "COL_ENV -> COL_ENV_Props"
+        return parent_name
+    elif context_type == "SHOT":
+        return "COL_SHOTS"
+    return "COL_ENV -> COL_SETS"
+
+
+def set_active_collection(context, collection):
+    """Bascule active_layer_collection du view_layer courant sur 'collection' - les
+    operateurs d'import (usd_import/import_scene.gltf) lient toujours leurs objets a la
+    collection active, jamais a une collection passee en parametre. Retourne la
+    layer_collection PRECEDENTE (a restaurer par l'appelant : ne jamais laisser un import
+    changer l'etat actif de facon permanente et surprenante pour l'utilisateur)."""
+    view_layer = context.view_layer
+    previous = view_layer.active_layer_collection
+    target = _find_layer_collection(view_layer.layer_collection, collection.name)
+    if target is not None:
+        view_layer.active_layer_collection = target
+    return previous
+
+
 def register_properties():
     bpy.types.Scene.ylos_project_path = bpy.props.StringProperty(
         name="Project Path",

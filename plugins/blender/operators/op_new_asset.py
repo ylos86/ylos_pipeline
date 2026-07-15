@@ -5,7 +5,11 @@ import sys
 from bpy.props import StringProperty, EnumProperty, BoolProperty, CollectionProperty
 from ..core.asset import (
     sanitize_entity_name,
-    ASSET_TYPE_PARENT_COL, invalidate_entity_cache,
+    invalidate_entity_cache,
+)
+from ..core.project import (
+    get_or_create_collection, link_collection,
+    resolve_parent_collection, collection_target_label,
 )
 from ..core import vocab
 
@@ -53,68 +57,16 @@ def _update_context_type(self, context):
     _rebuild_steps(self, self.context_type)
 
 
-# ---------------------------------------------------------------------------
-# Collection helpers
-# ---------------------------------------------------------------------------
-
-def _get_or_create_col(name):
-    col = bpy.data.collections.get(name)
-    if col is None:
-        col = bpy.data.collections.new(name)
-    return col
-
-
-def _link_if_missing(child, parent):
-    if child.name not in {c.name for c in parent.children}:
-        parent.children.link(child)
-
-
-def _resolve_parent_collection(asset_type, context_type, scene):
-    root = scene.collection
-
-    if context_type == "ASSET":
-        parent_name = ASSET_TYPE_PARENT_COL.get(asset_type, "COL_ASSETS")
-
-        if parent_name == "COL_ENV_Props":
-            col_env = _get_or_create_col("COL_ENV")
-            _link_if_missing(col_env, root)
-            col_props = _get_or_create_col("COL_ENV_Props")
-            _link_if_missing(col_props, col_env)
-            return col_props, "COL_ENV / COL_ENV_Props"
-
-        parent = _get_or_create_col(parent_name)
-        _link_if_missing(parent, root)
-        return parent, parent_name
-
-    elif context_type == "SHOT":
-        col = _get_or_create_col("COL_SHOTS")
-        _link_if_missing(col, root)
-        return col, "COL_SHOTS"
-
-    else:
-        col_env = _get_or_create_col("COL_ENV")
-        _link_if_missing(col_env, root)
-        col_sets = _get_or_create_col("COL_SETS")
-        _link_if_missing(col_sets, col_env)
-        return col_sets, "COL_ENV / COL_SETS"
-
+# Collection hierarchy (get_or_create_collection/link_collection/resolve_parent_collection/
+# collection_target_label) : deplacee dans core/project.py (INC-5) - partagee avec
+# op_import_product.py, qui doit ranger un import publie au meme endroit qu'une entite
+# creee localement. cf. core/project.py pour la logique.
 
 def _create_entity_collection(entity_name, asset_type, context_type, scene):
-    parent, parent_display = _resolve_parent_collection(asset_type, context_type, scene)
-    col = _get_or_create_col(entity_name)
-    _link_if_missing(col, parent)
+    parent, parent_display = resolve_parent_collection(asset_type, context_type, scene)
+    col = get_or_create_collection(entity_name)
+    link_collection(col, parent)
     return col, parent_display
-
-
-def _col_target_label(asset_type, context_type):
-    if context_type == "ASSET":
-        parent_name = ASSET_TYPE_PARENT_COL.get(asset_type, "COL_ASSETS")
-        if parent_name == "COL_ENV_Props":
-            return "COL_ENV -> COL_ENV_Props"
-        return parent_name
-    elif context_type == "SHOT":
-        return "COL_SHOTS"
-    return "COL_ENV -> COL_SETS"
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +167,7 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
             row.label(text=err_msg, icon="ERROR")
 
         if full_name and valid:
-            col_target = _col_target_label(sub_type, self.context_type)
+            col_target = collection_target_label(sub_type, self.context_type)
             layout.label(
                 text="Collection: " + full_name + "  ->  " + col_target,
                 icon="OUTLINER_COLLECTION",

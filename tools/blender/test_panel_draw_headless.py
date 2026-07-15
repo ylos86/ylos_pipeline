@@ -155,6 +155,30 @@ def main():
             thumbnails.LAST_ERROR = ""
         print("ok  YLOS_PT_Publish.draw() : branche thumbnails.LAST_ERROR non vide sans exception")
 
+        # --- Etat 5 : import taggue present + mise a jour disponible (INC-5) ---
+        res = bpy.ops.ylos.import_product(
+            'EXEC_DEFAULT', entity=entity, step="modeling", version=0,
+        )
+        if res != {"FINISHED"}:
+            _fail(f"ylos.import_product a retourne {res} (attendu FINISHED)")
+
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(3, 0, 0))
+        res = bpy.ops.ylos.publish(
+            'EXEC_DEFAULT', step="modeling", allow_full_scene=True, load_after=False,
+        )
+        if res != {"FINISHED"}:
+            _fail(f"ylos.publish v2 a retourne {res} (attendu FINISHED)")
+
+        res = bpy.ops.ylos.check_updates('EXEC_DEFAULT')
+        if res != {"FINISHED"}:
+            _fail(f"ylos.check_updates a retourne {res} (attendu FINISHED)")
+
+        try:
+            _draw(panel.YLOS_PT_Imports, context)
+        except Exception as e:
+            _fail("YLOS_PT_Imports.draw() a leve (branche import taggue + update dispo)", e)
+        print("ok  YLOS_PT_Imports.draw() : import taggue + update disponible sans exception")
+
         try:
             addon.unregister()
         except Exception as e:
