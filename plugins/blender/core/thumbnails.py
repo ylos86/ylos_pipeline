@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Viewport thumbnail generation on WIP save + preview loading for version picker.
-# + headless publish thumbnail (render_publish_thumbnail, cf. bas de fichier).
+# + headless publish thumbnail (render_publish_thumbnail, see bottom of file).
 
 import math
 import os
@@ -95,10 +95,10 @@ def load_thumb_icon(blend_path: str) -> int:
 
 
 def load_icon(abs_path: str) -> int:
-    """Preview icon generique pour un chemin absolu arbitraire (ex un publish thumb.png,
-    qui ne suit pas la convention '<stem>_thumb.png' de get_thumb_path/load_thumb_icon).
-    Reutilise la meme collection _pcoll. Retourne 0 si le fichier n'existe pas (jamais
-    d'exception - meme convention que load_thumb_icon)."""
+    """Generic preview icon for an arbitrary absolute path (e.g. a publish thumb.png,
+    which does not follow the '<stem>_thumb.png' convention of get_thumb_path/load_thumb_icon).
+    Reuses the same _pcoll collection. Returns 0 if the file does not exist (never
+    an exception - same convention as load_thumb_icon)."""
     global _pcoll
     if _pcoll is None:
         init_previews()
@@ -115,25 +115,25 @@ def load_icon(abs_path: str) -> int:
             return 0
 
     preview = _pcoll[key]
-    # Blender charge les previews PARESSEUSEMENT : tant que rien ne lit leurs pixels, un
-    # template_icon(icon_value=...) affiche l'indicateur de chargement au lieu de l'image
-    # (constate en direct dans le N-panel). Toucher image_size force le decodage tout de
-    # suite. On paie ici, hors draw() (ce module est appele depuis les caches), jamais dans
-    # la boucle de redraw.
+    # Blender loads previews LAZILY: until something reads their pixels, a
+    # template_icon(icon_value=...) shows the loading indicator instead of the image
+    # (observed live in the N-panel). Touching image_size forces decoding right
+    # away. We pay here, outside draw() (this module is called from the caches), never in
+    # the redraw loop.
     try:
-        _ = preview.image_size[:]   # image plein format (template_icon)
-        _ = preview.icon_size[:]    # icone reduite (icon_value d'un bouton d'operateur)
+        _ = preview.image_size[:]   # full-size image (template_icon)
+        _ = preview.icon_size[:]    # reduced icon (icon_value of an operator button)
     except Exception:
         pass
     return preview.icon_id
 
 
 def reload_icon(abs_path: str) -> int:
-    """Force le rechargement d'un preview pour un chemin ABSOLU arbitraire.
+    """Force reload of a preview for an arbitrary ABSOLUTE path.
 
-    Necessaire parce que _pcoll memoise par chemin : un thumb.png reecrit AU MEME CHEMIN (ce
-    que fait chaque republish d'un step) resterait affiche avec l'ancienne image tant que la
-    session Blender vit. Miroir de reload_thumb_icon pour la convention '<stem>_thumb.png'."""
+    Needed because _pcoll memoizes by path: a thumb.png rewritten AT THE SAME PATH (which
+    every republish of a step does) would keep showing the old image as long as the
+    Blender session lives. Mirror of reload_thumb_icon for the '<stem>_thumb.png' convention."""
     global _pcoll
     if _pcoll is not None and abs_path in _pcoll:
         del _pcoll[abs_path]
@@ -155,33 +155,33 @@ def reload_thumb_icon(blend_path: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Headless publish thumbnail (allocate/finalize contract - cf. create_project.py).
-# Separe de generate_thumbnail() ci-dessus (celle-ci reste le rendu viewport pour la
-# preview WIP - usage different, contexte fenetre disponible). Ici : jamais
-# bpy.ops.render.opengl (exige un contexte fenetre, casse le headless/hython-like usage) -
-# rendu EEVEE reel sur scene/camera temporaires.
+# Headless publish thumbnail (allocate/finalize contract - see create_project.py).
+# Separate from generate_thumbnail() above (that one stays the viewport render for the
+# WIP preview - different use, window context available). Here: never
+# bpy.ops.render.opengl (requires a window context, breaks the headless/hython-like usage) -
+# real EEVEE render on temporary scene/camera.
 # ---------------------------------------------------------------------------
 
 _BBOX_TYPES = {"MESH", "ARMATURE", "CURVE", "SURFACE", "META", "FONT", "VOLUME"}
 
-# Derniere cause d'echec de render_publish_thumbnail() (texte de l'exception sous-jacente),
-# posee module-level pour que l'appelant (op_publish) remonte la CAUSE a l'utilisateur sans
-# changer la convention de retour "" ni la signature publique. "" = pas d'echec enregistre.
+# Last failure cause of render_publish_thumbnail() (text of the underlying exception),
+# set module-level so the caller (op_publish) surfaces the CAUSE to the user without
+# changing the "" return convention nor the public signature. "" = no failure recorded.
 LAST_ERROR = ""
 
-# Candidats de moteur de rendu, du plus recent au plus universel. BLENDER_EEVEE_NEXT n'existe
-# qu'en Blender 4.2-4.4 (retire en 5.x) ; BLENDER_EEVEE couvre 5.x (et l'EEVEE historique) ;
-# BLENDER_WORKBENCH est le filet toujours dispo. Le moteur est un enum DYNAMIQUE : on le probe
-# par affectation (try/except TypeError), jamais par une liste codee en dur ni l'introspection
-# RNA (cf. CLAUDE.md, bugs empiriques Blender #1).
+# Render engine candidates, newest to most universal. BLENDER_EEVEE_NEXT exists
+# only in Blender 4.2-4.4 (removed in 5.x); BLENDER_EEVEE covers 5.x (and the historical EEVEE);
+# BLENDER_WORKBENCH is the always-available net. The engine is a DYNAMIC enum: we probe it
+# by assignment (try/except TypeError), never by a hard-coded list nor RNA
+# introspection (see CLAUDE.md, Blender empirical bugs #1).
 _ENGINE_CANDIDATES = ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE", "BLENDER_WORKBENCH")
 
 
 def _pick_render_engine(scene) -> str:
-    """Retourne le premier moteur de _ENGINE_CANDIDATES affectable sur CE Blender, en le
-    posant sur scene.render.engine (l'affectation est le probe fiable : l'enum des moteurs est
-    dynamique, un identifiant absent leve TypeError). Si aucun candidat ne passe (tres
-    improbable), laisse scene.render.engine inchange et retourne sa valeur courante."""
+    """Return the first engine of _ENGINE_CANDIDATES assignable on THIS Blender, setting it
+    on scene.render.engine (assignment is the reliable probe: the engines enum is
+    dynamic, an absent identifier raises TypeError). If no candidate passes (very
+    unlikely), leaves scene.render.engine unchanged and returns its current value."""
     for engine in _ENGINE_CANDIDATES:
         try:
             scene.render.engine = engine
@@ -192,36 +192,36 @@ def _pick_render_engine(scene) -> str:
 
 
 def renderable_objects(objects):
-    """Sous-ensemble de 'objects' qui contribuera REELLEMENT au rendu du thumbnail.
+    """Subset of 'objects' that will ACTUALLY contribute to the thumbnail render.
 
-    Bug reel corrige : un set de layout publie ses meshes sources de scattering avec
-    hide_render=True (elles n'existent que comme geometrie d'instanciation). Elles entraient
-    quand meme dans _world_bbox() -> bbox gonflee, camera reculee sur du vide, zero pixel de
-    sujet. Le cadrage doit porter sur ce que la camera VERRA, pas sur ce que l'appelant a
-    collecte.
+    Real bug fixed: a layout set publishes its scattering source meshes with
+    hide_render=True (they exist only as instancing geometry). They still entered
+    _world_bbox() -> inflated bbox, camera pulled back onto emptiness, zero subject
+    pixels. Framing must be about what the camera WILL SEE, not what the caller
+    collected.
 
-    Repli sur la liste complete si le filtre vide tout (mieux vaut un cadrage imparfait
-    qu'aucun thumbnail : le contrat deux-phases REJETTE le publish sans thumb.png)."""
+    Falls back to the full list if the filter empties everything (an imperfect framing beats
+    no thumbnail: the two-phase contract REJECTS a publish without thumb.png)."""
     visible = [o for o in objects if not getattr(o, "hide_render", False)]
     return visible or list(objects)
 
 
 def has_visible_geometry(objects) -> bool:
-    """True si au moins un objet porte de la geometrie REELLE (et pas seulement un transform).
+    """True if at least one object carries REAL geometry (and not just a transform).
 
-    Sert de controle d'integrite au publish, pas de detail de cadrage. Trou reel trouve en
-    conditions de production : un publish GLB de CHARACTER_Sissa02_Default ne contenait qu'un
-    EMPTY — zero mesh — et etait pourtant marque 'complete'. Le garde-fou du contrat
-    deux-phases (_missing_artifacts) ne verifie que "le fichier existe et n'est pas vide" :
-    un .glb ne contenant qu'un empty pese quelques ko, donc il passe. Le seul signal etait un
-    thumbnail plat... que l'ancien code produisait de toute facon, donc inexploitable.
+    Serves as a publish integrity check, not a framing detail. Real gap found in
+    production conditions: a GLB publish of CHARACTER_Sissa02_Default contained only an
+    EMPTY — zero mesh — yet was marked 'complete'. The two-phase contract guard
+    (_missing_artifacts) only checks "the file exists and is not empty":
+    a .glb containing only an empty weighs a few kb, so it passes. The only signal was a
+    flat thumbnail... which the old code produced anyway, hence unusable.
 
-    En rendant l'absence de geometrie FATALE pour le thumbnail, on la rend fatale pour le
-    publish (thumbnail requis partout -> finalize_publish_version refuse le commit et preserve
-    le staging). Le thumbnail cesse d'etre decoratif : il devient le test de fumee du publish.
+    By making the absence of geometry FATAL for the thumbnail, we make it fatal for the
+    publish (thumbnail required everywhere -> finalize_publish_version refuses the commit and
+    preserves the staging). The thumbnail stops being decorative: it becomes the publish smoke test.
 
-    Un EMPTY, une CAMERA, une LIGHT ou un mesh a 0 vertex ne comptent pas. Un ARMATURE compte
-    (un publish d'anim/rig est legitime) des lors qu'il a des os."""
+    An EMPTY, a CAMERA, a LIGHT or a 0-vertex mesh do not count. An ARMATURE counts
+    (an anim/rig publish is legitimate) as soon as it has bones."""
     for obj in objects:
         t = obj.type
         data = getattr(obj, "data", None)
@@ -237,9 +237,9 @@ def has_visible_geometry(objects) -> bool:
 
 
 def _world_bbox(objects):
-    """Bbox monde (min, max) unifiee des objets avec geometrie reelle. Retombe sur tous les
-    objets si aucun ne qualifie (ex: que des EMPTY). Retourne (None, None) si aucun coin
-    exploitable - l'appelant tranche, jamais d'inf/nan propage au cadrage."""
+    """Unified world bbox (min, max) of objects with real geometry. Falls back to all
+    objects if none qualifies (e.g. only EMPTYs). Returns (None, None) if no usable
+    corner - the caller decides, never inf/nan propagated to framing."""
     candidates = [o for o in objects if o.type in _BBOX_TYPES] or list(objects)
     mins = Vector((float("inf"),) * 3)
     maxs = Vector((float("-inf"),) * 3)
@@ -259,18 +259,18 @@ def _world_bbox(objects):
 
 def _frame_camera(cam_obj, cam_data, mins, maxs,
                   azimuth_deg=45.0, elevation_deg=30.0, padding=1.4):
-    """Cadrage trois-quarts : place cam_obj pour englober (mins, maxs) avec une marge, ET
-    accorde les plans de clipping a la distance calculee.
+    """Three-quarter framing: places cam_obj to enclose (mins, maxs) with a margin, AND
+    matches the clipping planes to the computed distance.
 
-    Bug reel corrige (2e cause des thumbnails plats, independante de l'eclairage) : une camera
-    neuve (bpy.data.cameras.new) a clip_end = 1000 EN DUR. La distance de cadrage vaut
-    radius * padding / sin(fov/2) - pour une entite de ~690 unites (un set de layout avec son
-    terrain) ca donne ~1420 : le sujet ENTIER passe derriere le far plane et l'image ne
-    contient que le fond du world, sans la moindre erreur remontee. Le clipping doit donc etre
-    derive du cadrage, jamais laisse au defaut. Retourne la distance camera-centre."""
+    Real bug fixed (2nd cause of flat thumbnails, independent of lighting): a new
+    camera (bpy.data.cameras.new) has clip_end = 1000 HARD-CODED. The framing distance is
+    radius * padding / sin(fov/2) - for a ~690-unit entity (a layout set with its
+    terrain) that gives ~1420: the ENTIRE subject falls behind the far plane and the image
+    contains only the world background, without a single error surfaced. Clipping must therefore be
+    derived from the framing, never left at the default. Returns the camera-center distance."""
     center = (mins + maxs) / 2.0
     diagonal = (maxs - mins).length
-    radius = max(diagonal / 2.0, 0.5)  # plancher pour eviter un cadrage degenere (bbox nulle)
+    radius = max(diagonal / 2.0, 0.5)  # floor to avoid a degenerate framing (null bbox)
     fov = cam_data.angle if cam_data.angle else math.radians(50)
     distance = (radius * padding) / math.sin(fov / 2.0)
 
@@ -285,25 +285,25 @@ def _frame_camera(cam_obj, cam_data, mins, maxs,
     direction = center - cam_obj.location
     cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
-    # Clipping derive du cadrage : le sujet occupe [distance - radius, distance + radius].
-    # Marges larges pour absorber un bbox sous-estime (modifiers, instances) sans jamais
-    # tomber sous les limites RNA (clip_start > 0).
+    # Clipping derived from framing: the subject occupies [distance - radius, distance + radius].
+    # Wide margins to absorb an underestimated bbox (modifiers, instances) without ever
+    # falling below the RNA limits (clip_start > 0).
     cam_data.clip_start = max(distance * 0.001, 1e-4)
     cam_data.clip_end = max((distance + radius * 4.0) * 1.5, 10.0)
     return distance
 
 
 def _add_key_and_fill(tmp_scene, cam_obj, center):
-    """Eclairage deterministe : une key alignee camera + une fill laterale plus faible.
+    """Deterministic lighting: a camera-aligned key + a weaker side fill.
 
-    Bug reel corrige (1re cause des thumbnails plats) : un monde plat (use_nodes=False)
-    eclaire un materiau diffus de facon UNIFORME quelle que soit la normale - sans lumiere
-    directe, sujet et fond rendent a une luminance quasi identique. La key (alignee sur l'axe
-    camera, facon flash monte camera) garantit que les faces visibles sont les faces
-    eclairees ; la fill (azimut +75 deg, ~2.5x plus faible) casse la silhouette plate et donne
-    du volume - sans elle un cube lu de face reste une tache uniforme.
+    Real bug fixed (1st cause of flat thumbnails): a flat world (use_nodes=False)
+    lights a diffuse material UNIFORMLY regardless of the normal - without direct
+    light, subject and background render at nearly identical luminance. The key (aligned on the
+    camera axis, camera-mounted-flash style) guarantees that the visible faces are the lit
+    faces; the fill (azimuth +75 deg, ~2.5x weaker) breaks the flat silhouette and gives
+    volume - without it a cube seen head-on stays a uniform blob.
 
-    Retourne la liste des (objet, data) crees, a purger par l'appelant."""
+    Returns the list of created (object, data), to be purged by the caller."""
     created = []
     to_center = center - cam_obj.location
     key_dir = to_center.normalized() if to_center.length else Vector((0.0, 0.0, -1.0))
@@ -316,8 +316,8 @@ def _add_key_and_fill(tmp_scene, cam_obj, center):
     key_obj.rotation_euler = key_dir.to_track_quat("-Z", "Y").to_euler()
     created.append((key_obj, key_data))
 
-    # Fill : meme direction pivotee de +75 deg autour de Z, elevation remontee -> eclaire le
-    # cote laisse dans l'ombre par la key, sans jamais partir en contre-jour total.
+    # Fill: same direction rotated +75 deg around Z, elevation raised -> lights the
+    # side left in shadow by the key, without ever going into full backlight.
     fill_dir = key_dir.copy()
     fill_dir.rotate(Euler((0.0, 0.0, math.radians(75.0)), "XYZ"))
     fill_dir.z = min(fill_dir.z + 0.25, -0.05)
@@ -333,36 +333,36 @@ def _add_key_and_fill(tmp_scene, cam_obj, center):
 
 def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -> str:
     """
-    Rend un thumbnail headless (512x512 EEVEE par defaut, camera trois-quarts auto-cadree sur
-    la bbox de 'objects', fond neutre, key+fill) dans staging_dir/thumb.png.
+    Render a headless thumbnail (512x512 EEVEE by default, three-quarter camera auto-framed on
+    the bbox of 'objects', neutral background, key+fill) to staging_dir/thumb.png.
 
-    try/finally strict : scene temporaire, camera (objet + data), lumieres et world temporaire
-    sont purges quoi qu'il arrive - jamais de datablock residuel dans le .blend utilisateur.
+    Strict try/finally: temporary scene, camera (object + data), lights and temporary world
+    are purged no matter what - never a residual datablock in the user's .blend.
 
-    TROIS bugs reels corriges, cumulatifs (chacun suffisait a produire un thumbnail plat) :
+    THREE real bugs fixed, cumulative (each was enough to produce a flat thumbnail):
 
-    1. Ciblage de tmp_scene au rendu : bpy.ops.render.render() lit la scene a rendre via
-       window.scene au niveau C, PAS via bpy.context.scene - un bpy.context.temp_override(
-       scene=tmp_scene) est SILENCIEUSEMENT ignore par cet operateur des qu'une fenetre
-       existe. Pattern officiel : bascule reelle de window.scene, restauree juste apres. En
-       pur --background (bpy.context.window is None) on retombe sur temp_override, seul
-       mecanisme disponible et suffisant dans ce mode.
-    2. Eclairage : cf. _add_key_and_fill.
-    3. Clipping camera : cf. _frame_camera (clip_end=1000 en dur sur une camera neuve).
+    1. Targeting tmp_scene at render: bpy.ops.render.render() reads the scene to render via
+       window.scene at the C level, NOT via bpy.context.scene - a bpy.context.temp_override(
+       scene=tmp_scene) is SILENTLY ignored by this operator as soon as a window
+       exists. Official pattern: real window.scene swap, restored right after. In
+       pure --background (bpy.context.window is None) we fall back to temp_override, the only
+       mechanism available and sufficient in that mode.
+    2. Lighting: see _add_key_and_fill.
+    3. Camera clipping: see _frame_camera (clip_end=1000 hard-coded on a new camera).
 
-    Objets caches au rendu (hide_render) exclus du cadrage ET du lien - cf.
-    renderable_objects(). Aucune geometrie visible du tout -> ECHEC explicite (cf.
-    has_visible_geometry) : le thumbnail est le test de fumee du publish, pas une decoration.
+    Objects hidden from render (hide_render) excluded from framing AND from linking - see
+    renderable_objects(). No visible geometry at all -> explicit FAILURE (see
+    has_visible_geometry): the thumbnail is the publish smoke test, not a decoration.
 
-    Color management EPINGLE (Standard, exposure 0, gamma 1) : une scene neuve herite des
-    defauts du fichier de demarrage - un utilisateur avec un view transform exotique ou une
-    exposure decalee obtiendrait des thumbnails incoherents d'une machine a l'autre. Un
-    thumbnail est une donnee de pipeline, pas un rendu artistique : il doit etre
-    reproductible.
+    Color management PINNED (Standard, exposure 0, gamma 1): a new scene inherits the
+    startup file's defaults - a user with an exotic view transform or a shifted
+    exposure would get thumbnails inconsistent from one machine to another. A
+    thumbnail is a pipeline datum, not an artistic render: it must be
+    reproducible.
 
-    Retourne le chemin du thumb en succes, "" en echec (meme convention que
-    generate_thumbnail ci-dessus) - le garde-fou de completude vit deja dans
-    finalize_publish_version() (_missing_artifacts) : pas duplique ici.
+    Returns the thumb path on success, "" on failure (same convention as
+    generate_thumbnail above) - the completeness guard already lives in
+    finalize_publish_version() (_missing_artifacts): not duplicated here.
     """
     global LAST_ERROR
     LAST_ERROR = ""
@@ -384,7 +384,7 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -
 
     try:
         tmp_scene = bpy.data.scenes.new("YLOS_thumb_tmp")
-        # Moteur probe par affectation (BLENDER_EEVEE_NEXT retire en Blender 5.x - cf. CLAUDE.md).
+        # Engine probed by assignment (BLENDER_EEVEE_NEXT removed in Blender 5.x - see CLAUDE.md).
         engine = _pick_render_engine(tmp_scene)
         tmp_scene.render.resolution_x = size
         tmp_scene.render.resolution_y = size
@@ -392,8 +392,8 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -
         tmp_scene.render.image_settings.file_format = "PNG"
         tmp_scene.render.filepath = thumb_path
         tmp_scene.render.film_transparent = False
-        # Color management epingle - cf. docstring. try/except : les enums de view transform
-        # dependent de l'OCIO config, 'Standard' existe partout mais on ne parie pas dessus.
+        # Pinned color management - see docstring. try/except: view transform enums
+        # depend on the OCIO config, 'Standard' exists everywhere but we don't bet on it.
         try:
             tmp_scene.view_settings.view_transform = "Standard"
             tmp_scene.view_settings.look = "None"
@@ -401,8 +401,8 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -
             tmp_scene.view_settings.gamma = 1.0
         except TypeError:
             pass
-        # Echantillonnage bas : un thumbnail 256px n'a pas besoin de 64 samples (EEVEE only,
-        # l'attribut n'existe pas sur tous les moteurs).
+        # Low sampling: a 256px thumbnail does not need 64 samples (EEVEE only,
+        # the attribute does not exist on all engines).
         try:
             tmp_scene.eevee.taa_render_samples = 16
         except AttributeError:
@@ -439,8 +439,8 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -
 
         window = bpy.context.window
         if window is not None:
-            # Session interactive : window.scene est ce que render.render() lit reellement -
-            # cf. docstring. Restaure inconditionnellement, meme si le rendu leve.
+            # Interactive session: window.scene is what render.render() actually reads -
+            # see docstring. Restore unconditionally, even if the render raises.
             orig_window_scene = window.scene
             try:
                 window.scene = tmp_scene
@@ -448,8 +448,8 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -
             finally:
                 window.scene = orig_window_scene
         else:
-            # --background pur (pas de fenetre) : pas de window.scene a bousculer, l'override
-            # de contexte suffit (cf. test_thumbnail_headless.py, --background).
+            # Pure --background (no window): no window.scene to swap, the context
+            # override is enough (see test_thumbnail_headless.py, --background).
             with bpy.context.temp_override(scene=tmp_scene):
                 bpy.ops.render.render(write_still=True)
 
