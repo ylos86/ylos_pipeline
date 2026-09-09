@@ -21,11 +21,11 @@ _REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..
 
 
 def _purge_create_project_module():
-    """Purge 'create_project' de sys.modules si present. Defensif au register() (module
-    stale d'une session precedente / d'un autre chemin) et systematique a l'unregister()
-    (pour qu'un disable -> edit -> enable dans la meme session Blender recharge le vrai
-    fichier plutot que la version en cache - meme classe de bug que la purge ylos_core de
-    la branche v0.4-monorepo, adaptee au module unique de main, sans vendoring)."""
+    """Purge 'create_project' from sys.modules if present. Defensive at register() (stale
+    module from a previous session / another path) and systematic at unregister()
+    (so that a disable -> edit -> enable in the same Blender session reloads the real
+    file rather than the cached version - same class of bug as the ylos_core purge of
+    the v0.4-monorepo branch, adapted to main's single module, without vendoring)."""
     for key in list(sys.modules):
         if key == "create_project":
             del sys.modules[key]
@@ -42,8 +42,8 @@ from .operators import (
 
 _classes = (
     op_new_project.YLOS_OT_NewProject,
-    # PropertyGroups avant tout ce qui les reference via CollectionProperty(type=...) -
-    # Blender exige l'ordre d'enregistrement (cf. op_new_asset.py + states.py, purge INC-2).
+    # PropertyGroups before anything referencing them via CollectionProperty(type=...) -
+    # Blender requires the registration order (see op_new_asset.py + states.py, purge INC-2).
     op_new_asset.YLOS_PG_StepToggle,
     states.YLOS_PG_ExportState,
     op_new_asset.YLOS_OT_NewAsset,
@@ -66,14 +66,14 @@ _classes = (
     op_scene_check.YLOS_OT_RunSceneCheck,
     op_scene_check.YLOS_OT_AutoFix,
     op_scene_check.YLOS_OT_FixAll,
-    # State Manager (facon Prism) - UIList avant le reste (reference par bl_idname a l'usage).
+    # State Manager (Prism-style) - UIList before the rest (referenced by bl_idname at use).
     op_state_manager.YLOS_UL_ExportStates,
     op_state_manager.YLOS_OT_StateAddExport,
     op_state_manager.YLOS_OT_StateRemoveExport,
     op_state_manager.YLOS_OT_StateMoveExport,
     op_state_manager.YLOS_OT_PublishStates,
     op_state_manager.YLOS_OT_OpenStateManager,
-    # Import / Export (Product Browser + raw file I/O) - panel a la demande (ylos.open_io).
+    # Import / Export (Product Browser + raw file I/O) - on-demand panel (ylos.open_io).
     op_io.YLOS_OT_RefreshProducts,
     op_io.YLOS_OT_OpenIO,
     op_io.YLOS_OT_RawImport,
@@ -97,8 +97,8 @@ def _draw_header_button(self, context):
     layout.separator()
 
     row = layout.row(align=True)
-    # Repurpose : le bouton header ouvre desormais le State Manager (fenetre), remplace
-    # l'ancien popup a onglets (op_popup.py) retire - meme draw que la section N-panel.
+    # Repurpose: the header button now opens the State Manager (window), replaces
+    # the old tabbed popup (op_popup.py) that was removed - same draw as the N-panel section.
     row.operator("ylos.open_state_manager", text="Ylos", icon="PRESET")
 
     if scene.ylos_project_name and scene.ylos_current_asset:
@@ -119,8 +119,8 @@ def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
 
-    # APRES l'enregistrement des classes : CollectionProperty(type=YLOS_PG_ExportState) exige
-    # que le PropertyGroup soit deja enregistre.
+    # AFTER registering the classes: CollectionProperty(type=YLOS_PG_ExportState) requires
+    # the PropertyGroup to be already registered.
     states.register_properties()
 
     bpy.types.VIEW3D_HT_header.append(_draw_header_button)
@@ -131,8 +131,8 @@ def unregister():
     bpy.types.TOPBAR_MT_editor_menus.remove(menu.draw_topbar_menu)
     bpy.types.VIEW3D_HT_header.remove(_draw_header_button)
 
-    # AVANT d'unregistrer les classes : retirer la CollectionProperty avant le PropertyGroup
-    # qu'elle reference.
+    # BEFORE unregistering the classes: remove the CollectionProperty before the PropertyGroup
+    # it references.
     states.unregister_properties()
 
     for cls in reversed(_classes):

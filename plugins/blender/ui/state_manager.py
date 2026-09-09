@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# State Manager - LOGIQUE DE DRAW UNIQUE, montee en DEUX points sans duplication :
-#   - section N-panel  : YLOS_PT_StateManager.draw  (ui/panel.py)
-#   - fenetre popup     : YLOS_OT_OpenStateManager.draw (operators/op_state_manager.py)
-# Dupliquer ce draw etait precisement le defaut du popup a onglets retire (op_popup.py).
-# Aucune logique metier ici : uniquement du layout reliant des operateurs existants.
+# State Manager - SINGLE DRAW LOGIC, mounted at TWO points without duplication:
+#   - N-panel section : YLOS_PT_StateManager.draw  (ui/panel.py)
+#   - popup window    : YLOS_OT_OpenStateManager.draw (operators/op_state_manager.py)
+# Duplicating this draw was precisely the flaw of the removed tabbed popup (op_popup.py).
+# No business logic here: only layout wiring existing operators.
 
 import bpy
 
@@ -70,7 +70,7 @@ def _draw_export_states(layout, scene):
 def _draw_import_states(layout, context):
     header = layout.row(align=True)
     header.label(text="Import States", icon="IMPORT")
-    # Point d'entree pour importer un nouveau product / fichier (panel Import / Export).
+    # Entry point to import a new product / file (Import / Export panel).
     header.operator("ylos.open_io", text="Import…", icon="IMPORT")
     header.operator("ylos.check_updates", text="", icon="FILE_REFRESH")
 

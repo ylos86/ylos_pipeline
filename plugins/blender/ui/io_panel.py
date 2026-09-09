@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# Draw du panel Import / Export (ouvert a la demande via ylos.open_io, popup). Trois blocs :
-#   - Import Product : Product Browser des publishes pipeline (filtre + vignette) -> import.
-#   - Import File    : fichiers geo bruts (OBJ/USD/glTF/FBX) via les importeurs natifs.
-#   - Export Selection : la selection courante vers un fichier brut (hors versioning).
-# Aucune logique metier ici : layout reliant des operateurs existants (cf. ui/state_manager.py).
+# Draws the Import / Export panel (opened on demand via ylos.open_io, popup). Three blocks:
+#   - Import Product: Product Browser of pipeline publishes (filter + thumbnail) -> import.
+#   - Import File   : raw geo files (OBJ/USD/glTF/FBX) via the native importers.
+#   - Export Selection: the current selection to a raw file (outside versioning).
+# No business logic here: layout wiring existing operators (see ui/state_manager.py).
 
 import os
 import bpy

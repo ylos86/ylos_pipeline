@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# N-panel unifie "Ylos" (categorie sidebar). Sections alignees sur le cycle de production :
-# Context, Assets (panel_asset_list.py), Scenefile, State Manager, Scene Check. Les sections
-# Publish + Imports d'origine sont subsumees par le State Manager (facon Prism : states
-# export empilables + un unique Publish + import states) - draw dans ui/state_manager.py.
-# Scene Check recueille le scene-checker de l'ancien popup a onglets (op_popup.py) retire.
+# Unified "Ylos" N-panel (sidebar category). Sections aligned with the production cycle:
+# Context, Assets (panel_asset_list.py), Scenefile, State Manager, Scene Check. The original
+# Publish + Imports sections are subsumed by the State Manager (Prism-style: stackable
+# export states + a single Publish + import states) - drawn in ui/state_manager.py.
+# Scene Check gathers the scene-checker of the old tabbed popup (op_popup.py) that was removed.
 
 import os
 import sys
@@ -47,11 +47,11 @@ def _step_folder(scene, sub):
     )
 
 
-# Les steps s'ecrivent EN TOUTES LETTRES. L'ancien _abbrev(label) = label[:3] donnait
-# "Mod"/"Sur"/"Lay"/"Loo"/"Lig" : 30px gagnes en largeur contre un decodage a chaque lecture,
-# et deux steps pouvaient collider sur leurs 3 premieres lettres. Le N-panel est etroit mais
-# redimensionnable - Blender tronque proprement un libelle trop long, ce que ne fait pas un
-# cerveau avec "Loo".
+# Steps are written IN FULL. The old _abbrev(label) = label[:3] gave
+# "Mod"/"Sur"/"Lay"/"Loo"/"Lig": 30px of width saved against a decoding on every read,
+# and two steps could collide on their first 3 letters. The N-panel is narrow but
+# resizable - Blender truncates a too-long label cleanly, which a brain does not
+# do with "Loo".
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +125,8 @@ class YLOS_PT_Context(bpy.types.Panel):
         col.separator(factor=0.3)
         col.label(text="Step:", icon="SEQUENCE")
         steps = vocab.STEP_ITEMS.get(scene.ylos_context_type, vocab.STEP_ITEMS["ASSET"])
-        # column(align=True) et non row : en colonne chaque step garde son nom entier quelle
-        # que soit la largeur du N-panel, la ou une rangee de 5 boutons les ecrase tous.
+        # column(align=True) and not row: in a column each step keeps its full name whatever
+        # the N-panel width, whereas a row of 5 buttons crushes them all.
         step_col = col.column(align=True)
         step_col.scale_y = 1.05
         for value, label, _desc in steps:
@@ -197,8 +197,8 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
 
 
 # ---------------------------------------------------------------------------
-# Section: State Manager (facon Prism - draw unique dans ui/state_manager.py, monte aussi
-# en popup via ylos.open_state_manager). Subsume les anciennes sections Publish + Imports.
+# Section: State Manager (Prism-style - single draw in ui/state_manager.py, also mounted
+# as a popup via ylos.open_state_manager). Subsumes the old Publish + Imports sections.
 # ---------------------------------------------------------------------------
 
 class YLOS_PT_StateManager(bpy.types.Panel):
@@ -218,9 +218,9 @@ class YLOS_PT_StateManager(bpy.types.Panel):
 
 
 # ---------------------------------------------------------------------------
-# Section: Scene Check - recueille le scene-checker de l'ancien popup a onglets
-# (op_popup._draw_scene, retire). Les operateurs (ylos.run_scene_check / fix_all / auto_fix)
-# sont deja enregistres (op_scene_check.py) - cette section n'est que du layout.
+# Section: Scene Check - gathers the scene-checker of the old tabbed popup
+# (op_popup._draw_scene, removed). The operators (ylos.run_scene_check / fix_all / auto_fix)
+# are already registered (op_scene_check.py) - this section is only layout.
 # ---------------------------------------------------------------------------
 
 class YLOS_PT_SceneCheck(bpy.types.Panel):

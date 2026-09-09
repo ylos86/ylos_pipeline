@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-# Top bar pull-down menu ("Ylos"), pattern Prism : bpy.types.TOPBAR_MT_editor_menus.append.
-# Toutes les entrees reutilisent des operateurs EXISTANTS (Ylos ou Blender natifs) -
-# zero logique metier dans draw(). Les seules classes ajoutees ici sont de petits
-# operateurs sans equivalent existant (Open Project Browser, Reload Pipeline, About).
+# Top bar pull-down menu ("Ylos"), Prism pattern: bpy.types.TOPBAR_MT_editor_menus.append.
+# All entries reuse EXISTING operators (Ylos or native Blender) -
+# zero business logic in draw(). The only classes added here are small
+# operators with no existing equivalent (Open Project Browser, Reload Pipeline, About).
 
 import os
 import subprocess
@@ -31,25 +31,25 @@ class YLOS_OT_OpenProjectBrowser(bpy.types.Operator):
 
 
 def _purge_addon_modules(package: str) -> int:
-    """Purge le package de l'addon ET tous ses sous-modules de sys.modules.
+    """Purge the addon package AND all its sub-modules from sys.modules.
 
-    BUG REEL, cause racine d'une classe entiere de faux diagnostics : addon_disable +
-    addon_enable NE RECHARGE PAS le code de l'addon. Blender ne fait que rappeler
-    unregister()/register() sur le module deja en memoire ; `from . import core` etc. ont
-    deja tourne au premier import, donc les sous-modules restent ceux de sys.modules —
-    y compris un .pyc plus ancien que le .py. Symptome observe en conditions reelles : un
-    fix ecrit sur disque (le sun light de thumbnails.py), verifiable par inspect.getsource()
-    (qui lit le FICHIER, pas le bytecode charge), et pourtant jamais execute — donc jamais
-    efficace, session apres session, sans le moindre message d'erreur.
+    REAL BUG, root cause of a whole class of false diagnostics: addon_disable +
+    addon_enable DOES NOT RELOAD the addon's code. Blender only calls
+    unregister()/register() on the module already in memory; `from . import core` etc. have
+    already run on the first import, so the sub-modules stay the ones in sys.modules —
+    including a .pyc older than the .py. Symptom observed in real conditions: a
+    fix written to disk (thumbnails.py's sun light), verifiable via inspect.getsource()
+    (which reads the FILE, not the loaded bytecode), yet never executed — hence never
+    effective, session after session, without a single error message.
 
-    Verification cote code, si un doute revient : comparer le bytecode reellement charge au
-    fichier, jamais la source.
-        f.__code__.co_consts  ->  ce qui tourne
-        inspect.getsource(f)  ->  ce qu'il y a sur le disque (peut mentir)
+    Code-side verification, if a doubt returns: compare the actually-loaded bytecode to the
+    file, never the source.
+        f.__code__.co_consts  ->  what runs
+        inspect.getsource(f)  ->  what is on disk (can lie)
 
-    Appele APRES addon_disable (unregister() est termine, plus aucune classe enregistree ne
-    reference ces modules) et AVANT addon_enable (qui re-importera tout a neuf depuis le
-    disque). Retourne le nombre de modules purges."""
+    Called AFTER addon_disable (unregister() is done, no registered class references
+    these modules any more) and BEFORE addon_enable (which will re-import everything fresh from
+    disk). Returns the number of purged modules."""
     doomed = [m for m in sys.modules
               if m == package or m.startswith(package + ".")]
     for name in doomed:
@@ -64,20 +64,20 @@ class YLOS_OT_ReloadPipeline(bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
-        # Garde-fou (crash Blender reel observe, cf. CLAUDE.md) : addon_disable desenregistre
-        # states.YLOS_PG_ExportState pendant qu'une CollectionProperty non vide de ce type peut
-        # encore etre affichee par un UIList (State Manager - panel N-panel ou popup) - assez
-        # pour faire planter Blender (RNA invalidee sous une instance/un widget encore vivant).
-        # On refuse le reload tant qu'un export state existe QUELQUE PART (toutes les scenes du
-        # .blend, pas seulement la scene active) plutot que de risquer un crash silencieux : un
-        # redemarrage complet de Blender charge le meme code sans ce risque, lui.
+        # Guard (real observed Blender crash, see CLAUDE.md): addon_disable unregisters
+        # states.YLOS_PG_ExportState while a non-empty CollectionProperty of this type may
+        # still be displayed by a UIList (State Manager - N-panel section or popup) - enough
+        # to crash Blender (RNA invalidated under a still-alive instance/widget).
+        # We refuse the reload as long as an export state exists ANYWHERE (all scenes of the
+        # .blend, not only the active scene) rather than risk a silent crash: a
+        # full Blender restart loads the same code without that risk.
         dirty = [s.name for s in bpy.data.scenes if len(s.ylos_export_states) > 0]
         if dirty:
             self.report(
                 {"ERROR"},
-                "Reload refuse : export state(s) present dans " + ", ".join(dirty) + " - "
-                "vide le State Manager (bouton '-') avant de reload, ou redemarre Blender "
-                "pour charger le code modifie sans risque de crash.",
+                "Reload refused: export state(s) present in " + ", ".join(dirty) + " - "
+                "clear the State Manager (button '-') before reloading, or restart Blender "
+                "to load the modified code without a crash risk.",
             )
             return {"CANCELLED"}
 
@@ -89,7 +89,7 @@ class YLOS_OT_ReloadPipeline(bpy.types.Operator):
         except Exception as e:
             self.report({"ERROR"}, f"Reload failed: {e}")
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Ylos Pipeline reloaded ({purged} modules rechargés).")
+        self.report({"INFO"}, f"Ylos Pipeline reloaded ({purged} modules reloaded).")
         return {"FINISHED"}
 
 

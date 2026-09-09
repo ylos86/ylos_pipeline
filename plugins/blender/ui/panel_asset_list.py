@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Section 'Assets' du N-panel — browser d'entites VISUEL (parite Prism).
+"""'Assets' section of the N-panel — VISUAL entity browser (Prism parity).
 
-Refonte : la version precedente etait une liste de boutons texte, avec des steps abreges a
-2-3 lettres ('M', 'Ly', 'Lt'). Deux problemes reels, tous deux nommes dans
-docs/ui-workstream.md comme hypotheses — verifies depuis :
-  - Aucune image. Un browser d'assets 3D qui ne montre pas les assets oblige a lire des noms
-    pour reconnaitre de la geometrie. C'est le point ou Prism gagne le plus nettement.
-  - Les abreviations ('Sur' pour surfacing, 'Ly' pour layout) coutent un decodage a chaque
-    lecture, pour gagner ~30px de large. Mauvais echange : le N-panel est etroit, mais il est
-    aussi redimensionnable — le nom complet reste lisible et se tronque proprement.
+Rework: the previous version was a list of text buttons, with steps abbreviated to
+2-3 letters ('M', 'Ly', 'Lt'). Two real problems, both named in
+docs/ui-workstream.md as hypotheses — verified since:
+  - No image. A 3D asset browser that does not show the assets forces reading names
+    to recognize geometry. This is where Prism wins most clearly.
+  - The abbreviations ('Sur' for surfacing, 'Ly' for layout) cost a decoding on every
+    read, to save ~30px of width. A bad trade: the N-panel is narrow, but it is
+    also resizable — the full name stays readable and truncates cleanly.
 
-Le draw() ne touche JAMAIS le disque : les vignettes viennent de core.entity_thumbs (cache
-TTL + invalidation explicite), la liste d'entites de core.asset.list_project_entities (cache
-TTL 4s deja en place). Meme regle que op_scene_check / op_io.
+draw() NEVER touches the disk: the thumbnails come from core.entity_thumbs (TTL cache
++ explicit invalidation), the entity list from core.asset.list_project_entities (TTL 4s
+cache already in place). Same rule as op_scene_check / op_io.
 """
 
 import bpy
@@ -35,14 +35,14 @@ _TYPE_ICONS = {
     "SET":         "PACKAGE",
 }
 
-# Libelle de provenance de la vignette. Une preview de WIP n'engage pas la meme confiance
-# qu'un publish : on l'ecrit, on ne laisse pas croire a un publie. Rien pour 'publish' —
-# le cas normal ne merite pas de bruit.
+# Thumbnail provenance label. A WIP preview does not carry the same confidence
+# as a publish: we write it, we don't let it pass for a published one. Nothing for 'publish' —
+# the normal case does not deserve noise.
 _SOURCE_LABELS = {
-    "custom": ("Preview manuelle", "PINNED"),
-    "wip":    ("Vignette du WIP (aucun publish)", "FILE_BLEND"),
-    "legacy": ("Vignette legacy", "FILE_IMAGE"),
-    "none":   ("Aucune vignette", "IMAGE_DATA"),
+    "custom": ("Manual preview", "PINNED"),
+    "wip":    ("WIP thumbnail (no publish)", "FILE_BLEND"),
+    "legacy": ("Legacy thumbnail", "FILE_IMAGE"),
+    "none":   ("No thumbnail", "IMAGE_DATA"),
 }
 
 _PREVIEW_SCALE = {"OFF": 0.0, "S": 4.0, "M": 7.0, "L": 11.0}
@@ -84,7 +84,7 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
             layout.operator("ylos.new_asset", text="+ Create first asset", icon="ADD")
             return
 
-        # ── Preview de l'entite active ─────────────────────────────────────────────
+        # ── Active entity preview ──────────────────────────────────────────────────
         scale = _PREVIEW_SCALE.get(scene.ylos_preview_size, 7.0)
         active = scene.ylos_current_asset
         icon_id, source = thumbs.get(active, (0, "none"))
@@ -95,12 +95,12 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
             if icon_id:
                 col.template_icon(icon_value=icon_id, scale=scale)
             else:
-                # Placeholder explicite plutot qu'un trou : un vide non explique se lit
-                # comme un bug, alors que c'est un etat legitime (rien encore sauve).
+                # Explicit placeholder rather than a hole: an unexplained blank reads
+                # like a bug, whereas it is a legitimate state (nothing saved yet).
                 ph = col.column(align=True)
                 ph.scale_y = max(scale * 0.42, 1.0)
                 ph.label(text="", icon="IMAGE_DATA")
-                ph.label(text="Aucune vignette")
+                ph.label(text="No thumbnail")
 
             label, licon = _SOURCE_LABELS.get(source, (None, "NONE"))
             foot = col.row(align=True)
@@ -108,12 +108,12 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
             if label:
                 foot.label(text=label, icon=licon)
             else:
-                foot.label(text="Vignette du dernier publish", icon="CHECKMARK")
+                foot.label(text="Latest publish thumbnail", icon="CHECKMARK")
             foot.operator("ylos.capture_preview", text="", icon="RESTRICT_RENDER_OFF")
             if source == "custom":
                 foot.operator("ylos.capture_preview", text="", icon="X").clear = True
 
-        # ── Liste des entites ──────────────────────────────────────────────────────
+        # ── Entity list ────────────────────────────────────────────────────────────
         layout.separator(factor=0.3)
 
         for entity in entities:
@@ -125,15 +125,15 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
             row.scale_y = 1.15
 
             kw = {"text": name, "depress": is_active}
-            # icon_value (vignette reelle) quand elle existe, sinon l'icone de type : un
-            # bouton sans icone du tout deplacerait le texte d'une ligne a l'autre.
+            # icon_value (real thumbnail) when it exists, otherwise the type icon: a
+            # button with no icon at all would shift the text from one line to another.
             if e_icon:
                 kw["icon_value"] = e_icon
             else:
                 kw["icon"] = _TYPE_ICONS.get(entity["type"], "OBJECT_DATA")
             row.operator("ylos.switch_asset_confirm", **kw).new_asset = name
 
-        # ── Steps de l'entite active, en toutes lettres ───────────────────────────
+        # ── Active entity's steps, in full ─────────────────────────────────────────
         if active and any(e["name"] == active for e in entities):
             status = get_asset_step_status(scene.ylos_project_path, active, ctx_type)
             layout.separator(factor=0.4)
@@ -145,8 +145,8 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
                 btn = row.operator(
                     "ylos.switch_step_confirm",
                     text=step.capitalize(),
-                    # L'etat de publish se lit d'un coup d'oeil, sans ouvrir la web UI :
-                    # coche pleine = au moins un publish, cercle vide = rien encore.
+                    # Publish state read at a glance, without opening the web UI:
+                    # filled checkbox = at least one publish, empty box = nothing yet.
                     icon="CHECKBOX_HLT" if published else "CHECKBOX_DEHLT",
                     depress=(scene.ylos_current_step == step),
                 )
