@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
-create_project.py - Createur de projet & d'assets, pipeline Ylos Prod (schema 2.0).
+create_project.py - Project & asset creator, Ylos Prod pipeline (schema 2.0).
 
-Source de verite unique de la logique de creation. Importable par les plugins DCC
-(Houdini/hython, Blender) : aucune dependance hors stdlib.
+Single source of truth for the creation logic. Importable by DCC plugins
+(Houdini/hython, Blender): no dependency outside the stdlib.
 
-Principes appliques :
-  - Racine relocalisable : tout passe par $PROJ_ROOT (source) et $PROJ_CACHE (cache).
-    Aucun chemin absolu n'est stocke dans les manifestes.
-  - Separation cache / source : source sur disque externe, cache regenerable sur interne.
-    Le cache vit sous $PROJ_CACHE/<projet>, JAMAIS co-localise avec la source.
-  - project.json = manifeste, source de verite (schema_version 2.x, cf. project.schema.json).
-  - Topologie ASSET-CENTRIC : assets/ est la colonne vertebrale ; sets/ et shots/ sont du
-    scaffolding optionnel (crees vides).
-  - Logique unique : ce module est importe, jamais duplique.
-  - Production != pipeline : le manifeste ne gere PAS le suivi de prod (client, deadlines).
+Applied principles:
+  - Relocatable root: everything goes through $PROJ_ROOT (source) and $PROJ_CACHE (cache).
+    No absolute path is stored in the manifests.
+  - Cache / source separation: source on the external disk, regenerable cache on the internal one.
+    The cache lives under $PROJ_CACHE/<project>, NEVER co-located with the source.
+  - project.json = manifest, source of truth (schema_version 2.x, see project.schema.json).
+  - ASSET-CENTRIC topology: assets/ is the backbone; sets/ and shots/ are optional
+    scaffolding (created empty).
+  - Single logic: this module is imported, never duplicated.
+  - Production != pipeline: the manifest does NOT handle production tracking (client, deadlines).
 
-Usage CLI :
-    python create_project.py project "mon_projet"
-    python create_project.py project "mon_projet" --root /Volumes/EXT/3D --cache ~/cache --force
-    python create_project.py asset  "/Volumes/EXT/3D/mon_projet" "Lina" --type CHARACTER
-    python create_project.py asset  "<projet>" "decor" --entity-type set --steps modeling,lookdev
-    python create_project.py clean-staging "<projet>"            # dry-run (rapport seul)
-    python create_project.py clean-staging "<projet>" --apply    # supprime les orphelins
+CLI usage:
+    python create_project.py project "my_project"
+    python create_project.py project "my_project" --root /Volumes/EXT/3D --cache ~/cache --force
+    python create_project.py asset  "/Volumes/EXT/3D/my_project" "Lina" --type CHARACTER
+    python create_project.py asset  "<project>" "decor" --entity-type set --steps modeling,lookdev
+    python create_project.py clean-staging "<project>"            # dry-run (report only)
+    python create_project.py clean-staging "<project>" --apply    # removes orphans
 
-Usage import (plugin DCC) :
+Import usage (DCC plugin):
     import create_project
-    info  = create_project.create("mon_projet")
+    info  = create_project.create("my_project")
     asset = create_project.create_asset(info["source"], "Lina", asset_type="CHARACTER")
     manifest = create_project.read_manifest(info["source"])
     create_project.validate_manifest(manifest)
@@ -47,39 +47,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # --------------------------------------------------------------------------------------
-# Constantes - contrat
+# Constants - contract
 # --------------------------------------------------------------------------------------
 
-SCHEMA_VERSION = "2.1.0"          # version du contrat (project.json ET manifeste d'asset).
-                                  # A bumper a CHAQUE changement de schema (= migration).
-                                  # 2.1.0 : ajout de 'frame_range' (shots) - additif, aucun
-                                  # manifeste 2.0 invalide (cf. docs/migration-2.0-to-2.1.md).
+SCHEMA_VERSION = "2.1.0"          # contract version (project.json AND asset manifest).
+                                  # Bump on EVERY schema change (= migration).
+                                  # 2.1.0: added 'frame_range' (shots) - additive, no
+                                  # 2.0 manifest invalidated (see docs/migration-2.0-to-2.1.md).
 MANIFEST_NAME = "project.json"
 ASSET_MANIFEST_NAME = "manifest.json"
-ASSET_ROOT_NAME = "asset_root.usda"   # composition USD d'un asset/set (ASCII, cf. convention)
-SHOT_ROOT_NAME = "shot_root.usda"     # composition USD d'un shot (root prim /ROOT, timecodes)
-PIPELINE_DIR = "_pipeline"        # dossier config/manifeste (renomme de _config en 2.0)
+ASSET_ROOT_NAME = "asset_root.usda"   # USD composition of an asset/set (ASCII, see convention)
+SHOT_ROOT_NAME = "shot_root.usda"     # USD composition of a shot (root prim /ROOT, timecodes)
+PIPELINE_DIR = "_pipeline"        # config/manifest folder (renamed from _config in 2.0)
 SPOTLIGHT_MARKER = ".metadata_never_index"
 GITIGNORE_NAME = ".gitignore"
 
 TOPOLOGY = "asset-centric"
 
-# Noms des variables d'environnement (jamais de chemin absolu en dur dans les scenes DCC)
-ENV_ROOT = "PROJ_ROOT"            # racine SOURCE  - disque externe, permanent
-ENV_CACHE = "PROJ_CACHE"          # racine CACHE   - disque interne, regenerable
+# Environment variable names (never a hard-coded absolute path in DCC scenes)
+ENV_ROOT = "PROJ_ROOT"            # SOURCE root  - external disk, permanent
+ENV_CACHE = "PROJ_CACHE"          # CACHE root   - internal disk, regenerable
 
-# Fallbacks si les env vars ne sont pas posees (avec avertissement)
+# Fallbacks if the env vars are not set (with a warning)
 FALLBACK_ROOT = Path.home() / "Ylos" / "projects"
 FALLBACK_CACHE = Path.home() / "Ylos" / "cache"
 
-# --- Defauts pipeline (taxonomie des steps + assemblage USD) --------------------------
+# --- Pipeline defaults (step taxonomy + USD assembly) ---------------------------------
 DEFAULT_ASSET_STEPS = ["modeling", "rigging", "lookdev", "fx"]
 DEFAULT_SHOT_STEPS  = ["animation", "fx", "lighting", "comp"]
 DEFAULT_SET_STEPS   = ["layout", "lookdev", "lighting"]
-USD_ROOT_PRIM = "/ROOT"           # prim racine des stages d'ASSEMBLAGE (sets/shots).
-                                  # Les assets s'ancrent sous /<NomAsset> (cf. usd-convention.md).
+USD_ROOT_PRIM = "/ROOT"           # root prim of ASSEMBLY stages (sets/shots).
+                                  # Assets anchor under /<AssetName> (see usd-convention.md).
 
-# --- Defauts scene (consommes par les plugins DCC a l'ouverture) ----------------------
+# --- Scene defaults (consumed by DCC plugins on open) ---------------------------------
 DEFAULT_SCENE = {
     "fps": 24,
     "fps_base": 1.0,
@@ -93,40 +93,40 @@ DEFAULT_SCENE = {
 
 DEFAULT_DELIVERY = {"targets": ["usd", "exr"]}
 
-# --- Convention USD (cf. docs/usd-convention.md) --------------------------------------
-USD_UP_AXIS = "Y"                 # axe d'echange USD (conversion Z<->Y geree par les DCC)
-USD_METERS_PER_UNIT = 1.0         # aligne sur scene.unit_scale
+# --- USD convention (see docs/usd-convention.md) --------------------------------------
+USD_UP_AXIS = "Y"                 # USD exchange axis (Z<->Y conversion handled by the DCCs)
+USD_METERS_PER_UNIT = 1.0         # aligned with scene.unit_scale
 
-# Mapping famille d'entite -> dossier parent dans la source
+# Entity family -> parent folder in the source
 ENTITY_DIR = {"asset": "assets", "set": "sets", "shot": "shots"}
 _DEFAULT_STEPS = {"asset": DEFAULT_ASSET_STEPS, "set": DEFAULT_SET_STEPS, "shot": DEFAULT_SHOT_STEPS}
 _STEPS_KEY = {"asset": "asset_steps", "set": "set_steps", "shot": "shot_steps"}
 
-# --- Publish LOP (Solaris) - version d'asset complete, hors taxonomie de steps -----------
-# Un publish LOP (cf. HDA ylos::publish) n'est PAS un step de pipeline (modeling/rigging/...) :
-# c'est un instantane complet du reseau LOP (layer USD + thumb). Vit dans son propre dossier
-# reserve, n'entre jamais dans la composition subLayers de asset_root.usda.
+# --- LOP publish (Solaris) - complete asset version, outside the step taxonomy -----------
+# A LOP publish (see HDA ylos::publish) is NOT a pipeline step (modeling/rigging/...):
+# it's a complete snapshot of the LOP network (USD layer + thumb). Lives in its own
+# reserved folder, never enters the subLayers composition of asset_root.usda.
 ASSET_TYPES = ["CHARACTER", "PROP", "VEHICLE", "CREATURE", "FX_ELEMENT"]
 
-# Sous-types par famille, convention de nommage TYPE_Nom_Variant (cf. validate_entity_name).
-# SET_TYPES/SHOT_TYPES miroitent app.html::FAMILY_CONFIG (seule source deja decidee pour
-# ces deux familles - create_project.py etait le seul endroit qui ne les connaissait pas).
+# Sub-types per family, naming convention TYPE_Name_Variant (see validate_entity_name).
+# SET_TYPES/SHOT_TYPES mirror app.html::FAMILY_CONFIG (the only source already decided for
+# these two families - create_project.py was the only place that did not know them).
 SET_TYPES = ["EXTERIOR", "INTERIOR", "HERO_SET", "MODULAR_KIT"]
 SHOT_TYPES = ["LAYOUT", "ANIMATION", "FX", "LIGHTING", "COMP"]
 _TYPES_BY_ENTITY = {"asset": ASSET_TYPES, "set": SET_TYPES, "shot": SHOT_TYPES}
 
-# Types de production (project.json["prod_type"], defaut de build_manifest()). Union
-# RETRO-COMPATIBLE des valeurs reellement emises, jamais inventees ni retirees (la relecture
-# d'un project.json existant prime) : app.html (FILM/SERIES/GAME/XR), addon Blender
-# (FILM/AR/VR) et les manifests existants (ex: Pachamama = 'XR'). Seule source de vocab pour
-# le prod_type - avant, create_project ne le connaissait pas et l'enum Blender (FILM/AR/VR)
-# CRASHAIT en lisant un manifest 'XR'/'SERIES'/'GAME' (cf. plugins/blender/core/vocab.py,
-# op_open_context). N'implique aucune logique de scene preset (celle-ci reste cote DCC et
-# no-op proprement pour un type qu'elle ne connait pas).
+# Production types (project.json["prod_type"], default of build_manifest()). BACKWARD-
+# COMPATIBLE union of the values actually emitted, never invented nor removed (re-reading
+# an existing project.json wins): app.html (FILM/SERIES/GAME/XR), Blender addon
+# (FILM/AR/VR) and existing manifests (e.g. Pachamama = 'XR'). Only vocab source for
+# prod_type - before, create_project did not know it and the Blender enum (FILM/AR/VR)
+# CRASHED when reading an 'XR'/'SERIES'/'GAME' manifest (see plugins/blender/core/vocab.py,
+# op_open_context). Implies no scene preset logic (that stays DCC-side and no-ops
+# cleanly for a type it does not know).
 PROD_TYPES = ["FILM", "SERIES", "GAME", "XR", "AR", "VR"]
-# Cible de pipeline par type de prod : decide le FORMAT d'artifact du publish. Decision
-# d'ORCHESTRATEUR, jamais du DCC (principe 5) : les bridges consomment la cible, ne la
-# calculent pas. 'web' -> GLB (Three.js) ; 'offline' -> USD. Source unique.
+# Pipeline target per prod type: decides the artifact FORMAT of the publish. ORCHESTRATOR
+# decision, never the DCC's (principle 5): bridges consume the target, don't compute it.
+# 'web' -> GLB (Three.js); 'offline' -> USD. Single source.
 PROD_TYPE_TO_TARGET = {
     "XR": "web", "AR": "web", "VR": "web", "GAME": "web",
     "FILM": "offline", "SERIES": "offline",
@@ -136,80 +136,80 @@ LOP_DIR_NAME = "lop"
 LOP_PUBLISH_DIR_NAME = "publish"
 LOP_STAGING_DIR_NAME = ".staging"
 LOP_THUMB_NAME = "thumb.png"
-# Extensions USD composables (layer d'assemblage). '.usdnc' = watermark Apprentice, jamais
-# suppose a l'avance (cf. gotcha extensions, LOP HDA). Un cache consommable ou un GLB (cf.
-# PUBLISH_ARTIFACT_EXTENSIONS) n'en fait PAS partie : il passe le contrat deux-phases mais
-# n'entre JAMAIS dans la composition subLayers de asset_root/shot_root (cf. _is_usd_layer).
+# Composable USD extensions (assembly layer). '.usdnc' = Apprentice watermark, never
+# assumed in advance (see extensions gotcha, LOP HDA). A consumable cache or a GLB (see
+# PUBLISH_ARTIFACT_EXTENSIONS) is NOT part of it: it passes the two-phase contract but
+# NEVER enters the subLayers composition of asset_root/shot_root (see _is_usd_layer).
 USD_LAYER_EXTENSIONS = (".usd", ".usdc", ".usda", ".usdnc")
-# Extensions d'artefact acceptees par le contrat deux-phases (_missing_artifacts) : les layers
-# USD + '.glb' (bridge Blender/Three.js) + caches consommables FX publies en kind=step
-# ('.vdb', '.bgeo.sc' suffixe double, '.abc'). Ces quatre derniers ne sont PAS des layers USD.
+# Artifact extensions accepted by the two-phase contract (_missing_artifacts): the USD
+# layers + '.glb' (Blender/Three.js bridge) + consumable FX caches published as kind=step
+# ('.vdb', '.bgeo.sc' double suffix, '.abc'). Those last four are NOT USD layers.
 PUBLISH_ARTIFACT_EXTENSIONS = USD_LAYER_EXTENSIONS + (".glb", ".vdb", ".bgeo.sc", ".abc")
 LOP_PUBLISHES_KEY = "lop_publishes"
-# Publishes DCC par step (Blender USD/GLB...), generalisation du contrat deux-phases LOP a
-# tout 'kind' != 'lop' (cf. allocate_publish_version). {step: [version-entry, ...]} - cle
-# distincte de 'publishes' (liste de chemins, ecrite par publish_asset() legacy) pour ne
-# jamais melanger les deux formes d'entree dans la meme liste.
+# DCC publishes per step (Blender USD/GLB...), generalization of the LOP two-phase contract to
+# any 'kind' != 'lop' (see allocate_publish_version). {step: [version-entry, ...]} - key
+# distinct from 'publishes' (list of paths, written by the legacy publish_asset()) so the
+# two entry forms are never mixed in the same list.
 STEP_PUBLISHES_KEY = "step_publishes"
 _DIR_VER_RE = re.compile(r"_v(\d+)$")
 
-# Ordre de force des steps pour l'empilement subLayers (plus fort / downstream en premier).
-# USD : le premier sublayer de la liste est le plus fort.
+# Step strength order for the subLayers stack (strongest / downstream first).
+# USD: the first sublayer in the list is the strongest.
 DOWNSTREAM_ORDER = ["fx", "lookdev", "rigging", "uvs", "modeling",
                     "layout", "animation", "lighting", "render", "composite"]
 
-# Ordre de force propre au SHOT (distinct de DOWNSTREAM_ORDER, qui est correct pour un asset
-# mais faux pour un shot) : sur un shot le lighting override l'animation, l'inverse d'un asset.
-# 'comp' est declare pour l'ordre mais ne produit jamais de layer USD (2D) - simplement jamais
-# present dans les publishes. NE PAS reutiliser DOWNSTREAM_ORDER ici (cf. plan Increment 1).
+# SHOT-specific strength order (distinct from DOWNSTREAM_ORDER, which is correct for an asset
+# but wrong for a shot): on a shot lighting overrides animation, the opposite of an asset.
+# 'comp' is declared for ordering but never produces a USD layer (2D) - simply never
+# present in the publishes. Do NOT reuse DOWNSTREAM_ORDER here (see Increment 1 plan).
 SHOT_DOWNSTREAM_ORDER = ["comp", "lighting", "fx", "animation", "layout"]
 
 _VER_RE = re.compile(r"_v(\d+)\.")
 
-# Arborescence SOURCE (sous $PROJ_ROOT/<projet>) - permanent, versionne. Asset-centric.
+# SOURCE tree (under $PROJ_ROOT/<project>) - permanent, versioned. Asset-centric.
 SOURCE_TREE = [
-    PIPELINE_DIR,                 # project.json (manifeste)
-    "assets",                     # COLONNE VERTEBRALE (asset-centric)
-    "sets",                       # assemblage - optionnel (vide au scaffold)
-    "shots",                      # shots - optionnel (vide au scaffold)
-    "references/ai",              # references IA (Midjourney / NanoBanana) + metadata
-    "references/photo",           # references photo
-    "references/board",           # moodboards / planches
-    "resources/hdri",             # ressources reutilisables intra-projet
+    PIPELINE_DIR,                 # project.json (manifest)
+    "assets",                     # BACKBONE (asset-centric)
+    "sets",                       # assembly - optional (empty at scaffold)
+    "shots",                      # shots - optional (empty at scaffold)
+    "references/ai",              # AI references (Midjourney / NanoBanana) + metadata
+    "references/photo",           # photo references
+    "references/board",           # moodboards / boards
+    "resources/hdri",             # reusable intra-project resources
     "resources/textures",
-    "delivery",                   # masters / sorties finales
-    "edit",                       # montage
+    "delivery",                   # masters / final outputs
+    "edit",                       # editorial
 ]
 
-# Arborescence CACHE (sous $PROJ_CACHE/<projet>) - jetable, hors Git, NVMe interne.
+# CACHE tree (under $PROJ_CACHE/<project>) - disposable, outside Git, internal NVMe.
 CACHE_PER_PROJECT = True
 CACHE_TREE = [
-    "houdini",                    # caches Houdini (.bgeo.sc, sims, flip...)
-    "blender",                    # caches Blender (bake, sims)
-    "render",                     # rendus / AOVs regenerables
-    "alembic",                    # caches .abc
+    "houdini",                    # Houdini caches (.bgeo.sc, sims, flip...)
+    "blender",                    # Blender caches (bake, sims)
+    "render",                     # regenerable renders / AOVs
+    "alembic",                    # .abc caches
     "sim",                        # simulations
     "tmp",
 ]
 
 GITIGNORE_CONTENT = """\
-# --- Pipeline Ylos Prod : regenerable / lourd, hors Git ---
-# Le cache vit sous $PROJ_CACHE (hors arbre source) : rien a ignorer ici pour ca.
+# --- Ylos Prod pipeline: regenerable / heavy, outside Git ---
+# The cache lives under $PROJ_CACHE (outside the source tree): nothing to ignore here for that.
 
-# Rendus / masters lourds
+# Heavy renders / masters
 delivery/**/render/
 *.exr
 *.ass
 
-# Geo USD binaire lourde : hors Git. La compo (.usda) est versionnee, la geo (.usdc)
-# est lourde/regeneree. Defaut a affiner par projet.
+# Heavy binary USD geo: outside Git. The composition (.usda) is versioned, the geo (.usdc)
+# is heavy/regenerated. Default to refine per project.
 *.usdc
 
-# Caches DCC ecrits par erreur dans la source
+# DCC caches written into the source by mistake
 *.bgeo.sc
 *.sim
 
-# Sauvegardes DCC
+# DCC backups
 *.hip.bak
 *.hiplc.bak
 *.blend1
@@ -229,13 +229,13 @@ def _now():
 
 
 def _validate_segment(name):
-    """Un nom = un seul segment de chemin, pas d'espace de bord, pas de separateur."""
+    """A name = a single path segment, no edge whitespace, no separator."""
     if not name or "/" in name or "\\" in name or name.strip() != name:
         raise ValueError(f"Nom invalide (un seul segment, sans /): {name!r}")
 
 
 def _resolve(explicit, env_name, fallback):
-    """Resout une racine : argument explicite > variable d'env > fallback (avec warning)."""
+    """Resolve a root: explicit argument > env variable > fallback (with a warning)."""
     if explicit:
         return Path(explicit).expanduser().resolve()
     env_val = os.environ.get(env_name)
@@ -263,13 +263,13 @@ def _make_tree(base, tree):
 
 
 def entity_cache_dir(project_root, entity_name, step, label):
-    """Dossier de cache scratch d'un step : $PROJ_CACHE/<projet>/houdini/<entite>/<step>/
-    <label>/ (tier regenerable, cf. CLAUDE.md - stockage 3 tiers). Logique UNIQUE de
-    resolution (principe 5) : le bridge Houdini pose sur le noeud filecache l'EXPRESSION
-    litterale '$PROJ_CACHE/...' (relocalisable, cf. ylos_houdini.cache_dir_expression),
-    tandis que le chemin resolu (cette fonction) vit ici. Cree les parents (mkdir), retourne
-    le Path. Aucune trace au manifeste : un cache scratch est jetable, son versioning est
-    celui natif du filecache (v1/v2...), pas un contrat deux-phases."""
+    """Scratch cache folder for a step: $PROJ_CACHE/<project>/houdini/<entity>/<step>/
+    <label>/ (regenerable tier, see CLAUDE.md - 3-tier storage). SINGLE resolution
+    logic (principle 5): the Houdini bridge sets on the filecache node the literal
+    EXPRESSION '$PROJ_CACHE/...' (relocatable, see ylos_houdini.cache_dir_expression),
+    while the resolved path (this function) lives here. Creates the parents (mkdir), returns
+    the Path. No manifest trace: a scratch cache is disposable, its versioning is
+    the filecache's native one (v1/v2...), not a two-phase contract."""
     _validate_segment(label)
     cache_dir = (resolve_cache() / Path(project_root).name / "houdini"
                  / entity_name / step / label)
@@ -278,21 +278,21 @@ def entity_cache_dir(project_root, entity_name, step, label):
 
 
 def _ver(path):
-    """Extrait le numéro de version d'un chemin de publish (ex 'step/publish/A_step_v002.usdc' -> 2)."""
+    """Extract the version number of a publish path (e.g. 'step/publish/A_step_v002.usdc' -> 2)."""
     m = _VER_RE.search(str(path))
     return int(m.group(1)) if m else 0
 
 
 @contextlib.contextmanager
 def acquire_lock(path):
-    """Verrou exclusif (fcntl.flock) le temps d'une section critique read-modify-write sur
-    'path' (typiquement un manifest.json, mais generique - pas specifique aux manifestes).
-    Le verrou vit dans un fichier '.lock' a cote de 'path' (jamais sur 'path' lui-meme) pour
-    ne jamais interferer avec sa lecture/ecriture. Bloquant : un second appel concurrent
-    attend la liberation plutot que de risquer une collision (ex: version, manifeste corrompu).
+    """Exclusive lock (fcntl.flock) for the duration of a read-modify-write critical section on
+    'path' (typically a manifest.json, but generic - not specific to manifests).
+    The lock lives in a '.lock' file next to 'path' (never on 'path' itself) so it
+    never interferes with its read/write. Blocking: a second concurrent call
+    waits for the release rather than risking a collision (e.g. version, corrupted manifest).
 
-    Point de centralisation UNIQUE pour fcntl.flock dans ce module (cf. CLAUDE.md : advisory,
-    POSIX-only, non fiable sur NFS/SMB - a faire evoluer ici seul si le stockage change de tier)."""
+    SINGLE centralization point for fcntl.flock in this module (see CLAUDE.md: advisory,
+    POSIX-only, unreliable on NFS/SMB - to be evolved here alone if the storage changes tier)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
@@ -306,11 +306,11 @@ def acquire_lock(path):
 
 
 def _atomic_write_text(path, content, encoding="utf-8"):
-    """Ecrit 'content' dans 'path' de facon atomique (tmp + os.replace, meme motif que
-    finalize_publish_version() utilise deja pour le rename staging->final). Protege contre
-    un fichier tronque/corrompu si le process crashe pendant l'ecriture - acquire_lock()
-    protege la concurrence entre process, pas un crash mi-ecriture ; les deux sont
-    complementaires."""
+    """Write 'content' to 'path' atomically (tmp + os.replace, the same pattern
+    finalize_publish_version() already uses for the staging->final rename). Protects against
+    a truncated/corrupted file if the process crashes mid-write - acquire_lock()
+    protects concurrency between processes, not a mid-write crash; the two are
+    complementary."""
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(content, encoding=encoding)
@@ -318,49 +318,49 @@ def _atomic_write_text(path, content, encoding="utf-8"):
 
 
 def _atomic_write_json(path, data, indent=2):
-    """Serialise 'data' en JSON et l'ecrit via _atomic_write_text (cf. sa docstring)."""
+    """Serialize 'data' to JSON and write it via _atomic_write_text (see its docstring)."""
     _atomic_write_text(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
 
 
 # --------------------------------------------------------------------------------------
-# Manifeste projet (project.json) - contrat lisible par machine
+# Project manifest (project.json) - machine-readable contract
 # --------------------------------------------------------------------------------------
 
 def build_manifest(name, display_name=None, prod_type="FILM"):
-    """Construit le dict manifeste projet (schema 2.x). Ne stocke AUCUN chemin absolu : le
-    projet est relocalisable, il se resout via $PROJ_ROOT / $PROJ_CACHE a l'execution. Un
-    launcher / plugin lit ce manifeste et pose les env vars PAR SESSION (ce qui evite la
-    collision d'une env var globale entre deux DCC ouverts sur deux projets)."""
+    """Build the project manifest dict (schema 2.x). Stores NO absolute path: the
+    project is relocatable, it resolves via $PROJ_ROOT / $PROJ_CACHE at runtime. A
+    launcher / plugin reads this manifest and sets the env vars PER SESSION (which avoids the
+    collision of a global env var between two DCCs open on two projects)."""
     now = _now()
     return {
         "schema_version": SCHEMA_VERSION,
         "name": name,
         "display_name": display_name or name,
         "prod_type": prod_type,
-        # Cible de pipeline = FORMAT d'artifact du publish (derive du prod_type, source unique
-        # PROD_TYPE_TO_TARGET). Ecrite a la creation ; lue tolerablement par get_pipeline_target.
+        # Pipeline target = artifact FORMAT of the publish (derived from prod_type, single source
+        # PROD_TYPE_TO_TARGET). Written at creation; read tolerantly by get_pipeline_target.
         "pipeline_target": PROD_TYPE_TO_TARGET.get(prod_type, DEFAULT_PIPELINE_TARGET),
         "topology": TOPOLOGY,
         "created_utc": now,
         "modified_utc": now,
-        # Quelles env vars ce projet attend
+        # Which env vars this project expects
         "env": {"root": f"${ENV_ROOT}", "cache": f"${ENV_CACHE}"},
-        # Trace de la structure creee (audit / migration)
+        # Trace of the created structure (audit / migration)
         "structure": {"source": list(SOURCE_TREE), "cache": list(CACHE_TREE)},
         "cache_per_project": CACHE_PER_PROJECT,
-        # Taxonomie des steps + assemblage USD
+        # Step taxonomy + USD assembly
         "pipeline": {
             "asset_steps": list(DEFAULT_ASSET_STEPS),
             "shot_steps": list(DEFAULT_SHOT_STEPS),
             "set_steps": list(DEFAULT_SET_STEPS),
             "usd_root_prim": USD_ROOT_PRIM,
         },
-        # Reglages de scene par defaut (lus par les plugins DCC)
+        # Default scene settings (read by DCC plugins)
         "scene": dict(DEFAULT_SCENE),
         "delivery": dict(DEFAULT_DELIVERY),
-        # Reserve aux reglages par DCC (rempli par les plugins)
+        # Reserved for per-DCC settings (filled by the plugins)
         "dcc": {"houdini": {}, "blender": {}},
-        # 'status' minimal. Le VRAI suivi de production (deadlines, client) vit ailleurs.
+        # Minimal 'status'. The REAL production tracking (deadlines, client) lives elsewhere.
         "status": "created",
     }
 
@@ -372,18 +372,18 @@ def write_manifest(config_dir, manifest):
 
 
 def read_manifest(project_dir):
-    """Lit project.json depuis <projet>/_pipeline. Utile aux plugins / launchers."""
+    """Read project.json from <project>/_pipeline. Useful to plugins / launchers."""
     path = Path(project_dir) / PIPELINE_DIR / MANIFEST_NAME
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def get_pipeline_target(project_root):
-    """Cible de pipeline d'un projet : 'web' (artifacts GLB, Three.js) ou 'offline' (USD).
-    Le FORMAT d'artifact est une decision d'ORCHESTRATEUR (principe 5), jamais du DCC : les
-    bridges (Blender op_publish) consomment cette cible, ils ne la calculent pas. Lecture
-    TOLERANTE (ne leve jamais pour un cas metier) : champ 'pipeline_target' du manifeste s'il
-    est valide, sinon derive du prod_type (PROD_TYPE_TO_TARGET), defaut 'offline' -> un projet
-    2.0 sans le champ (ou manifeste illisible) degrade proprement."""
+    """Pipeline target of a project: 'web' (GLB artifacts, Three.js) or 'offline' (USD).
+    The artifact FORMAT is an ORCHESTRATOR decision (principle 5), never the DCC's: the
+    bridges (Blender op_publish) consume this target, they don't compute it. TOLERANT
+    read (never raises for a business case): 'pipeline_target' field of the manifest if it
+    is valid, otherwise derived from prod_type (PROD_TYPE_TO_TARGET), default 'offline' -> a
+    2.0 project without the field (or an unreadable manifest) degrades cleanly."""
     try:
         manifest = read_manifest(project_root)
     except (OSError, ValueError):
@@ -395,12 +395,12 @@ def get_pipeline_target(project_root):
 
 
 def read_active_project(path=None):
-    """Projet actif de la machine (Path) ou None. Contrat : ~/.ylos/active_project, une
-    ligne, chemin absolu - ecrit par l'UI web (POST /api/set-project). Lecteur UNIQUE,
-    partage par ylos_ui et le module Houdini (le default_expression du HDA ylos::publish
-    garde sa copie inline : une expression de parametre embarquee ne peut pas dependre
-    d'un import). Path.home() resolu a l'appel, pas a l'import (les tests hython basculent
-    HOME en cours de session, cf. test_publish_hda_e2e)."""
+    """Active project of the machine (Path) or None. Contract: ~/.ylos/active_project, one
+    line, absolute path - written by the web UI (POST /api/set-project). SINGLE reader,
+    shared by ylos_ui and the Houdini module (the HDA ylos::publish default_expression
+    keeps its inline copy: an embedded parameter expression cannot depend on
+    an import). Path.home() resolved at call time, not at import (the hython tests switch
+    HOME mid-session, see test_publish_hda_e2e)."""
     if path is None:
         path = Path.home() / ".ylos" / "active_project"
     try:
@@ -411,8 +411,8 @@ def read_active_project(path=None):
 
 
 def validate_manifest(manifest):
-    """Validation stdlib (pas de dependance jsonschema). Leve ValueError si invalide.
-    Verifie la compatibilite de version MAJEURE du schema (sinon : migration requise)."""
+    """Stdlib validation (no jsonschema dependency). Raises ValueError if invalid.
+    Checks MAJOR schema version compatibility (otherwise: migration required)."""
     required = ("schema_version", "name", "created_utc", "env", "structure", "pipeline", "scene")
     missing = [k for k in required if k not in manifest]
     if missing:
@@ -427,12 +427,12 @@ def validate_manifest(manifest):
 
 
 # --------------------------------------------------------------------------------------
-# Manifeste d'entite (asset/set/shot) + stub USD
+# Entity manifest (asset/set/shot) + USD stub
 # --------------------------------------------------------------------------------------
 
 def build_asset_manifest(name, entity_type, asset_type, steps):
-    """Manifeste par entite (cf. asset.schema.json). 'entity_type' = famille (asset/set/
-    shot) ; 'type' = sous-type metier (CHARACTER, ENVIRONMENT, PROP...)."""
+    """Per-entity manifest (see asset.schema.json). 'entity_type' = family (asset/set/
+    shot); 'type' = business sub-type (CHARACTER, ENVIRONMENT, PROP...)."""
     now = _now()
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -444,8 +444,8 @@ def build_asset_manifest(name, entity_type, asset_type, steps):
         "created_utc": now,
         "modified_utc": now,
     }
-    # Un shot porte sa plage d'images (schema 2.1). Defaut editable via set_frame_range().
-    # Les autres familles n'ont pas de frame_range (cle absente = pas de timecodes).
+    # A shot carries its frame range (schema 2.1). Default editable via set_frame_range().
+    # Other families have no frame_range (key absent = no timecodes).
     if entity_type == "shot":
         manifest["frame_range"] = {
             "start": 1001, "end": 1100, "fps": DEFAULT_SCENE["fps"],
@@ -459,16 +459,16 @@ def _meters_per_unit_str():
 
 
 def asset_root_usda(name):
-    """Stub d'assemblage USD pour un asset/set (cf. docs/usd-convention.md).
-    defaultPrim = <NomEntite> ; les steps s'empilent en subLayers (rempli au publish,
-    du plus fort/downstream au plus faible). Y-up, metersPerUnit aligne sur scene."""
+    """USD assembly stub for an asset/set (see docs/usd-convention.md).
+    defaultPrim = <EntityName>; steps stack as subLayers (filled at publish,
+    strongest/downstream to weakest). Y-up, metersPerUnit aligned with scene."""
     return (
         "#usda 1.0\n"
         "(\n"
         f'    defaultPrim = "{name}"\n'
         f'    upAxis = "{USD_UP_AXIS}"\n'
         f"    metersPerUnit = {_meters_per_unit_str()}\n"
-        "    # subLayers : du plus fort (downstream) au plus faible. Rempli au publish.\n"
+        "    # subLayers: strongest (downstream) to weakest. Filled at publish.\n"
         "    subLayers = [\n"
         "    ]\n"
         ")\n"
@@ -480,8 +480,8 @@ def asset_root_usda(name):
 
 
 def build_asset_root(name, latest):
-    """Reconstruit asset_root.usda depuis {step: chemin_relatif_du_latest_publish}.
-    subLayers dans le header de stage, ordre downstream-fort en premier (cf. usd-convention.md)."""
+    """Rebuild asset_root.usda from {step: relative_path_of_latest_publish}.
+    subLayers in the stage header, downstream-strong-first order (see usd-convention.md)."""
     ordered = [s for s in DOWNSTREAM_ORDER if s in latest]
     ordered += [s for s in latest if s not in DOWNSTREAM_ORDER]
     lines = [
@@ -506,16 +506,16 @@ def build_asset_root(name, latest):
 
 
 def _num_str(value):
-    """Serialise un nombre USD sans '.0' parasite (24 plutot que 24.0), float sinon."""
+    """Serialize a USD number without a spurious '.0' (24 rather than 24.0), float otherwise."""
     return str(int(value)) if float(value).is_integer() else str(value)
 
 
 def build_shot_root(name, latest, frame_range=None):
-    """Reconstruit shot_root.usda depuis {step: chemin_relatif_du_latest_publish}. Miroir de
-    build_asset_root pour un SHOT : root prim /ROOT (defaultPrim "ROOT", cf. USD_ROOT_PRIM),
-    subLayers ordonnes SHOT_DOWNSTREAM_ORDER (plus fort/downstream en premier - lighting
-    override l'anim). 'frame_range' ({start, end, fps}) present (schema 2.1) -> timecodes
-    dans le header de stage ; absent -> pas de timecodes (cf. docs/usd-convention.md)."""
+    """Rebuild shot_root.usda from {step: relative_path_of_latest_publish}. Mirror of
+    build_asset_root for a SHOT: root prim /ROOT (defaultPrim "ROOT", see USD_ROOT_PRIM),
+    subLayers ordered by SHOT_DOWNSTREAM_ORDER (strongest/downstream first - lighting
+    overrides anim). 'frame_range' ({start, end, fps}) present (schema 2.1) -> timecodes
+    in the stage header; absent -> no timecodes (see docs/usd-convention.md)."""
     ordered = [s for s in SHOT_DOWNSTREAM_ORDER if s in latest]
     ordered += [s for s in latest if s not in SHOT_DOWNSTREAM_ORDER]
     prim = USD_ROOT_PRIM.lstrip("/")
@@ -547,33 +547,33 @@ def build_shot_root(name, latest, frame_range=None):
 
 
 def _is_usd_layer(path):
-    """True si 'path' pointe un layer USD composable (extension USD, watermark Apprentice
-    inclus). Un cache consommable (.vdb/.bgeo.sc/.abc) ou un GLB publie en kind=step passe le
-    contrat deux-phases mais n'est PAS un layer USD : il n'entre jamais dans la composition
-    subLayers (asset_root/shot_root) - filtre explicite dans _latest_by_step (plan Increment 5).
-    Un dossier de sequence (artefact = nom de dossier, sans extension) n'est pas USD non plus."""
+    """True if 'path' points to a composable USD layer (USD extension, Apprentice watermark
+    included). A consumable cache (.vdb/.bgeo.sc/.abc) or a GLB published as kind=step passes the
+    two-phase contract but is NOT a USD layer: it never enters the subLayers
+    composition (asset_root/shot_root) - explicit filter in _latest_by_step (Increment 5 plan).
+    A sequence folder (artifact = folder name, no extension) is not USD either."""
     return str(path).endswith(USD_LAYER_EXTENSIONS)
 
 
 def _latest_from_publishes(publishes):
-    """Retourne {step: chemin_latest} depuis manifest.publishes (dict step -> [paths])."""
+    """Return {step: latest_path} from manifest.publishes (dict step -> [paths])."""
     return {step: max(paths, key=_ver) for step, paths in publishes.items() if paths}
 
 
 def _latest_by_step(manifest):
-    """{step: chemin_relatif_du_latest_publish 'complete'} pour la composition d'un root,
-    en FUSIONNANT les deux sources d'un manifeste :
-    - 'publishes' legacy (dict step -> [chemins], ecrit par publish_asset() deprecie) ;
-    - 'step_publishes' (contrat deux-phases, dict step -> [entrees], cle 'artifact',
-      statut 'complete').
-    A step egal, le contrat deux-phases prime (source vivante). Les publishes LOP
-    (lop_publishes) ne sont JAMAIS lus ici : un LOP est un instantane complet hors
-    taxonomie de steps, il n'entre pas dans la composition subLayers."""
+    """{step: relative_path_of_latest_'complete'_publish} for composing a root,
+    MERGING the two sources of a manifest:
+    - legacy 'publishes' (dict step -> [paths], written by the deprecated publish_asset());
+    - 'step_publishes' (two-phase contract, dict step -> [entries], key 'artifact',
+      status 'complete').
+    On an equal step, the two-phase contract wins (live source). LOP publishes
+    (lop_publishes) are NEVER read here: a LOP is a complete snapshot outside the
+    step taxonomy, it does not enter the subLayers composition."""
     latest = _latest_from_publishes(manifest.get("publishes", {}))
     for step, entries in manifest.get(STEP_PUBLISHES_KEY, {}).items():
-        # Seuls les layers USD entrent en composition : un cache consommable (.vdb/.bgeo.sc/
-        # .abc) ou un GLB publie en kind=step est filtre AVANT le max (un step avec un VDB plus
-        # recent mais un USD plus ancien compose quand meme son latest USD, pas le VDB).
+        # Only USD layers enter composition: a consumable cache (.vdb/.bgeo.sc/
+        # .abc) or a GLB published as kind=step is filtered BEFORE the max (a step with a newer
+        # VDB but an older USD still composes its latest USD, not the VDB).
         complete = [e for e in entries
                     if e.get("status") == "complete" and e.get("artifact")
                     and _is_usd_layer(e["artifact"])]
@@ -583,11 +583,11 @@ def _latest_by_step(manifest):
 
 
 def _compose_entity_root(entity_dir, manifest, entity_name):
-    """Ecrit le fichier root d'assemblage depuis un manifeste DEJA charge - composeur UNIQUE
-    (principe 5, CLAUDE.md). Appele SOUS le flock du manifeste, par les deux entrees :
-    refresh_entity_root() (publique, prend le flock) et finalize_publish_version() (deja
-    dans son flock). Retourne le Path ecrit. NE prend PAS le flock lui-meme (acquire_lock
-    ouvre un nouveau fd bloquant a chaque appel : re-verrouiller ici = interblocage)."""
+    """Write the assembly root file from an ALREADY-loaded manifest - SINGLE composer
+    (principle 5, CLAUDE.md). Called UNDER the manifest flock, by both entry points:
+    refresh_entity_root() (public, takes the flock) and finalize_publish_version() (already
+    in its flock). Returns the written Path. Does NOT take the flock itself (acquire_lock
+    opens a new blocking fd on each call: re-locking here = deadlock)."""
     latest = _latest_by_step(manifest)
     name = manifest.get("name", entity_name)
     if manifest.get("entity_type") == "shot":
@@ -601,13 +601,13 @@ def _compose_entity_root(entity_dir, manifest, entity_name):
 
 
 def refresh_entity_root(project_root, entity_name):
-    """Recompose le fichier root d'assemblage d'une entite depuis ses publishes 'complete'
-    (latest par step) - point d'entree public, prend le flock du manifeste :
-    - asset/set -> asset_root.usda (defaultPrim <Nom>, ordre DOWNSTREAM_ORDER) ;
-    - shot      -> shot_root.usda  (root prim /ROOT, ordre SHOT_DOWNSTREAM_ORDER, timecodes
-                   depuis frame_range si present au manifeste).
-    Chemins de subLayers relatifs a l'entite (le root vit a sa racine). Retourne le Path ecrit.
-    finalize_publish_version() appelle _compose_entity_root() directement (deja sous flock)."""
+    """Recompose an entity's assembly root file from its 'complete' publishes
+    (latest per step) - public entry point, takes the manifest flock:
+    - asset/set -> asset_root.usda (defaultPrim <Name>, DOWNSTREAM_ORDER order);
+    - shot      -> shot_root.usda  (root prim /ROOT, SHOT_DOWNSTREAM_ORDER order, timecodes
+                   from frame_range if present in the manifest).
+    subLayers paths relative to the entity (the root lives at its root). Returns the written Path.
+    finalize_publish_version() calls _compose_entity_root() directly (already under flock)."""
     entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -615,12 +615,12 @@ def refresh_entity_root(project_root, entity_name):
 
 
 def set_frame_range(project_root, shot_name, start, end, fps=None):
-    """Pose / actualise la plage d'images d'un SHOT (schema 2.1) puis recompose son
-    shot_root.usda (timecodes). 'start' < 'end' requis ; l'entite doit etre un shot. 'fps'
-    None -> conserve le fps existant du manifeste, sinon le defaut scene. Ecriture atomique
-    sous acquire_lock ; la recomposition est faite APRES relachement du flock (via
-    refresh_entity_root, qui reprend son propre flock - acquire_lock n'est pas reentrant,
-    cf. CLAUDE.md). Retourne le frame_range ecrit."""
+    """Set / update a SHOT's frame range (schema 2.1) then recompose its
+    shot_root.usda (timecodes). 'start' < 'end' required; the entity must be a shot. 'fps'
+    None -> keeps the manifest's existing fps, otherwise the scene default. Atomic write
+    under acquire_lock; recomposition is done AFTER releasing the flock (via
+    refresh_entity_root, which takes its own flock again - acquire_lock is not reentrant,
+    see CLAUDE.md). Returns the written frame_range."""
     start, end = int(start), int(end)
     if start >= end:
         raise ValueError(f"frame_range invalide : start ({start}) doit etre < end ({end})")
@@ -643,16 +643,16 @@ def set_frame_range(project_root, shot_name, start, end, fps=None):
 
 
 # --------------------------------------------------------------------------------------
-# Resolution du fichier a OUVRIR pour une entite+step (consomme par les bridges DCC)
+# Resolution of the file to OPEN for an entity+step (consumed by the DCC bridges)
 # --------------------------------------------------------------------------------------
 
 _WIP_VER_RE = re.compile(r"_v(\d+)\.blend$")
 
 
 def _latest_wip(entity_dir, step):
-    """Dernier WIP .blend d'un step Blender : entity_dir/<step>/wip/<name>_<step>_vNNN.blend
-    (plus haut numero). Retourne (Path, version) ou (None, 0). Ne leve jamais - un dossier
-    absent (step non scaffolde) renvoie simplement (None, 0)."""
+    """Latest .blend WIP of a Blender step: entity_dir/<step>/wip/<name>_<step>_vNNN.blend
+    (highest number). Returns (Path, version) or (None, 0). Never raises - an absent
+    folder (unscaffolded step) simply returns (None, 0)."""
     wip_dir = Path(entity_dir) / step / "wip"
     if not wip_dir.is_dir():
         return None, 0
@@ -667,12 +667,12 @@ def _latest_wip(entity_dir, step):
 
 
 def _latest_step_publish_rel(manifest, step):
-    """Chemin RELATIF (a l'entite) du dernier publish USD 'complete' du step - contrat
-    deux-phases (step_publishes[step], cle 'artifact'). Resolution CORRECTE du dossier
-    par-version niche (entity_dir/<step>/publish/<versioned_name>/<fichier>), la ou l'addon
-    Blender scannait a tort des fichiers PLATS et ne trouvait donc jamais un publish deux-
-    phases (cf. resolve_open_target, fix op_open_context). Filtre aux layers USD composables
-    (_is_usd_layer) - un cache consommable/GLB n'est pas un fichier a ouvrir comme scene."""
+    """RELATIVE path (to the entity) of the step's latest 'complete' USD publish - two-phase
+    contract (step_publishes[step], key 'artifact'). CORRECT resolution of the nested
+    per-version folder (entity_dir/<step>/publish/<versioned_name>/<file>), where the Blender
+    addon wrongly scanned FLAT files and thus never found a two-phase
+    publish (see resolve_open_target, op_open_context fix). Filtered to composable USD layers
+    (_is_usd_layer) - a consumable cache/GLB is not a file to open as a scene."""
     entries = manifest.get(STEP_PUBLISHES_KEY, {}).get(step, [])
     complete = [e for e in entries
                 if e.get("status") == "complete" and e.get("artifact")
@@ -682,27 +682,27 @@ def _latest_step_publish_rel(manifest, step):
     return max(complete, key=lambda e: e.get("version", 0))["artifact"]
 
 
-# Extensions USD reconnues comme publish a plat legacy (publish_asset() deprecie ecrivait
-# <step>/publish/<name>_<step>_vNNN.<ext>). '.usdz' inclus (livrable) ; les autres = layers
-# composables. Un publish deux-phases est un DOSSIER, jamais un fichier -> jamais confondu.
+# USD extensions recognized as a legacy flat publish (the deprecated publish_asset() wrote
+# <step>/publish/<name>_<step>_vNNN.<ext>). '.usdz' included (deliverable); the others = composable
+# layers. A two-phase publish is a FOLDER, never a file -> never confused.
 _LEGACY_PUBLISH_EXTS = USD_LAYER_EXTENSIONS + (".usdz",)
 
 
 def list_publishes(project_root, entity_name, step, entity_type="asset"):
-    """API publique de LECTURE des publishes d'un step (la logique vit dans l'orchestrateur,
-    les consommateurs DCC/UI sont minces - principe 5). Ne leve JAMAIS pour un cas metier
-    (entite/step introuvable) : retourne []. Fusionne deux sources, sans doublon de version :
+    """Public READ API for a step's publishes (the logic lives in the orchestrator,
+    the DCC/UI consumers are thin - principle 5). NEVER raises for a business case
+    (entity/step not found): returns []. Merges two sources, with no version duplicate:
 
-    - **manifest-first** : contrat deux-phases (manifest['step_publishes'][step]). Chaque
-      entree est renvoyee telle quelle (copie) + enrichie 'abs_path' (chemin absolu de
-      'artifact', ou None) et 'exists' (bool). 'legacy'=False.
-    - **fallback fichiers plats legacy** : scan disque de <entity>/<step>/publish/ pour les
-      FICHIERS versionnes (pattern '_vNNN.<ext>' USD, cf. _LEGACY_PUBLISH_EXTS - un dossier
-      deux-phases a `f.is_file()` False, jamais capte). Entrees {version, status:'complete',
-      artifact (rel), abs_path, exists:True, legacy:True}. Un numero deja present cote
-      deux-phases n'est PAS ecrase (le contrat vivant prime).
+    - **manifest-first**: two-phase contract (manifest['step_publishes'][step]). Each
+      entry is returned as-is (copy) + enriched with 'abs_path' (absolute path of
+      'artifact', or None) and 'exists' (bool). 'legacy'=False.
+    - **legacy flat-file fallback**: disk scan of <entity>/<step>/publish/ for the
+      versioned FILES (pattern '_vNNN.<ext>' USD, see _LEGACY_PUBLISH_EXTS - a two-phase
+      folder has `f.is_file()` False, never caught). Entries {version, status:'complete',
+      artifact (rel), abs_path, exists:True, legacy:True}. A number already present on the
+      two-phase side is NOT overwritten (the live contract wins).
 
-    Retour trie par version croissante."""
+    Result sorted by ascending version."""
     project_root = Path(project_root)
     try:
         entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
@@ -713,7 +713,7 @@ def list_publishes(project_root, entity_name, step, entity_type="asset"):
     except (OSError, ValueError):
         manifest = {}
 
-    by_version = {}  # version -> entree enrichie
+    by_version = {}  # version -> enriched entry
 
     for e in manifest.get(STEP_PUBLISHES_KEY, {}).get(step, []):
         ver = e.get("version")
@@ -737,7 +737,7 @@ def list_publishes(project_root, entity_name, step, entity_type="asset"):
                 continue
             ver = int(m.group(1))
             if ver in by_version:
-                continue  # le deux-phases prime a version egale
+                continue  # the two-phase side wins on an equal version
             by_version[ver] = {
                 "version": ver,
                 "status": "complete",
@@ -751,26 +751,26 @@ def list_publishes(project_root, entity_name, step, entity_type="asset"):
 
 
 # ---------------------------------------------------------------------------
-# Resolution de vignette d'entite - POINT UNIQUE (principe 5).
+# Entity thumbnail resolution - SINGLE POINT (principle 5).
 #
-# Vit ici, dans l'orchestrateur, et pas dans un consommateur : la web UI (ylos_ui) ET le
-# panel Blender ET un futur panel Houdini/n8n ont exactement le meme besoin. Ecrire la
-# cascade dans le serveur HTTP l'aurait rendue invisible aux DCC, qui l'auraient
-# reimplementee - c'est precisement le motif de derive que le principe 5 interdit (meme
-# raison que refresh_entity_root ou resolve_entity).
+# Lives here, in the orchestrator, and not in a consumer: the web UI (ylos_ui) AND the
+# Blender panel AND a future Houdini/n8n panel have exactly the same need. Writing the
+# cascade in the HTTP server would have made it invisible to the DCCs, which would have
+# reimplemented it - this is exactly the drift pattern that principle 5 forbids (same
+# reason as refresh_entity_root or resolve_entity).
 # ---------------------------------------------------------------------------
 
 THUMB_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 ENTITY_PREVIEW_NAME = "preview.png"
 
-# '<stem>_v<NNN>_thumb.<ext>' - convention posee par le save WIP Blender
+# '<stem>_v<NNN>_thumb.<ext>' - convention set by the Blender WIP save
 # (plugins/blender/core/thumbnails.py::get_thumb_path).
 _WIP_THUMB_RE = re.compile(r"_v(\d{3})_thumb\.(?:png|jpg|jpeg|webp)$", re.IGNORECASE)
 
 
 def _latest_publish_thumb_rel(manifest):
-    """Thumb du publish 'complete' de version max, tous steps confondus (contrat deux-phases).
-    Chemin relatif a l'entite, ou None."""
+    """Thumb of the max-version 'complete' publish, across all steps (two-phase contract).
+    Path relative to the entity, or None."""
     best = None  # (version, rel)
     for entries in (manifest.get("step_publishes") or {}).values():
         for e in entries:
@@ -785,9 +785,9 @@ def _latest_publish_thumb_rel(manifest):
 
 
 def _latest_wip_thumb_rel(entity_dir):
-    """Vignette du WIP le plus recent, tous steps confondus ('<step>/wip/<stem>_v<NNN>_thumb.png',
-    ecrite par ylos.save_wip). Tri par (mtime, version) : le WIP sauve en dernier represente le
-    mieux l'etat courant, la version departage a mtime egal. Relatif a l'entite, ou None."""
+    """Thumbnail of the most recent WIP, across all steps ('<step>/wip/<stem>_v<NNN>_thumb.png',
+    written by ylos.save_wip). Sorted by (mtime, version): the last-saved WIP best represents
+    the current state, version breaks ties on an equal mtime. Relative to the entity, or None."""
     best = None  # (mtime, version, rel)
     try:
         step_dirs = sorted(d for d in entity_dir.iterdir() if d.is_dir())
@@ -817,27 +817,27 @@ def _latest_wip_thumb_rel(entity_dir):
 
 
 def resolve_entity_thumbnail(project_root, entity_name):
-    """Vignette representative d'une entite (asset/set/shot), pour TOUT consommateur d'UI.
+    """Representative thumbnail of an entity (asset/set/shot), for ANY UI consumer.
 
-    Retourne {"rel": <chemin relatif a l'entite ou None>, "path": <chemin absolu ou None>,
-    "source": "custom"|"publish"|"legacy"|"wip"|"none"}. Ne leve JAMAIS pour un cas metier
-    (meme convention que resolve_entity / pin_web_asset) : entite absente -> source 'none'.
+    Returns {"rel": <path relative to the entity or None>, "path": <absolute path or None>,
+    "source": "custom"|"publish"|"legacy"|"wip"|"none"}. NEVER raises for a business case
+    (same convention as resolve_entity / pin_web_asset): entity absent -> source 'none'.
 
-    Cascade, du plus intentionnel au plus automatique :
-      1. custom  - '<entite>/preview.png', override humain explicite (pattern Prism
-                   'set preview'). Gagne toujours : un geste humain prime sur une heuristique.
-      2. publish - dernier publish 'complete' du contrat deux-phases (aucun scan disque, le
-                   manifeste porte deja le chemin).
-      3. legacy  - scan plat de '<step>/publish/*.png' (projets pre-deux-phases).
-      4. wip     - derniere vignette de WIP. Comble le trou UX principal : entre la CREATION
-                   d'une entite et son premier publish reussi, il n'existe aucun thumb de
-                   publish - l'entite s'affichait donc en placeholder gris alors qu'une
-                   preview de son WIP existait deja sur disque. C'est l'etat le plus frequent
-                   pour un artiste : ce qu'il vient de creer n'est pas encore publie.
+    Cascade, from most intentional to most automatic:
+      1. custom  - '<entity>/preview.png', explicit human override (Prism
+                   'set preview' pattern). Always wins: a human gesture beats a heuristic.
+      2. publish - latest 'complete' publish of the two-phase contract (no disk scan, the
+                   manifest already carries the path).
+      3. legacy  - flat scan of '<step>/publish/*.png' (pre-two-phase projects).
+      4. wip     - latest WIP thumbnail. Fills the main UX gap: between the CREATION
+                   of an entity and its first successful publish, no publish thumb
+                   exists - the entity therefore showed as a gray placeholder while a
+                   preview of its WIP already existed on disk. This is the most frequent state
+                   for an artist: what they just created is not published yet.
 
-    La SOURCE fait partie du contrat : un thumb de WIP n'engage pas la meme confiance qu'un
-    publish, un consommateur doit pouvoir le signaler plutot que de laisser croire a un
-    publie."""
+    The SOURCE is part of the contract: a WIP thumb does not carry the same confidence as a
+    publish, a consumer must be able to flag it rather than let it pass for a
+    published one."""
     none = {"rel": None, "path": None, "source": "none"}
     try:
         entity_dir, manifest_path = _find_asset_entity(Path(project_root), entity_name)
@@ -886,11 +886,11 @@ def resolve_entity_thumbnail(project_root, entity_name):
 
 
 def latest_publish_artifact(project_root, entity_name, step, entity_type="asset"):
-    """Entree publish 'complete' de version max pour le step (deux-phases + legacy fusionnes,
-    cf. list_publishes), enrichie 'abs_path'/'exists'/'legacy'. dict ou None (aucun publish
-    'complete'). Ne leve jamais pour un cas metier. Generalisation disque-aware de
-    _latest_step_publish_rel() (qui, lui, opere sur un manifeste deja en memoire et filtre
-    aux seuls layers USD pour la composition/ouverture)."""
+    """Max-version 'complete' publish entry for the step (two-phase + legacy merged,
+    see list_publishes), enriched with 'abs_path'/'exists'/'legacy'. dict or None (no
+    'complete' publish). Never raises for a business case. Disk-aware generalization of
+    _latest_step_publish_rel() (which operates on an already-in-memory manifest and filters
+    to USD layers only for composition/opening)."""
     complete = [e for e in list_publishes(project_root, entity_name, step, entity_type)
                 if e.get("status") == "complete"]
     if not complete:
@@ -899,30 +899,30 @@ def latest_publish_artifact(project_root, entity_name, step, entity_type="asset"
 
 
 def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None):
-    """Resout QUEL fichier un DCC doit ouvrir pour une entite+step. La logique vit dans
-    l'orchestrateur (principe 5) : reutilisable par Blender ET Houdini, l'addon ne fait que
-    consommer. NE LEVE JAMAIS pour un cas metier (projet/entite/step introuvable, valeur
-    d'enum inconnue lue au manifeste, aucun fichier candidat) : renvoie un dict exists=False
-    avec 'reason'. Les seules exceptions possibles seraient des bugs de programmation.
+    """Resolve WHICH file a DCC must open for an entity+step. The logic lives in
+    the orchestrator (principle 5): reusable by Blender AND Houdini, the addon only
+    consumes. NEVER raises for a business case (project/entity/step not found, unknown
+    enum value read from the manifest, no candidate file): returns a dict exists=False
+    with 'reason'. The only possible exceptions would be programming bugs.
 
-    Parametres :
-      entity_name  : nom d'entite (asset/set/shot) - localise via _find_asset_entity.
-      dcc          : DCC cible ('blender' par defaut). Seul 'blender' resout des WIP .blend.
-      step         : step vise ; None -> premier step declare au manifeste (fallback).
-      project_root : racine projet ; None -> projet actif (read_active_project(), contrat
+    Parameters:
+      entity_name  : entity name (asset/set/shot) - located via _find_asset_entity.
+      dcc          : target DCC ('blender' by default). Only 'blender' resolves .blend WIPs.
+      step         : targeted step; None -> first step declared in the manifest (fallback).
+      project_root : project root; None -> active project (read_active_project(), contract
                      ~/.ylos/active_project).
 
-    Ordre de resolution (dcc='blender') :
-      1. dernier WIP .blend du step                                    -> kind='wip'
-      2. scene par defaut de l'entite = son root d'assemblage
-         (shot_root.usda / asset_root.usda, qui reference deja les latest
-         publishes en subLayers). Pas de template .blend par step au
-         scaffold : le root compose est la scene par defaut a ouvrir.       -> kind='scene_default'
-      3. dernier publish USD 'complete' du step (chemin niche correct)   -> kind='publish'
-      4. echec explicite                                                -> exists=False
+    Resolution order (dcc='blender'):
+      1. latest .blend WIP of the step                                 -> kind='wip'
+      2. entity's default scene = its assembly root
+         (shot_root.usda / asset_root.usda, which already references the latest
+         publishes as subLayers). No per-step .blend template at
+         scaffold: the composed root is the default scene to open.         -> kind='scene_default'
+      3. latest 'complete' USD publish of the step (correct nested path) -> kind='publish'
+      4. explicit failure                                               -> exists=False
 
-    Retour : {"path": str|None, "kind": "wip"|"scene_default"|"publish"|None,
-              "step": str|None, "exists": bool, "reason": str (present si exists=False)}."""
+    Return: {"path": str|None, "kind": "wip"|"scene_default"|"publish"|None,
+              "step": str|None, "exists": bool, "reason": str (present if exists=False)}."""
     if project_root is None:
         project_root = read_active_project()
     if project_root is None:
@@ -935,9 +935,9 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
     except FileNotFoundError as exc:
         return {"path": None, "kind": None, "step": step, "exists": False, "reason": str(exc)}
 
-    # Manifeste lu de facon TOLERANTE : une valeur d'enum inconnue (prod_type/type legacy,
-    # ex 'XR', 'ZZ_UNKNOWN') ne doit jamais faire lever - on ne valide rien, on resout des
-    # chemins. Un manifeste illisible degrade proprement (dict vide).
+    # Manifest read TOLERANTLY: an unknown enum value (legacy prod_type/type,
+    # e.g. 'XR', 'ZZ_UNKNOWN') must never raise - we validate nothing, we resolve
+    # paths. An unreadable manifest degrades cleanly (empty dict).
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -946,23 +946,23 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
     steps = manifest.get("steps", [])
     if step is None:
         step = steps[0] if steps else None
-    # step peut rester None (manifeste sans steps / corrompu) : les branches WIP et publish
-    # sont step-dependantes et donc sautees, mais la scene par defaut (root d'assemblage,
-    # step-agnostique) reste resoluble -> degradation propre, jamais d'exception.
+    # step may remain None (manifest without steps / corrupted): the WIP and publish
+    # branches are step-dependent and therefore skipped, but the default scene (assembly
+    # root, step-agnostic) stays resolvable -> clean degradation, never an exception.
 
-    # 1. dernier WIP (Blender uniquement, step requis)
+    # 1. latest WIP (Blender only, step required)
     if dcc == "blender" and step:
         wip, _wver = _latest_wip(entity_dir, step)
         if wip is not None:
             return {"path": str(wip), "kind": "wip", "step": step, "exists": True}
 
-    # 2. scene par defaut = root d'assemblage de l'entite (step-agnostique)
+    # 2. default scene = entity's assembly root (step-agnostic)
     root_name = SHOT_ROOT_NAME if entity_type == "shot" else ASSET_ROOT_NAME
     default_path = entity_dir / root_name
     if default_path.is_file():
         return {"path": str(default_path), "kind": "scene_default", "step": step, "exists": True}
 
-    # 3. dernier publish USD du step (chemin niche correct, jamais un scan de fichiers plats)
+    # 3. latest USD publish of the step (correct nested path, never a flat-file scan)
     if step:
         rel = _latest_step_publish_rel(manifest, step)
         if rel is not None:
@@ -970,15 +970,15 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
             if pub.is_file():
                 return {"path": str(pub), "kind": "publish", "step": step, "exists": True}
 
-    # 4. echec explicite (cas metier, pas une exception)
+    # 4. explicit failure (business case, not an exception)
     return {"path": None, "kind": None, "step": step, "exists": False,
             "reason": (f"aucun WIP pour le step {step!r}, ni scene par defaut ({root_name}), "
                        f"ni publish USD pour '{entity_name}'")}
 
 
 def _project_steps(project_dir, entity_type):
-    """Steps par defaut pour cette famille : pipeline du manifeste projet si lisible,
-    sinon defauts du module."""
+    """Default steps for this family: pipeline from the project manifest if readable,
+    otherwise the module defaults."""
     key = _STEPS_KEY[entity_type]
     try:
         steps = read_manifest(project_dir).get("pipeline", {}).get(key)
@@ -990,13 +990,13 @@ def _project_steps(project_dir, entity_type):
 
 
 # --------------------------------------------------------------------------------------
-# Creation - projet
+# Creation - project
 # --------------------------------------------------------------------------------------
 
 def create(name, root=None, cache=None, force=False, prod_type="FILM", display_name=None):
-    """Cree un projet complet (coquille asset-centric). Retourne {name, source, cache,
-    manifest}. Non destructif : 'force' ne fait que lever le garde-fou d'existence, il ne
-    supprime jamais rien (les dossiers sont crees avec exist_ok)."""
+    """Create a complete project (asset-centric shell). Returns {name, source, cache,
+    manifest}. Non-destructive: 'force' only lifts the existence guard, it never
+    deletes anything (folders are created with exist_ok)."""
     _validate_segment(name)
 
     root_dir = resolve_root(root)
@@ -1010,22 +1010,22 @@ def create(name, root=None, cache=None, force=False, prod_type="FILM", display_n
             f"Le projet existe deja : {source} (passer force=True pour forcer)"
         )
 
-    # 1. arborescence source (externe, permanente)
+    # 1. source tree (external, permanent)
     _make_tree(source, SOURCE_TREE)
-    # 2. arborescence cache (tier separe, disque interne)
+    # 2. cache tree (separate tier, internal disk)
     _make_tree(cache_dir, CACHE_TREE)
 
-    config_dir = source / PIPELINE_DIR   # cree par SOURCE_TREE
+    config_dir = source / PIPELINE_DIR   # created by SOURCE_TREE
 
-    # 3. manifeste (source de verite)
+    # 3. manifest (source of truth)
     manifest = build_manifest(name, display_name=display_name, prod_type=prod_type)
     validate_manifest(manifest)
     manifest_path = write_manifest(config_dir, manifest)
 
-    # 4. marqueur anti-indexation Spotlight (sur la source, lourde)
+    # 4. Spotlight anti-indexing marker (on the heavy source)
     (source / SPOTLIGHT_MARKER).touch()
 
-    # 5. .gitignore (cache + rendus + geo lourde hors Git)
+    # 5. .gitignore (cache + renders + heavy geo outside Git)
     (source / GITIGNORE_NAME).write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
     return {
@@ -1037,21 +1037,21 @@ def create(name, root=None, cache=None, force=False, prod_type="FILM", display_n
 
 
 # --------------------------------------------------------------------------------------
-# Creation - entite (asset / set / shot)
+# Creation - entity (asset / set / shot)
 # --------------------------------------------------------------------------------------
 
 def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
                  steps=None, force=False):
-    """Scaffolde une entite dans un projet existant. Cree <famille>/<name>/ avec un dossier
-    par step (+ wip/ + publish/), un manifest.json et, pour asset/set, un stub asset_root.usda.
-    Retourne {name, entity_type, path, manifest, asset_root}. Non destructif."""
+    """Scaffold an entity in an existing project. Creates <family>/<name>/ with one folder
+    per step (+ wip/ + publish/), a manifest.json and, for asset/set, an asset_root.usda stub.
+    Returns {name, entity_type, path, manifest, asset_root}. Non-destructive."""
     project_dir = Path(project_dir)
     if entity_type not in ENTITY_DIR:
         raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
     _validate_segment(name)
-    # Validation de nommage a la creation - point unique (cf. validate_entity_name) : couvre
-    # web UI, Blender, CLI, futur. _validate_segment protege le chemin, ceci protege la
-    # convention metier TYPE_Nom_Variant.
+    # Name validation at creation - single point (see validate_entity_name): covers
+    # web UI, Blender, CLI, future. _validate_segment protects the path, this protects the
+    # TYPE_Name_Variant business convention.
     validate_entity_name(name, entity_type, asset_type)
 
     if steps is None:
@@ -1063,19 +1063,19 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
             f"L'entite existe deja : {entity_dir} (passer force=True pour forcer)"
         )
 
-    # 1. dossiers de step generes depuis les steps declares : wip/ (travail DCC) +
-    #    publish/ (sorties USD versionnees), comme le workflow reel.
+    # 1. step folders generated from the declared steps: wip/ (DCC work) +
+    #    publish/ (versioned USD outputs), like the real workflow.
     entity_dir.mkdir(parents=True, exist_ok=True)
     for step in steps:
         (entity_dir / step / "wip").mkdir(parents=True, exist_ok=True)
         (entity_dir / step / "publish").mkdir(parents=True, exist_ok=True)
 
-    # 2. manifeste d'entite
+    # 2. entity manifest
     manifest = build_asset_manifest(name, entity_type, asset_type, steps)
     manifest_path = entity_dir / ASSET_MANIFEST_NAME
     _atomic_write_json(manifest_path, manifest)
 
-    # 3. stub d'assemblage USD (asset/set ; un shot compose differemment)
+    # 3. USD assembly stub (asset/set; a shot composes differently)
     asset_root_path = None
     if entity_type in ("asset", "set"):
         asset_root_path = entity_dir / ASSET_ROOT_NAME
@@ -1091,26 +1091,26 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
 
 
 # --------------------------------------------------------------------------------------
-# Publish - versionner un fichier dans un step d'entite
+# Publish - version a file into an entity step
 # --------------------------------------------------------------------------------------
 
 def publish_asset(project_root, asset_name, step, source_file):
-    """DEPRECIE - publie source_file dans <asset>/<step>/publish/ avec versioning
-    automatique, en ecriture directe (pas de staging, pas de thumbnail requis).
+    """DEPRECATED - publishes source_file into <asset>/<step>/publish/ with automatic
+    versioning, direct write (no staging, no thumbnail required).
 
-    Remplace par le contrat deux-phases allocate_publish_version()/finalize_publish_version()
-    (kind=<step>), adopte par tous les bridges DCC (Houdini LOP, Blender USD/GLB) - garantit
-    un thumbnail et un commit atomique via staging_dir. Conserve pour compatibilite
-    (aucun appelant restant dans ce repo depuis la migration Blender), ne pas utiliser pour
-    du nouveau code.
+    Replaced by the two-phase contract allocate_publish_version()/finalize_publish_version()
+    (kind=<step>), adopted by all DCC bridges (Houdini LOP, Blender USD/GLB) - guarantees
+    a thumbnail and an atomic commit via staging_dir. Kept for compatibility
+    (no caller remaining in this repo since the Blender migration), do not use for
+    new code.
 
-    - Scanne manifest.publishes[step] pour determiner la prochaine version (v001, v002...).
-    - Copie source_file -> <step>/publish/<asset>_<step>_v<NNN><ext> (jamais d'ecrasement).
-    - Met a jour manifest.json (publishes[step] et modified_utc).
-    - Reconstruit asset_root.usda (subLayers) pour les entites asset/set.
+    - Scans manifest.publishes[step] to determine the next version (v001, v002...).
+    - Copies source_file -> <step>/publish/<asset>_<step>_v<NNN><ext> (never overwrites).
+    - Updates manifest.json (publishes[step] and modified_utc).
+    - Rebuilds asset_root.usda (subLayers) for asset/set entities.
 
-    Retourne {name, step, version, publish_path, manifest, asset_root}.
-    Non-destructif : leve FileExistsError si la version cible existe deja.
+    Returns {name, step, version, publish_path, manifest, asset_root}.
+    Non-destructive: raises FileExistsError if the target version already exists.
     """
     import warnings
     warnings.warn(
@@ -1126,7 +1126,7 @@ def publish_asset(project_root, asset_name, step, source_file):
     if not source_file.is_file():
         raise FileNotFoundError(f"Fichier source introuvable : {source_file}")
 
-    # Localiser l'entite dans assets/ sets/ shots/
+    # Locate the entity in assets/ sets/ shots/
     entity_dir = None
     for family in ("assets", "sets", "shots"):
         candidate = project_root / family / asset_name
@@ -1140,10 +1140,10 @@ def publish_asset(project_root, asset_name, step, source_file):
 
     manifest_path = entity_dir / ASSET_MANIFEST_NAME
 
-    # Section critique : lecture manifeste -> allocation de version -> copie -> ecriture
-    # manifeste -> reconstruction asset_root.usda. Verrouillee de bout en bout (fcntl.flock)
-    # pour qu'un second publish concurrent ne puisse jamais lire un 'publishes' perime et
-    # entrer en collision sur le meme numero de version (cf. acquire_lock).
+    # Critical section: read manifest -> allocate version -> copy -> write
+    # manifest -> rebuild asset_root.usda. Locked end-to-end (fcntl.flock)
+    # so a second concurrent publish can never read a stale 'publishes' and
+    # collide on the same version number (see acquire_lock).
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -1153,11 +1153,11 @@ def publish_asset(project_root, asset_name, step, source_file):
                 f"Step '{step}' invalide pour '{asset_name}' (steps declares : {valid_steps})."
             )
 
-        # Prochain numero de version
+        # Next version number
         existing = manifest.get("publishes", {}).get(step, [])
         next_ver = max((_ver(p) for p in existing), default=0) + 1
 
-        # Chemin cible versionne
+        # Versioned target path
         ext = source_file.suffix
         versioned_name = f"{asset_name}_{step}_v{next_ver:03d}{ext}"
         publish_dir = entity_dir / step / "publish"
@@ -1171,14 +1171,14 @@ def publish_asset(project_root, asset_name, step, source_file):
 
         shutil.copy2(source_file, target)
 
-        # Mettre a jour manifest.json
+        # Update manifest.json
         publishes = manifest.setdefault("publishes", {})
         publishes.setdefault(step, [])
         publishes[step].append(f"{step}/publish/{versioned_name}")
         manifest["modified_utc"] = _now()
         _atomic_write_json(manifest_path, manifest)
 
-        # Reconstruire asset_root.usda (asset/set uniquement)
+        # Rebuild asset_root.usda (asset/set only)
         asset_root_path = None
         entity_type = manifest.get("entity_type", "asset")
         if entity_type in ("asset", "set"):
@@ -1198,26 +1198,26 @@ def publish_asset(project_root, asset_name, step, source_file):
 
 
 # --------------------------------------------------------------------------------------
-# Publish LOP (Solaris) - version d'asset complete (layer USD + thumb), staging + replace
+# LOP publish (Solaris) - complete asset version (USD layer + thumb), staging + replace
 # --------------------------------------------------------------------------------------
 
 def _suggested_entity_name(name, sub_type):
-    """Propose un nom conforme a partir d'un nom brut invalide : capitalise, retire un
-    eventuel prefixe existant (mal forme), variant 'Default' par defaut."""
+    """Suggest a compliant name from an invalid raw name: capitalizes, strips a
+    possible existing (malformed) prefix, 'Default' variant by default."""
     base = name.split("_")[-1] if "_" in name else name
     base = base[:1].upper() + base[1:] if base else base
     return f"{sub_type}_{base}_Default"
 
 
 def validate_entity_name(name, entity_type, sub_type):
-    """Valide 'name' contre la convention TYPE_Nom_Variant (TYPE = sub_type, restreint a la
-    liste valide pour 'entity_type' - asset/set/shot, cf. _TYPES_BY_ENTITY). Match par
-    prefixe exact (et non un split('_') naif) car certains types contiennent deja un
-    underscore (FX_ELEMENT) : 'FX_ELEMENT_Drone_Default' a 4 segments '_', pas 3.
+    """Validate 'name' against the TYPE_Name_Variant convention (TYPE = sub_type, restricted to
+    the valid list for 'entity_type' - asset/set/shot, see _TYPES_BY_ENTITY). Match by
+    exact prefix (not a naive split('_')) because some types already contain an
+    underscore (FX_ELEMENT): 'FX_ELEMENT_Drone_Default' has 4 '_' segments, not 3.
 
-    Point unique de validation nommage, appele par create_asset() a la creation (couvre web
-    UI, Blender, CLI, futur) - et par allocate_publish_version() au publish LOP (contrat
-    historique inchange, cf. validate_publish_asset_name)."""
+    Single name-validation point, called by create_asset() at creation (covers web
+    UI, Blender, CLI, future) - and by allocate_publish_version() at LOP publish (unchanged
+    historical contract, see validate_publish_asset_name)."""
     valid_types = _TYPES_BY_ENTITY.get(entity_type)
     if valid_types is None:
         raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
@@ -1241,15 +1241,15 @@ def validate_entity_name(name, entity_type, sub_type):
 
 
 def validate_publish_asset_name(asset_name, asset_type):
-    """Alias historique de validate_entity_name(asset_name, 'asset', asset_type) - conserve
-    pour compatibilite (Houdini HDA, tests, allocate_publish_version)."""
+    """Historical alias of validate_entity_name(asset_name, 'asset', asset_type) - kept
+    for compatibility (Houdini HDA, tests, allocate_publish_version)."""
     return validate_entity_name(asset_name, "asset", asset_type)
 
 
 def _find_asset_entity(project_root, asset_name):
-    """Localise une entite deja creee (assets|sets|shots/<name>/manifest.json), quelle que
-    soit sa famille (meme scan que publish_asset()). Un publish (LOP ou par step) n'est
-    jamais createur d'entite : create_asset() doit avoir ete appele avant."""
+    """Locate an already-created entity (assets|sets|shots/<name>/manifest.json), whatever
+    its family (same scan as publish_asset()). A publish (LOP or per-step) is
+    never an entity creator: create_asset() must have been called first."""
     project_root = Path(project_root)
     for family in ENTITY_DIR.values():
         candidate = project_root / family / asset_name
@@ -1263,15 +1263,15 @@ def _find_asset_entity(project_root, asset_name):
 
 
 def resolve_entity(project_root, name):
-    """Resout une entite deja creee par son nom, quelle que soit sa famille (assets/sets/
-    shots) - wrapper PUBLIC de _find_asset_entity pour les consommateurs DCC (le State
-    Manager Blender doit connaitre la famille d'une entite ciblee sans la stocker sur le
-    state ; un bridge n8n en aura aussi besoin). Principe 5 : la resolution d'entite vit
-    dans l'orchestrateur, pas dans le plugin. Ne leve JAMAIS pour un cas metier : retourne
-    None si l'entite est introuvable OU son manifeste illisible. Retour :
-    {"name","family","entity_type","dir","manifest"} - 'family' = cle ENTITY_DIR
-    ('asset'|'set'|'shot', pour is_step_valid_for_context), 'entity_type' = sous-type
-    (CHARACTER/PROP/...) du manifeste."""
+    """Resolve an already-created entity by its name, whatever its family (assets/sets/
+    shots) - PUBLIC wrapper of _find_asset_entity for DCC consumers (the Blender State
+    Manager must know the family of a targeted entity without storing it on the
+    state; an n8n bridge will need it too). Principle 5: entity resolution lives
+    in the orchestrator, not in the plugin. NEVER raises for a business case: returns
+    None if the entity is not found OR its manifest is unreadable. Return:
+    {"name","family","entity_type","dir","manifest"} - 'family' = ENTITY_DIR key
+    ('asset'|'set'|'shot', for is_step_valid_for_context), 'entity_type' = sub-type
+    (CHARACTER/PROP/...) from the manifest."""
     try:
         entity_dir, manifest_path = _find_asset_entity(project_root, name)
     except FileNotFoundError:
@@ -1282,7 +1282,7 @@ def resolve_entity(project_root, name):
         return None
     family = manifest.get("entity_type", "asset")
     if family not in ENTITY_DIR:
-        # Manifeste incoherent -> le dossier disque fait foi (principe : source lisible).
+        # Inconsistent manifest -> the disk folder is authoritative (principle: readable source).
         parent = entity_dir.parent.name
         family = next((k for k, v in ENTITY_DIR.items() if v == parent), "asset")
     return {
@@ -1295,10 +1295,10 @@ def resolve_entity(project_root, name):
 
 
 def publish_version_from_dir(final_dir):
-    """Extrait le numero de version d'un final_dir retourne par allocate_publish_version()
-    (ex: 'CHARACTER_Lina_Default_lop_v003' -> 3). Distinct de _ver() : un final_dir est un
-    nom de repertoire sans extension (le numero termine le nom), _ver() attend un nom de
-    fichier versionne avec extension (cf. publish_asset)."""
+    """Extract the version number of a final_dir returned by allocate_publish_version()
+    (e.g. 'CHARACTER_Lina_Default_lop_v003' -> 3). Distinct from _ver(): a final_dir is a
+    directory name without extension (the number ends the name), _ver() expects a versioned
+    file name with an extension (see publish_asset)."""
     m = _DIR_VER_RE.search(Path(final_dir).name)
     if not m:
         raise ValueError(f"final_dir ne contient pas de suffixe de version : {final_dir!r}")
@@ -1306,39 +1306,39 @@ def publish_version_from_dir(final_dir):
 
 
 def _publish_dirs(entity_dir, kind):
-    """Sous-arbre de publish pour 'kind' : 'lop' (whole-asset LOP Houdini, historique) ou un
-    nom de step (Blender/DCC par step, ex 'modeling') - reutilise entity_dir/<step> deja
-    scaffolde par create_asset() (wip/, publish/). Retourne (publish_root, staging_root)."""
+    """Publish subtree for 'kind': 'lop' (whole-asset Houdini LOP, historical) or a
+    step name (per-step Blender/DCC, e.g. 'modeling') - reuses entity_dir/<step> already
+    scaffolded by create_asset() (wip/, publish/). Returns (publish_root, staging_root)."""
     base = entity_dir / (LOP_DIR_NAME if kind == "lop" else kind)
     return base / LOP_PUBLISH_DIR_NAME, base / LOP_STAGING_DIR_NAME
 
 
 def _publish_entries(manifest, kind):
-    """Liste des entrees de version pour 'kind' dans le manifeste (creee si absente).
-    kind='lop' -> manifest[LOP_PUBLISHES_KEY] (liste plate, contrat historique inchange).
-    Tout autre kind -> manifest[STEP_PUBLISHES_KEY][kind] (dict step -> liste, memes
-    entrees) - cle distincte pour ne jamais collisionner avec 'publishes' (legacy)."""
+    """List of version entries for 'kind' in the manifest (created if absent).
+    kind='lop' -> manifest[LOP_PUBLISHES_KEY] (flat list, unchanged historical contract).
+    Any other kind -> manifest[STEP_PUBLISHES_KEY][kind] (dict step -> list, same
+    entries) - distinct key to never collide with 'publishes' (legacy)."""
     if kind == "lop":
         return manifest.setdefault(LOP_PUBLISHES_KEY, [])
     return manifest.setdefault(STEP_PUBLISHES_KEY, {}).setdefault(kind, [])
 
 
 def allocate_publish_version(project_root, asset_name, asset_type=None, comment=None, kind="lop"):
-    """Reserve atomiquement (fcntl.flock) le prochain numero de version de publish pour un
-    asset existant, et cree un repertoire de staging vide. Ne touche a aucun artefact :
-    l'appelant (callback HDA ou operateur Blender) les ecrit dans staging_dir, puis appelle
-    finalize_publish_version() pour committer (os.replace atomique, meme filesystem que
-    staging_dir car les deux vivent sous entity_dir/<kind>/) et finaliser le manifeste.
+    """Atomically reserve (fcntl.flock) the next publish version number for an
+    existing asset, and create an empty staging directory. Touches no artifact:
+    the caller (HDA callback or Blender operator) writes them into staging_dir, then calls
+    finalize_publish_version() to commit (atomic os.replace, same filesystem as
+    staging_dir since both live under entity_dir/<kind>/) and finalize the manifest.
 
-    'kind' (mot-cle, defaut 'lop' pour compatibilite Houdini) : 'lop' pour un publish LOP
-    (instantane complet, hors taxonomie de steps - contrat historique inchange, 'asset_type'
-    requis + valide via validate_publish_asset_name) ; ou un nom de step (ex 'modeling',
-    'lookdev') pour un publish DCC par step (Blender USD/GLB...) - le nommage est deja
-    garanti par create_asset() (cf. validate_entity_name), pas de revalidation ici et
-    'asset_type' est ignore.
+    'kind' (keyword, default 'lop' for Houdini compatibility): 'lop' for a LOP publish
+    (complete snapshot, outside the step taxonomy - unchanged historical contract, 'asset_type'
+    required + validated via validate_publish_asset_name); or a step name (e.g. 'modeling',
+    'lookdev') for a per-step DCC publish (Blender USD/GLB...) - naming is already
+    guaranteed by create_asset() (see validate_entity_name), no revalidation here and
+    'asset_type' is ignored.
 
-    Retourne (staging_dir, final_dir) en pathlib.Path. staging_dir existe deja (vide) ;
-    final_dir n'existe pas encore (c'est la cible du futur replace).
+    Returns (staging_dir, final_dir) as pathlib.Path. staging_dir already exists (empty);
+    final_dir does not exist yet (it is the target of the future replace).
     """
     if kind == "lop":
         validate_publish_asset_name(asset_name, asset_type)
@@ -1368,14 +1368,14 @@ def allocate_publish_version(project_root, asset_name, asset_type=None, comment=
         if final_dir.exists():
             raise FileExistsError(f"Version deja presente, non ecrasee : {final_dir}")
 
-        # publish_root doit exister pour que le futur os.replace() ait un parent valide ;
-        # final_dir lui-meme ne doit PAS exister (c'est la cible du replace).
+        # publish_root must exist so the future os.replace() has a valid parent;
+        # final_dir itself must NOT exist (it is the target of the replace).
         publish_root.mkdir(parents=True, exist_ok=True)
         staging_dir.mkdir(parents=True, exist_ok=False)
 
-        # Reservation : entree 'pending' pour bloquer toute reattribution de ce numero tant
-        # que finalize_publish_version() n'a pas commit (sinon deux publishes concurrents
-        # pourraient tous deux calculer le meme next_ver).
+        # Reservation: 'pending' entry to block any reassignment of this number while
+        # finalize_publish_version() has not committed (otherwise two concurrent publishes
+        # could both compute the same next_ver).
         existing.append({
             "version": next_ver,
             "status": "pending",
@@ -1389,14 +1389,14 @@ def allocate_publish_version(project_root, asset_name, asset_type=None, comment=
 
 
 def _missing_artifacts(staging_dir, expected_artifacts):
-    """Verifie que chaque entree de expected_artifacts existe et est non-vide dans staging_dir.
-    Une entree avec un '.' est un nom exact (ex: 'thumb.png') - branche PRIORITAIRE, jamais
-    interpretee comme dossier. Une entree sans '.' est soit un stem d'artefact (layer USD, GLB
-    ou cache .vdb/.bgeo.sc/.abc), matchee contre PUBLISH_ARTIFACT_EXTENSIONS (jamais d'extension
-    supposee a l'avance - Apprentice ecrit '.usdnc', commerciale '.usd'/'.usdc'/'.usda', Blender
-    '.glb'), soit un dossier de sequence (sim multi-frames) - accepte s'il existe et est non-vide.
+    """Check that each entry of expected_artifacts exists and is non-empty in staging_dir.
+    An entry with a '.' is an exact name (e.g. 'thumb.png') - PRIORITY branch, never
+    interpreted as a folder. An entry without a '.' is either an artifact stem (USD layer, GLB
+    or cache .vdb/.bgeo.sc/.abc), matched against PUBLISH_ARTIFACT_EXTENSIONS (no extension
+    assumed in advance - Apprentice writes '.usdnc', commercial '.usd'/'.usdc'/'.usda', Blender
+    '.glb'), or a sequence folder (multi-frame sim) - accepted if it exists and is non-empty.
 
-    Retourne la liste des entrees manquantes/vides (liste vide = tout est present)."""
+    Returns the list of missing/empty entries (empty list = everything present)."""
     missing = []
     for artifact in expected_artifacts:
         if "." in artifact:
@@ -1418,25 +1418,25 @@ def _missing_artifacts(staging_dir, expected_artifacts):
 
 def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, version,
                              expected_artifacts, comment=None):
-    """Commit atomique d'un publish prealablement reserve par allocate_publish_version() :
-    os.replace(staging_dir, final_dir) - point de commit unique pour TOUT ce que le staging
-    contient (artefact + thumb.png) - puis mise a jour du manifeste sous flock (entree
-    'pending' -> 'complete'). A appeler une fois que l'appelant (callback HDA, operateur
-    Blender) a ecrit l'artefact et le thumbnail dans staging_dir.
+    """Atomic commit of a publish previously reserved by allocate_publish_version():
+    os.replace(staging_dir, final_dir) - single commit point for EVERYTHING the staging
+    contains (artifact + thumb.png) - then manifest update under flock (entry
+    'pending' -> 'complete'). To be called once the caller (HDA callback, Blender
+    operator) has written the artifact and the thumbnail into staging_dir.
 
-    'kind' (lop ou nom de step) n'est PAS un parametre separe : il est retrouve depuis la
-    structure de final_dir (entity_dir/<kind>/publish/<versioned_name>, cf.
-    allocate_publish_version/_publish_dirs) - signature inchangee pour ne pas casser les
-    appelants existants (build_publish_hda.py, test_publish_hda_e2e.py).
+    'kind' (lop or step name) is NOT a separate parameter: it is recovered from the
+    structure of final_dir (entity_dir/<kind>/publish/<versioned_name>, see
+    allocate_publish_version/_publish_dirs) - signature unchanged so as not to break existing
+    callers (build_publish_hda.py, test_publish_hda_e2e.py).
 
-    expected_artifacts : liste de noms requis dans staging_dir avant le commit (ex:
-    ['CHARACTER_Lina_Default_lop_v003', 'thumb.png'] - l'artefact par son stem, resolu contre
-    les extensions connues (PUBLISH_ARTIFACT_EXTENSIONS) ; le thumb par son nom exact). Le
-    thumbnail est REQUIS partout. Si un artefact manque ou est vide : leve ValueError, ne
-    touche PAS staging_dir, n'appelle PAS os.replace, n'ecrit RIEN au manifeste (la
-    reservation reste 'pending').
+    expected_artifacts: list of names required in staging_dir before the commit (e.g.
+    ['CHARACTER_Lina_Default_lop_v003', 'thumb.png'] - the artifact by its stem, resolved against
+    the known extensions (PUBLISH_ARTIFACT_EXTENSIONS); the thumb by its exact name). The
+    thumbnail is REQUIRED everywhere. If an artifact is missing or empty: raises ValueError, does
+    NOT touch staging_dir, does NOT call os.replace, writes NOTHING to the manifest (the
+    reservation stays 'pending').
 
-    Retourne {name, version, final_dir, manifest}.
+    Returns {name, version, final_dir, manifest}.
     """
     project_root = Path(project_root)
     entity_dir, manifest_path = _find_asset_entity(project_root, asset_name)
@@ -1468,26 +1468,26 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
                 f"'{asset_name}' (allocate_publish_version() a-t-il ete appele ?)."
             )
         entry["status"] = "complete"
-        # Decouverte des fichiers reellement ecrits plutot qu'une extension supposee : en
-        # licence Apprentice, Houdini ecrit '.usdnc' (watermarke) et non '.usd' (cf. contexte
-        # hython/licence). Se fier au disque evite un manifeste qui pointe vers un fichier
-        # inexistant selon la licence/le DCC qui a publie.
-        # Fichiers ET dossiers : un artefact de sequence (sim multi-frames, cf.
-        # _missing_artifacts mode dossier) est un sous-dossier, jamais un fichier - l'ignorer
-        # laisserait 'artifact' a None au manifeste. L'entree pointe alors le dossier.
+        # Discover the files actually written rather than an assumed extension: under
+        # an Apprentice license, Houdini writes '.usdnc' (watermarked) and not '.usd' (see
+        # hython/license context). Trusting the disk avoids a manifest pointing to a file
+        # that does not exist depending on the license/the DCC that published.
+        # Files AND folders: a sequence artifact (multi-frame sim, see
+        # _missing_artifacts folder mode) is a sub-folder, never a file - ignoring it
+        # would leave 'artifact' None in the manifest. The entry then points to the folder.
         produced = sorted(p.name for p in final_dir.iterdir() if p.is_file() or p.is_dir())
         thumbs = [n for n in produced if n == LOP_THUMB_NAME]
         artifacts = [n for n in produced if n != LOP_THUMB_NAME]
         rel_dir = f"{kind_dirname}/{LOP_PUBLISH_DIR_NAME}/{final_dir.name}"
-        # 'layer' conserve pour kind='lop' (contrat lu par tools/houdini/*.py) ; 'artifact'
-        # pour tout le reste (generique - USD ou GLB selon le DCC appelant).
+        # 'layer' kept for kind='lop' (contract read by tools/houdini/*.py); 'artifact'
+        # for everything else (generic - USD or GLB depending on the calling DCC).
         artifact_key = "layer" if kind == "lop" else "artifact"
         entry[artifact_key] = f"{rel_dir}/{artifacts[0]}" if artifacts else None
         thumb_rel = f"{rel_dir}/{thumbs[0]}" if thumbs else None
         entry["thumb"] = thumb_rel
-        # 'thumbnail' : meme chemin relatif entite que 'thumb', renseigne quand thumb.png
-        # existe dans le dossier finalise (le champ etait absent -> lu None par les
-        # consommateurs qui l'attendent). 'thumb' conserve pour compat (lecteurs existants).
+        # 'thumbnail': same entity-relative path as 'thumb', filled when thumb.png
+        # exists in the finalized folder (the field was absent -> read as None by
+        # consumers that expect it). 'thumb' kept for compat (existing readers).
         entry["thumbnail"] = thumb_rel
         entry["published_utc"] = _now()
         if comment:
@@ -1495,10 +1495,10 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         manifest["modified_utc"] = _now()
         _atomic_write_json(manifest_path, manifest)
 
-        # Recomposition du root d'assemblage (asset_root.usda / shot_root.usda) pour un
-        # publish de STEP (kind != 'lop') : un step alimente la composition subLayers, un
-        # LOP est un instantane complet hors taxonomie (jamais compose). Dans le meme flock,
-        # depuis le manifeste deja mis a jour - _compose_entity_root ne re-verrouille pas.
+        # Recompose the assembly root (asset_root.usda / shot_root.usda) for a
+        # STEP publish (kind != 'lop'): a step feeds the subLayers composition, a
+        # LOP is a complete snapshot outside the taxonomy (never composed). In the same flock,
+        # from the already-updated manifest - _compose_entity_root does not re-lock.
         if kind != "lop":
             _compose_entity_root(entity_dir, manifest, asset_name)
 
@@ -1511,45 +1511,45 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
 
 
 # --------------------------------------------------------------------------------------
-# Sweep des allocations orphelines - un staging_dir ne survit sur disque QUE si
-# finalize_publish_version() n'a jamais ete appele (elle le consomme via os.replace) :
-# un staging_dir present = allocation abandonnee (crash, kill -9...) OU publish en cours
-# (process encore vivant). Distingue les deux via le PID encode dans le nom du dossier
-# (cf. allocate_publish_version : '<versioned_name>.staging-<pid>').
+# Sweep of orphan allocations - a staging_dir survives on disk ONLY if
+# finalize_publish_version() was never called (it consumes it via os.replace):
+# a present staging_dir = abandoned allocation (crash, kill -9...) OR publish in progress
+# (process still alive). Distinguishes the two via the PID encoded in the folder name
+# (see allocate_publish_version: '<versioned_name>.staging-<pid>').
 # --------------------------------------------------------------------------------------
 
 _STAGING_PID_RE = re.compile(r"\.staging-(\d+)$")
 
 
 def _staging_pid(dirname):
-    """Extrait le PID depuis un nom de staging_dir. None si le nom ne matche pas le motif
-    (defensif - un staging_dir mal nomme n'est jamais touche par clean_stale_staging)."""
+    """Extract the PID from a staging_dir name. None if the name does not match the pattern
+    (defensive - a mis-named staging_dir is never touched by clean_stale_staging)."""
     m = _STAGING_PID_RE.search(dirname)
     return int(m.group(1)) if m else None
 
 
 def _pid_alive(pid):
-    """True si un process avec ce PID existe (kill(pid, 0), pas un vrai signal)."""
+    """True if a process with this PID exists (kill(pid, 0), not a real signal)."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True  # le process existe, on n'a juste pas le droit de le signaler
+        return True  # the process exists, we just aren't allowed to signal it
     return True
 
 
 def clean_stale_staging(project_root, dry_run=False):
-    """Balaie tous les staging_dirs (entity_dir/<kind>/.staging/*, LOP ou step) du projet.
+    """Sweep all staging_dirs (entity_dir/<kind>/.staging/*, LOP or step) of the project.
 
-    Supprime (sauf dry_run=True) ceux dont le PID createur n'est plus vivant - jamais un
-    staging_dir dont le process tourne encore (publish potentiellement en cours). Rapporte
-    separement (jamais de suppression, meme sans dry_run) les entrees manifest.json restees
-    'status': 'pending' sans staging_dir correspondant sur disque - une incoherence a
-    investiguer manuellement (le manifeste n'est pas une donnee jetable comme staging_dir ;
-    cf. CLAUDE.md sur project.json comme contrat).
+    Removes (unless dry_run=True) those whose creator PID is no longer alive - never a
+    staging_dir whose process is still running (publish potentially in progress). Reports
+    separately (never removes, even without dry_run) the manifest.json entries left at
+    'status': 'pending' with no matching staging_dir on disk - an inconsistency to
+    investigate manually (the manifest is not disposable data like staging_dir;
+    see CLAUDE.md on project.json as a contract).
 
-    Retourne {"removed_staging": [str, ...], "pending_without_staging": [
+    Returns {"removed_staging": [str, ...], "pending_without_staging": [
         {"entity", "kind", "version", "manifest"}, ...]}.
     """
     project_root = Path(project_root)
@@ -1571,7 +1571,7 @@ def clean_stale_staging(project_root, dry_run=False):
             except (OSError, json.JSONDecodeError):
                 continue
 
-            # 1. Staging orphelins : scan de chaque sous-arbre <kind>/.staging/.
+            # 1. Orphan stagings: scan each <kind>/.staging/ subtree.
             for kind_dir in sorted(entity_dir.iterdir()):
                 if not kind_dir.is_dir():
                     continue
@@ -1583,14 +1583,14 @@ def clean_stale_staging(project_root, dry_run=False):
                         continue
                     pid = _staging_pid(staging_dir.name)
                     if pid is not None and _pid_alive(pid):
-                        continue  # publish potentiellement en cours - jamais touche
+                        continue  # publish potentially in progress - never touched
                     removed.append(str(staging_dir))
                     if not dry_run:
                         shutil.rmtree(staging_dir)
 
-            # 2. Rapport (jamais de suppression) : entrees 'pending' sans staging au disque -
-            #    calcule apres le sweep ci-dessus, donc reflete l'etat post-purge en un seul
-            #    appel (une entree juste orpheline-purgee apparait ici immediatement).
+            # 2. Report (never removes): 'pending' entries with no staging on disk -
+            #    computed after the sweep above, so it reflects the post-purge state in a single
+            #    call (an entry just orphan-purged appears here immediately).
             all_entries = [("lop", e) for e in manifest.get(LOP_PUBLISHES_KEY, [])]
             for step, entries in manifest.get(STEP_PUBLISHES_KEY, {}).items():
                 all_entries += [(step, e) for e in entries]
@@ -1614,8 +1614,8 @@ def clean_stale_staging(project_root, dry_run=False):
 
 
 # --------------------------------------------------------------------------------------
-# Consommation web (sync vers un projet Three.js) - le projet web ne lit JAMAIS la
-# structure du pipeline, uniquement public/assets/assets.json (cf. CLAUDE.md).
+# Web consumption (sync to a Three.js project) - the web project NEVER reads the
+# pipeline structure, only public/assets/assets.json (see CLAUDE.md).
 # --------------------------------------------------------------------------------------
 
 WEB_ASSETS_DIRNAME = "assets"
@@ -1623,9 +1623,9 @@ _SYNCED_GLB_RE = re.compile(r"_v(\d+)\.glb$")
 
 
 def _known_entity_names(project_root):
-    """Noms de toutes les entites existantes du projet (assets/sets/shots), utilise par
-    sync_web_assets() pour ne jamais toucher un fichier de public/assets/ qui ne correspond
-    a aucune entite connue (cf. sa docstring)."""
+    """Names of all existing entities of the project (assets/sets/shots), used by
+    sync_web_assets() to never touch a public/assets/ file that matches
+    no known entity (see its docstring)."""
     project_root = Path(project_root)
     names = set()
     for family in ENTITY_DIR.values():
@@ -1638,18 +1638,18 @@ def _known_entity_names(project_root):
     return names
 
 
-# --- API de pinning web (principe 5 : la logique vit dans l'orchestrateur, IMPORTABLE par un
-# plugin DCC ou n8n - pas seulement par le serveur HTTP ylos_ui). Toutes NE LEVENT JAMAIS pour
-# un cas metier (asset/version inconnu, pin d'un publish non-GLB...) : elles retournent un dict
-# {"ok": bool, ...}. project.json['web'] a la forme {target_dir, pinned_assets: {<asset>:
-# {step, version}}} - 'target_dir' memorise le web_project_dir cible (consomme par
-# sync_web_assets ; INC-6 le nomme 'project_dir', on conserve 'target_dir' deja au contrat).
+# --- Web pinning API (principle 5: the logic lives in the orchestrator, IMPORTABLE by a
+# DCC plugin or n8n - not only by the ylos_ui HTTP server). None EVER raise for
+# a business case (unknown asset/version, pinning a non-GLB publish...): they return a dict
+# {"ok": bool, ...}. project.json['web'] has the shape {target_dir, pinned_assets: {<asset>:
+# {step, version}}} - 'target_dir' stores the target web_project_dir (consumed by
+# sync_web_assets; INC-6 names it 'project_dir', we keep 'target_dir' already in the contract).
 
 def _update_web(project_root, mutate):
-    """Read-modify-write de project.json['web'] sous flock (le serveur HTTP multi-thread ET les
-    plugins DCC ecrivent le meme manifeste - meme discipline que le reste du module). 'mutate'
-    recoit le dict web (cree si absent, forme {target_dir, pinned_assets}) et le modifie en
-    place ; ecriture atomique via write_manifest (_atomic_write_json en interne)."""
+    """Read-modify-write of project.json['web'] under flock (the multi-threaded HTTP server AND
+    the DCC plugins write the same manifest - same discipline as the rest of the module). 'mutate'
+    receives the web dict (created if absent, shape {target_dir, pinned_assets}) and modifies it in
+    place; atomic write via write_manifest (_atomic_write_json internally)."""
     project_root = Path(project_root)
     manifest_path = project_root / PIPELINE_DIR / MANIFEST_NAME
     with acquire_lock(manifest_path):
@@ -1661,9 +1661,9 @@ def _update_web(project_root, mutate):
 
 
 def _pinnable_glb_versions(project_root, entity_name, step):
-    """Versions (triees) des publishes 'complete' a artefact .glb pour ce step - les SEULES
-    pinnables pour le web (sync_web_assets resout le GLB via (step, version)). Un publish USD
-    n'apparait jamais. [] si entite/step introuvable (list_publishes ne leve jamais)."""
+    """Versions (sorted) of 'complete' publishes with a .glb artifact for this step - the ONLY
+    ones pinnable for the web (sync_web_assets resolves the GLB via (step, version)). A USD publish
+    never appears. [] if entity/step not found (list_publishes never raises)."""
     return sorted(
         e["version"] for e in list_publishes(project_root, entity_name, step)
         if e.get("status") == "complete" and (e.get("artifact") or "").endswith(".glb")
@@ -1671,16 +1671,16 @@ def _pinnable_glb_versions(project_root, entity_name, step):
 
 
 def pin_web_asset(project_root, asset, step, version):
-    """Pinne un GLB publie pour la sync web : ecrit project.json['web']['pinned_assets'][asset]
-    = {step, version}, apres avoir valide qu'un publish 'complete' a artefact .glb existe pour
-    (asset, step, version). Le pin est un contrat consomme TEL QUEL par sync_web_assets (un pin
-    casse n'y produirait qu'un warning tardif) : on le refuse ici, avec la liste de ce qui
-    existe. NE LEVE JAMAIS pour un cas metier : retourne
-    {"ok": True, "asset", "step", "version"} ou {"ok": False, "error": <str>}."""
+    """Pin a published GLB for the web sync: writes project.json['web']['pinned_assets'][asset]
+    = {step, version}, after validating that a 'complete' publish with a .glb artifact exists for
+    (asset, step, version). The pin is a contract consumed AS-IS by sync_web_assets (a broken
+    pin would only produce a late warning there): we refuse it here, with the list of what
+    exists. NEVER raises for a business case: returns
+    {"ok": True, "asset", "step", "version"} or {"ok": False, "error": <str>}."""
     project_root = Path(project_root)
     asset = (asset or "").strip()
     step = (step or "").strip()
-    # bool est un int en Python : version=True matcherait la version 1 - on l'exclut.
+    # bool is an int in Python: version=True would match version 1 - we exclude it.
     if not asset or not step or not isinstance(version, int) or isinstance(version, bool):
         return {"ok": False, "error": "asset (str), step (str) et version (int) requis."}
     available = _pinnable_glb_versions(project_root, asset, step)
@@ -1694,9 +1694,9 @@ def pin_web_asset(project_root, asset, step, version):
 
 
 def unpin_web_asset(project_root, asset):
-    """Retire le pin web d'un asset. Idempotent : de-pinner un asset non pinne est un succes.
-    NE LEVE JAMAIS : {"ok": True, "asset", "was_pinned": bool} ou {"ok": False, "error"} si
-    'asset' est vide."""
+    """Remove an asset's web pin. Idempotent: un-pinning an unpinned asset is a success.
+    NEVER raises: {"ok": True, "asset", "was_pinned": bool} or {"ok": False, "error"} if
+    'asset' is empty."""
     asset = (asset or "").strip()
     if not asset:
         return {"ok": False, "error": "asset (str) requis."}
@@ -1707,8 +1707,8 @@ def unpin_web_asset(project_root, asset):
 
 
 def set_web_target(project_root, target_dir):
-    """Memorise le web_project_dir cible dans project.json['web']['target_dir'] (consomme par
-    sync_web_assets sans avoir a le repasser). '' -> None (efface la cible). NE LEVE JAMAIS :
+    """Store the target web_project_dir in project.json['web']['target_dir'] (consumed by
+    sync_web_assets without passing it again). '' -> None (clears the target). NEVER raises:
     {"ok": True, "target_dir": <str|None>}."""
     target_dir = (target_dir or "").strip() or None
     _update_web(project_root, lambda web: web.__setitem__("target_dir", target_dir))
@@ -1716,24 +1716,24 @@ def set_web_target(project_root, target_dir):
 
 
 def sync_web_assets(project_root, web_project_dir):
-    """Synchronise les GLB PINNES (project.json['web']['pinned_assets'], jamais 'latest')
-    vers {web_project_dir}/public/assets/. Le projet web est un consommateur passif : il ne
-    lit jamais la structure du pipeline, uniquement assets.json genere ici.
+    """Synchronize the PINNED GLBs (project.json['web']['pinned_assets'], never 'latest')
+    to {web_project_dir}/public/assets/. The web project is a passive consumer: it never
+    reads the pipeline structure, only the assets.json generated here.
 
-    pinned_assets : {"<asset_name>": {"step": <step>, "version": <int>}} - le step est
-    necessaire pour localiser le GLB sans ambiguite (un asset peut avoir des publishes GLB
-    independants par step, cf. allocate_publish_version/kind).
+    pinned_assets: {"<asset_name>": {"step": <step>, "version": <int>}} - the step is
+    needed to locate the GLB unambiguously (an asset may have independent GLB publishes
+    per step, see allocate_publish_version/kind).
 
-    Comportement (miroir) :
-      1. Copie chaque GLB pinne vers <ASSET_NAME>_v<VERSION:03d>.glb (cache-busting).
-      2. Genere assets.json ({"assets": {...}, "generated": <ISO>}), sha256 par asset,
-         ecrit atomiquement (_atomic_write_json).
-      3. Supprime les <ASSET>_v*.glb d'assets CONNUS (cf. _known_entity_names) dont la
-         version ne correspond plus au pin courant (ou dont l'asset n'est plus pinne du
-         tout). Un fichier qui ne correspond a aucune entite connue n'est jamais touche.
+    Behavior (mirror):
+      1. Copy each pinned GLB to <ASSET_NAME>_v<VERSION:03d>.glb (cache-busting).
+      2. Generate assets.json ({"assets": {...}, "generated": <ISO>}), sha256 per asset,
+         written atomically (_atomic_write_json).
+      3. Remove the <ASSET>_v*.glb of KNOWN assets (see _known_entity_names) whose
+         version no longer matches the current pin (or whose asset is no longer pinned at
+         all). A file matching no known entity is never touched.
 
-    Retourne {"assets_dir", "synced", "warnings"} - 'warnings' liste les pins non
-    resolus (asset/GLB introuvable) sans faire echouer le reste de la synchronisation.
+    Returns {"assets_dir", "synced", "warnings"} - 'warnings' lists the unresolved
+    pins (asset/GLB not found) without failing the rest of the synchronization.
     """
     project_root = Path(project_root)
     web_project_dir = Path(web_project_dir)
@@ -1746,7 +1746,7 @@ def sync_web_assets(project_root, web_project_dir):
     known_names = _known_entity_names(project_root)
     synced = {}
     warnings = []
-    wanted_filenames = {}  # asset_name -> nom de fichier actuellement pinne
+    wanted_filenames = {}  # asset_name -> currently pinned file name
 
     for asset_name, pin in pinned.items():
         step = pin.get("step")
@@ -1775,7 +1775,7 @@ def sync_web_assets(project_root, web_project_dir):
         }
         wanted_filenames[asset_name] = dest_filename
 
-    # Miroir : purge les vieilles versions (ou les assets retires du pin) d'entites connues.
+    # Mirror: purge old versions (or assets removed from the pin) of known entities.
     for f in list(assets_dir.iterdir()):
         if not f.is_file() or f.suffix != ".glb":
             continue
@@ -1784,7 +1784,7 @@ def sync_web_assets(project_root, web_project_dir):
             continue
         candidate_name = f.name[: m.start()]
         if candidate_name not in known_names:
-            continue  # fichier etranger a une entite connue - jamais touche
+            continue  # file foreign to any known entity - never touched
         if wanted_filenames.get(candidate_name) != f.name:
             f.unlink()
 
