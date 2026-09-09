@@ -33,6 +33,7 @@ Endpoints:
     POST /api/pin-asset        {name, step, version} pinne un GLB publié (validé)
     POST /api/unpin-asset      {name} retire le pin (idempotent)
     POST /api/sync-web         sync_web_assets() vers web.target_dir (assets pinnés)
+    POST /api/set-frame-range  {entity, start, end, fps?} plage d'images d'un shot (schéma 2.1)
     GET  /thumb/<asset>/<rest> fichier statique depuis <step>/publish/ (LOP ou deux-phases)
 """
 from __future__ import annotations
@@ -260,6 +261,7 @@ def _list_assets(project_dir: Path) -> list[dict]:
                 "type": manifest.get("type"),
                 "steps": manifest.get("steps", []),
                 "last_versions": _last_versions(project_dir, asset_dir.name, manifest),
+                "frame_range": manifest.get("frame_range"),  # shots seulement ; None pour asset/set
                 "thumb": f"/thumb/{thumb}" if thumb else None,
                 "thumb_source": source,
                 "broken": None,
@@ -285,6 +287,7 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
             "steps": steps,
             "publishes": manifest.get("publishes", {}),
             "step_publishes": manifest.get("step_publishes", {}),
+            "frame_range": manifest.get("frame_range"),  # shots seulement (schéma 2.1) ; None sinon
             "scenefiles": _list_scenefiles(asset_dir, steps),
             "created_utc": manifest.get("created_utc"),
             "modified_utc": manifest.get("modified_utc"),
@@ -445,6 +448,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             self._post_unpin_asset()
         elif p == "/api/sync-web":
             self._post_sync_web()
+        elif p == "/api/set-frame-range":
+            self._post_set_frame_range()
         else:
             _json(self, 404, {"error": "endpoint introuvable"})
 
@@ -951,6 +956,44 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 500, {"error": str(e)})
             return
         _json(self, 200, {"ok": True, **result})
+
+    def _post_set_frame_range(self):
+        """POST /api/set-frame-range {entity, start, end, fps?} — pose la plage d'images d'un
+        SHOT. Adaptateur mince → create_project.set_frame_range (validation start<end + entité
+        = shot + écriture atomique sous lock + recompo shot_root.usda, principe 5).
+        set_frame_range LÈVE pour un cas métier (range invalide, pas un shot, entité absente)
+        → 400 (entrée client), jamais 500."""
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "JSON invalide dans le body"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "Aucun projet actif"})
+            return
+        name = (body.get("entity") or "").strip()
+        if not name:
+            _json(self, 400, {"error": "Champ 'entity' manquant"})
+            return
+        if body.get("start") is None or body.get("end") is None:
+            _json(self, 400, {"error": "Champs 'start' et 'end' requis"})
+            return
+        try:
+            start, end = int(body["start"]), int(body["end"])
+            fps = body.get("fps")
+            fps = float(fps) if fps not in (None, "") else None
+        except (TypeError, ValueError):
+            _json(self, 400, {"error": "start/end doivent être des entiers, fps un nombre"})
+            return
+        try:
+            frame_range = create_project.set_frame_range(project_dir, name, start, end, fps)
+        except (ValueError, FileNotFoundError) as e:
+            _json(self, 400, {"error": str(e)})
+            return
+        except OSError as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _json(self, 200, {"ok": True, "entity": name, "frame_range": frame_range})
 
 
 # -------------------------------------------------------------------------------------

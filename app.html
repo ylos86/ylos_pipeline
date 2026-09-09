@@ -331,6 +331,21 @@
     .modal-err { font-size: 12px; color: var(--red); min-height: 18px; margin-top: 8px; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
 
+    /* Frame range (shots) */
+    .fr-fields { display: flex; gap: 12px; }
+    .fr-fields .field { flex: 1; }
+    .frame-chip {
+      display: inline-flex; align-items: center; gap: 5px; margin-top: 7px;
+      padding: 3px 9px; font-size: 11px;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      color: var(--text-muted); background: var(--bg-3);
+      border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .frame-chip:hover { border-color: var(--border-hi); color: var(--text); }
+    .frame-chip .frame-fps { color: var(--text-dim); }
+    .frame-chip.unset { font-style: italic; color: var(--text-dim); }
+
     .root-field { display: flex; gap: 6px; align-items: center; }
     .root-field input { flex: 1; min-width: 0; }
 
@@ -635,6 +650,28 @@
   </div>
 </div>
 
+<!-- ── Modal frame range (shots, schéma 2.1) ────────── -->
+<div class="modal-overlay hidden" id="js-modal-framerange">
+  <div class="modal">
+    <h2 id="js-fr-title">Frame range</h2>
+    <p class="subtitle">Plage d'images du shot (schéma 2.1). Le save recompose
+      <code>shot_root.usda</code> (timecodes).</p>
+    <div class="fr-fields">
+      <div class="field"><label for="js-fr-start">Start</label>
+        <input type="number" id="js-fr-start" step="1" spellcheck="false"></div>
+      <div class="field"><label for="js-fr-end">End</label>
+        <input type="number" id="js-fr-end" step="1" spellcheck="false"></div>
+      <div class="field"><label for="js-fr-fps">FPS</label>
+        <input type="number" id="js-fr-fps" step="0.01" min="0" spellcheck="false"></div>
+    </div>
+    <div class="modal-err" id="js-fr-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-fr-cancel">Annuler</button>
+      <button class="btn btn-primary" type="button" id="js-fr-save">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Modal nouvel asset ──────────────────────────── -->
 <div class="modal-overlay hidden" id="js-modal-new-asset">
   <div class="modal">
@@ -880,6 +917,12 @@ function render() {
       openScenefilesModal(btn.dataset.scenefilesEntity);
     })
   );
+  GRID.querySelectorAll('[data-framerange-entity]').forEach(btn =>
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openFrameRangeModal(btn.dataset.framerangeEntity);
+    })
+  );
 }
 
 // ── Card HTML ────────────────────────────────────────
@@ -893,7 +936,7 @@ const THUMB_TAGS = {
 };
 
 function cardHTML(asset) {
-  const { name, type, last_versions = {}, thumb, thumb_source, broken } = asset;
+  const { name, family, type, last_versions = {}, frame_range, thumb, thumb_source, broken } = asset;
   const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
   const color = TYPE_COLORS[type] || '#9c9cc8';  // aligné sur --text-muted (fix contraste 2026-08-03)
 
@@ -934,6 +977,15 @@ function cardHTML(asset) {
     ? `<div class="card-warn">${iconWarn(12)}<span>${esc(broken)}</span></div>`
     : '';
 
+  // frame_range : shots seulement (schéma 2.1), non éditable sur une entité orpheline.
+  const frameChip = (family === 'shots' && !broken)
+    ? `<button class="frame-chip${frame_range ? '' : ' unset'}" type="button" data-framerange-entity="${esc(name)}" title="Éditer la plage d'images (frame range)">
+         ${frame_range
+            ? `${frame_range.start}–${frame_range.end}<span class="frame-fps">@${esc(String(frame_range.fps))}</span>`
+            : 'Définir les frames…'}
+       </button>`
+    : '';
+
   return `
     <div class="card${broken ? ' broken' : ''}">
       <div class="card-thumb">${thumbSection}</div>
@@ -945,6 +997,7 @@ function cardHTML(asset) {
           </button>
         </div>
         ${warnHTML}
+        ${frameChip}
         <div class="steps-list">${stepsSection}</div>
         <div class="card-footer">
           ${bestStep
@@ -1503,6 +1556,67 @@ function renderScenefiles(scenefiles) {
 
 el('js-sf-close').addEventListener('click', closeScenefilesModal);
 MODAL_SF.addEventListener('click', e => { if (e.target === MODAL_SF) closeScenefilesModal(); });
+
+// ── Frame range (shots, schéma 2.1) ─────────────────
+const MODAL_FR = el('js-modal-framerange');
+let _frEntity = null;
+
+function openFrameRangeModal(entity) {
+  _frEntity = entity;
+  const asset = S.assets.find(a => a.name === entity);
+  const fr = asset && asset.frame_range;   // {start, end, fps} ou null (pas encore posé)
+  el('js-fr-title').textContent = `Frame range — ${entity}`;
+  el('js-fr-start').value = fr ? fr.start : 1001;
+  el('js-fr-end').value   = fr ? fr.end   : 1100;
+  el('js-fr-fps').value   = fr ? fr.fps   : 24;
+  el('js-fr-err').textContent = '';
+  MODAL_FR.classList.remove('hidden');
+  setTimeout(() => el('js-fr-start').focus(), 40);
+}
+function closeFrameRangeModal() { MODAL_FR.classList.add('hidden'); _frEntity = null; }
+
+async function saveFrameRange() {
+  // Validation client = confort ; le serveur (create_project.set_frame_range) reste
+  // l'autorité (mêmes règles : start<end, fps>0, entité=shot).
+  const start = parseInt(el('js-fr-start').value, 10);
+  const end   = parseInt(el('js-fr-end').value, 10);
+  const fpsRaw = el('js-fr-fps').value.trim();
+  const fps    = fpsRaw === '' ? null : parseFloat(fpsRaw);
+  if (!Number.isInteger(start) || !Number.isInteger(end)) {
+    el('js-fr-err').textContent = 'Start et End doivent être des entiers.'; return;
+  }
+  if (start >= end) {
+    el('js-fr-err').textContent = 'Start doit être strictement inférieur à End.'; return;
+  }
+  if (fps !== null && !(fps > 0)) {
+    el('js-fr-err').textContent = 'FPS doit être un nombre positif.'; return;
+  }
+  el('js-fr-err').textContent = '';
+  const btn = el('js-fr-save');
+  btn.disabled = true; btn.textContent = 'Enregistrement…';
+  try {
+    const body = { entity: _frEntity, start, end };
+    if (fps !== null) body.fps = fps;
+    const { ok, data } = await api('/api/set-frame-range', {
+      method: 'POST', body: JSON.stringify(body),
+    });
+    if (ok) {
+      closeFrameRangeModal();
+      await loadAssets();
+      toast('Frame range enregistré', 'ok');
+    } else {
+      el('js-fr-err').textContent = data.error || 'Erreur inconnue';
+    }
+  } catch {
+    el('js-fr-err').textContent = 'Serveur non disponible';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Enregistrer';
+  }
+}
+
+el('js-fr-cancel').addEventListener('click', closeFrameRangeModal);
+el('js-fr-save').addEventListener('click', saveFrameRange);
+MODAL_FR.addEventListener('click', e => { if (e.target === MODAL_FR) closeFrameRangeModal(); });
 
 el('js-btn-new-project').addEventListener('click', openNewProjectModal);
 el('js-np-cancel').addEventListener('click', closeNewProjectModal);

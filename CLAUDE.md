@@ -175,7 +175,6 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
   (rewrite orphelin ; correctifs utiles C1/C3 déjà absorbés, reste hors scope).
 
 ## Chantiers ouverts (hors scope actuel — cf. `pipeline-log.md` pour le détail)
-- **Édition `frame_range` dans la web UI** (aujourd'hui CLI / `set_frame_range` seulement).
 - **Update Import = remplacement pur (v1)** : aucun remap des overrides (matériaux, contraintes,
   anim ajoutés à la main) — à traiter avant un usage intensif.
 - **Variantes dans le composeur unique** : `refresh_entity_root` ne les gère pas encore ;

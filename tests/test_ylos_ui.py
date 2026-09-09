@@ -527,5 +527,64 @@ class TestOpenBlenderResolution(ServerTestCase):
         self.assertEqual(status, 404)
 
 
+class TestSetFrameRange(ServerTestCase):
+    """POST /api/set-frame-range : adaptateur mince vers create_project.set_frame_range
+    (validation start<end + entité=shot + écriture atomique + recompo shot_root, principe 5).
+    set_frame_range LÈVE pour un cas métier (range invalide, entité != shot, absente) → le
+    serveur mappe en 400 (entrée client), jamais 500. frame_range exposé sur /api/asset pour
+    que la web UI préremplisse son modal."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_fr", root=str(cls._tmp / "frroot"),
+                         cache=str(cls._tmp / "frcache"))
+        cls.project = info["source"]
+        cp.create_asset(cls.project, "ANIMATION_Sh010_Default",
+                        entity_type="shot", asset_type="ANIMATION")
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")  # pas un shot
+        cls._set_active(cls.project)
+
+    def test_set_valid_persists_and_exposes(self):
+        status, _, body = self._request(
+            "/api/set-frame-range", method="POST",
+            body={"entity": "ANIMATION_Sh010_Default", "start": 1010, "end": 1200, "fps": 25})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["frame_range"],
+                         {"start": 1010, "end": 1200, "fps": 25})
+        # Persisté dans le manifeste (source de vérité, principe 3).
+        manifest = cp.resolve_entity(self.project, "ANIMATION_Sh010_Default")["manifest"]
+        self.assertEqual(manifest["frame_range"], {"start": 1010, "end": 1200, "fps": 25})
+        # Exposé sur /api/asset pour préremplir le modal côté web UI.
+        _, _, detail = self._request("/api/asset/ANIMATION_Sh010_Default")
+        self.assertEqual(json.loads(detail)["frame_range"],
+                         {"start": 1010, "end": 1200, "fps": 25})
+
+    def test_invalid_range_400(self):
+        status, _, body = self._request(
+            "/api/set-frame-range", method="POST",
+            body={"entity": "ANIMATION_Sh010_Default", "start": 1100, "end": 1001})
+        self.assertEqual(status, 400)
+        self.assertIn("start", json.loads(body)["error"].lower())
+
+    def test_non_shot_400(self):
+        status, _, _ = self._request(
+            "/api/set-frame-range", method="POST",
+            body={"entity": "PROP_Tente_Default", "start": 1001, "end": 1100})
+        self.assertEqual(status, 400)
+
+    def test_unknown_entity_400(self):
+        status, _, _ = self._request(
+            "/api/set-frame-range", method="POST",
+            body={"entity": "SHOT_Fantome_Default", "start": 1001, "end": 1100})
+        self.assertEqual(status, 400)
+
+    def test_missing_field_400(self):
+        status, _, _ = self._request(
+            "/api/set-frame-range", method="POST",
+            body={"entity": "ANIMATION_Sh010_Default", "start": 1001})  # 'end' manquant
+        self.assertEqual(status, 400)
+
+
 if __name__ == "__main__":
     unittest.main()
