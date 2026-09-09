@@ -7,24 +7,30 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* Palette dérivée de Prism Pipeline (fond near-black, accent framboise #af326d).
+       L'accent est UNE variable — le changer ici reskin tout le magenta de l'UI. */
     :root {
-      --bg:           #0c0c0f;
-      --bg-2:         #141418;
-      --bg-3:         #1c1c22;
-      --bg-hover:     #222228;
-      --border:       #2a2a32;
-      --border-hi:    #3c3c50;
-      --text:         #e8e8f0;
-      /* text-muted / text-dim : recalibrés WCAG AA (>=4.5:1) le 2026-08-03. Les deux portent
-         du vrai texte lisible (labels, compteurs, placeholders — pas seulement décoratif),
-         donc la hiérarchie muted > dim s'exprime par taille/graisse/letter-spacing plutôt
-         que par un écart de contraste agressif, impossible à tenir sur fond sombre sans
-         faire échouer l'un des deux. Vérifié par calcul (luminance relative) sur les 3 fonds
-         --bg/--bg-2/--bg-3 : les deux passent >=4.5:1 partout où ils apparaissent. */
-      --text-muted:   #9c9cc8;
-      --text-dim:     #82829e;
-      --accent:       #6366f1;
-      --accent-glow:  #6366f130;
+      --bg:           #121212;
+      --bg-2:         #1a1b1f;
+      --bg-3:         #232430;
+      --bg-hover:     #2b2c39;
+      --border:       #2b2c34;
+      --border-hi:    #3a3b48;
+      --text:         #eef1f4;
+      /* text-muted / text-dim : recalibrés WCAG AA (>=4.5:1) le 2026-08-03, revérifiés sur la
+         palette Prism le 2026-09-09. Les deux portent du vrai texte lisible (labels, compteurs,
+         placeholders — pas seulement décoratif), donc la hiérarchie muted > dim s'exprime par
+         taille/graisse/letter-spacing plutôt que par un écart de contraste agressif. Vérifié par
+         calcul (luminance relative) sur les 3 fonds --bg/--bg-2/--bg-3 : les deux passent
+         >=4.5:1 partout où ils apparaissent. */
+      --text-muted:   #bcc4ce;
+      --text-dim:     #8b939e;
+      --accent:       #af326d;
+      --accent-hover: #c2497f;
+      --accent-glow:  #af326d33;
+      --wine:         #4e111b;   /* teinte profonde Prism — fond des états SÉLECTIONNÉS */
+      --wine-hi:      #631726;
+      --on-wine:      #f6d7e3;   /* texte pâle rosé sur wine (contraste élevé, ~11:1) */
       --green:        #34d399;
       --red:          #f87171;
     }
@@ -79,14 +85,14 @@
     /* ── Buttons ─────────────────────────────────── */
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      padding: 6px 14px; border-radius: 6px; border: none;
+      padding: 6px 14px; border-radius: 7px; border: none;
       font-size: 13px; font-weight: 500; cursor: pointer;
-      transition: background .15s, opacity .15s;
+      transition: background .15s, border-color .15s, box-shadow .2s, opacity .15s;
     }
     .btn:active { opacity: .8; }
     .btn:disabled { opacity: .4; cursor: default; }
-    .btn-primary   { background: var(--accent); color: #fff; }
-    .btn-primary:hover:not(:disabled) { background: #7274f8; }
+    .btn-primary   { background: var(--accent); color: #fff; box-shadow: 0 1px 12px -4px var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 2px 16px -4px var(--accent); }
     .btn-secondary { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-hi); }
     .btn-ghost     { background: transparent; color: var(--text-muted); }
@@ -127,7 +133,8 @@
       transition: all .15s;
     }
     .pill:hover { border-color: var(--border-hi); color: var(--text); }
-    .pill.active { border-color: var(--accent); background: var(--accent-glow); color: var(--accent); }
+    .pill.active { border-color: var(--accent); background: var(--wine); color: var(--on-wine); font-weight: 600; }
+    .pill.active:hover { background: var(--wine-hi); color: var(--on-wine); }
 
     .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
     .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
@@ -178,7 +185,7 @@
     .card:hover {
       border-color: var(--border-hi);
       transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      box-shadow: 0 10px 28px -6px rgba(0,0,0,.55), 0 0 0 1px var(--accent-glow);
     }
 
     /* 4/3 et non 16/9 : les thumbnails sont rendus CARRÉS (cadrage trois-quarts sur la
@@ -236,7 +243,7 @@
       transition: background .15s, color .15s;
     }
     .density-group button:hover  { color: var(--text-muted); }
-    .density-group button.active { background: var(--accent-glow); color: var(--accent); }
+    .density-group button.active { background: var(--wine); color: var(--on-wine); box-shadow: inset 0 0 0 1px var(--accent); }
     .thumb-placeholder {
       width: 100%; height: 100%;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -342,7 +349,7 @@
       border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
       transition: border-color .15s, color .15s;
     }
-    .frame-chip:hover { border-color: var(--border-hi); color: var(--text); }
+    .frame-chip:hover { border-color: var(--accent); color: var(--text); }
     .frame-chip .frame-fps { color: var(--text-dim); }
     .frame-chip.unset { font-style: italic; color: var(--text-dim); }
 
