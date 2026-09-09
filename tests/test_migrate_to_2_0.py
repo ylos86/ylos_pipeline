@@ -161,7 +161,7 @@ class TestRenameEdgeCases(LegacyProjectTestCase):
         (self.project / "assets" / "PROP_Lecube_Default").mkdir(parents=True)
         report = mig.migrate(self.project, type_overrides={"lecube": "PROP"})
         self.assertTrue((self.project / "assets" / "lecube").is_dir())
-        self.assertTrue(any("cible de renommage" in w for w in report["warnings"]))
+        self.assertTrue(any("rename target" in w for w in report["warnings"]))
 
     def test_multi_segment_name_keeps_all_segments(self):
         self._add_legacy_entity("le_cube")
