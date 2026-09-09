@@ -1,7 +1,10 @@
 # CLAUDE.md — Pipeline Ylos Prod
 
-> Référence de travail. Règles durables et carte du code, pas un journal.
+> Référence de travail : règles durables et carte du code, **pas un journal**.
 > Historique détaillé (diagnostics, incréments datés) → `docs/pipeline-log.md` + `git log`.
+> **Ne PAS appender d'incrément ici** : un nouveau travail va dans le commit + `pipeline-log.md` ;
+> on ne touche ce fichier que si une **règle durable** change. Toute affirmation ci-dessous se
+> vérifie contre le code avant qu'on s'y fie — un fichier peut mentir sur ce qui tourne réellement.
 
 ## Projet
 Pipeline de production 3D/VFX freelance (**Ylos Prod**). Deux problèmes **distincts** à ne
@@ -18,6 +21,10 @@ Blender) — pas seulement le workflow humain immédiat.
 - **stdlib seule** pour tout module qu'un DCC importe (`create_project.py` en tête). Les
   interpréteurs embarqués (hython, Python de Blender) ne doivent pas dépendre d'un `pip
   install`. Une dépendance tierce dans le chemin d'import = friction.
+- **Python 3.9 → 3.13** : la CI teste **3.9 / 3.11 / 3.13** (3.9 = python système macOS qui fait
+  tourner `ylos_ui.py` ; 3.13 = Blender). `create_project.py` et `ylos_ui.py` doivent tourner
+  **dès 3.9** → pas de syntaxe 3.10+ (`match`, `X | Y` au runtime hors annotations…) : du code qui
+  passe en local sous 3.13 peut casser la CI sous 3.9.
 - **Stockage 3 tiers**, jamais mélangés :
   - NVMe interne → **cache régénérable** (`$PROJ_CACHE`, jetable, hors Git)
   - NVMe externe Thunderbolt → **source / projets actifs** (`$PROJ_ROOT`, permanent)
@@ -50,6 +57,7 @@ create_project.py     ORCHESTRATEUR. Source de vérité UNIQUE, stdlib seule. Co
 ylos_ui.py            Serveur HTTP local + API REST (/api/*). Adaptateur mince → create_project.
 app.html              Web UI (Project Browser). Config via GET /api/config (jamais codée en dur).
 migrate_to_2.0.py     Migration legacy → convention TYPE_Nom_Variant (dispo si vrai projet legacy).
+README.md             Arborescence d'un projet CRÉÉ sur disque (source + cache) — ne pas la redupliquer.
 
 plugins/blender/      Addon (symlink dans scripts/addons/ylos_pipeline, JAMAIS une copie).
   __init__.py           register/unregister ; purge sys.modules de create_project au (un)register.
@@ -67,6 +75,24 @@ tools/houdini/        build_publish_hda.py (source scriptée du HDA), test_*_e2e
 tests/                Suite stdlib CI (python3 -m unittest, sans DCC). ~150+ tests.
 docs/                 usd-convention.md, migration-*.md, plan-houdini-shots.md, ui-workstream.md,
                       pipeline-log.md (journal détaillé archivé).
+```
+
+## Commandes
+```bash
+# Tests logique orchestrateur (stdlib, sans DCC) — exactement ce que vérifie la CI (3.9/3.11/3.13) :
+python3 -m unittest discover -s tests -v
+# Batterie headless Blender (HORS CI, exige Blender 5.2) — launch_context = python3, le reste via Blender :
+BIN="${YLOS_BLENDER:-/Applications/Blender.app/Contents/MacOS/Blender}"
+for t in tools/blender/test_*.py; do
+  if [ "$(basename "$t")" = test_launch_context.py ]; then YLOS_BLENDER="$BIN" python3 "$t";
+  else "$BIN" --background --python "$t"; fi
+done
+# e2e Houdini (hython, hors CI) :
+hython tools/houdini/test_shot_workflow_e2e.py
+# Régénérer le HDA après TOUT changement de son build (jamais d'édition GUI) :
+hython tools/houdini/build_publish_hda.py
+# Lancer l'UI web (Project Browser) :
+python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Finder)
 ```
 
 ## Contrats & conventions
@@ -147,6 +173,16 @@ docs/                 usd-convention.md, migration-*.md, plan-houdini-shots.md, 
 - **`main`** = branche de travail unique (ex-`ui-pipeline`). Archivées, inactives :
   `legacy/standalone-addon-v0.2.7` (ancien addon standalone) et `legacy/v0.4-monorepo`
   (rewrite orphelin ; correctifs utiles C1/C3 déjà absorbés, reste hors scope).
+
+## Chantiers ouverts (hors scope actuel — cf. `pipeline-log.md` pour le détail)
+- **Édition `frame_range` dans la web UI** (aujourd'hui CLI / `set_frame_range` seulement).
+- **Update Import = remplacement pur (v1)** : aucun remap des overrides (matériaux, contraintes,
+  anim ajoutés à la main) — à traiter avant un usage intensif.
+- **Variantes dans le composeur unique** : `refresh_entity_root` ne les gère pas encore ;
+  `plugins/blender/core/usd_composer.py` (logique de variantes dupliquée) reste à résorber.
+- **Env par-session** (cf. Tensions) : launcher posant `$PROJ_ROOT`/`$PROJ_CACHE` par process.
+- **Cycle de vie des caches** : TTL / sweep / quotas du tier régénérable (aujourd'hui jamais purgé).
+- **Multi-séquences** de shots ; **tooling comp 2D** ; **up-axis Blender↔USD** à vérifier à l'usage.
 
 ## Tensions connues
 - **Collision d'env vars** : `$PROJ_ROOT`/`$PROJ_CACHE` sont globaux au shell. Houdini +
