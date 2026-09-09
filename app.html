@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,8 +7,8 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    /* Palette dérivée de Prism Pipeline (fond near-black, accent framboise #af326d).
-       L'accent est UNE variable — le changer ici reskin tout le magenta de l'UI. */
+    /* Palette derived from Prism Pipeline (near-black background, raspberry accent #af326d).
+       The accent is ONE variable — changing it here reskins all the UI magenta. */
     :root {
       --bg:           #121212;
       --bg-2:         #1a1b1f;
@@ -17,20 +17,20 @@
       --border:       #2b2c34;
       --border-hi:    #3a3b48;
       --text:         #eef1f4;
-      /* text-muted / text-dim : recalibrés WCAG AA (>=4.5:1) le 2026-08-03, revérifiés sur la
-         palette Prism le 2026-09-09. Les deux portent du vrai texte lisible (labels, compteurs,
-         placeholders — pas seulement décoratif), donc la hiérarchie muted > dim s'exprime par
-         taille/graisse/letter-spacing plutôt que par un écart de contraste agressif. Vérifié par
-         calcul (luminance relative) sur les 3 fonds --bg/--bg-2/--bg-3 : les deux passent
-         >=4.5:1 partout où ils apparaissent. */
+      /* text-muted / text-dim: recalibrated WCAG AA (>=4.5:1) on 2026-08-03, re-checked on the
+         Prism palette on 2026-09-09. Both carry real readable text (labels, counters,
+         placeholders — not just decorative), so the muted > dim hierarchy is expressed by
+         size/weight/letter-spacing rather than by an aggressive contrast gap. Verified by
+         calculation (relative luminance) on the 3 backgrounds --bg/--bg-2/--bg-3: both pass
+         >=4.5:1 everywhere they appear. */
       --text-muted:   #bcc4ce;
       --text-dim:     #8b939e;
       --accent:       #af326d;
       --accent-hover: #c2497f;
       --accent-glow:  #af326d33;
-      --wine:         #4e111b;   /* teinte profonde Prism — fond des états SÉLECTIONNÉS */
+      --wine:         #4e111b;   /* deep Prism hue — background of SELECTED states */
       --wine-hi:      #631726;
-      --on-wine:      #f6d7e3;   /* texte pâle rosé sur wine (contraste élevé, ~11:1) */
+      --on-wine:      #f6d7e3;   /* pale rosy text on wine (high contrast, ~11:1) */
       --green:        #34d399;
       --red:          #f87171;
     }
@@ -169,9 +169,9 @@
       grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 260px), 1fr));
       gap: 14px;
     }
-    /* Densité de grille — le browser d'assets est d'abord un outil VISUEL : selon qu'on
-       cherche une vignette précise ou qu'on balaye un projet entier, la bonne taille de
-       carte n'est pas la même. Trois crans, pas un slider (un cran nommé se retrouve). */
+    /* Grid density — the asset browser is first a VISUAL tool: whether you
+       look for a specific thumbnail or scan a whole project, the right card
+       size is not the same. Three steps, not a slider (a named step is memorable). */
     body[data-density="s"] .asset-grid { --card-min: 190px; }
     body[data-density="m"] .asset-grid { --card-min: 260px; }
     body[data-density="l"] .asset-grid { --card-min: 360px; }
@@ -188,9 +188,9 @@
       box-shadow: 0 10px 28px -6px rgba(0,0,0,.55), 0 0 0 1px var(--accent-glow);
     }
 
-    /* 4/3 et non 16/9 : les thumbnails sont rendus CARRÉS (cadrage trois-quarts sur la
-       bbox). En 16/9 + object-fit:cover, on rognait ~44% de la hauteur — soit le haut et le
-       bas du sujet, exactement ce qui permet de le reconnaître. */
+    /* 4/3 and not 16/9: thumbnails are rendered SQUARE (three-quarter framing on the
+       bbox). In 16/9 + object-fit:cover, ~44% of the height was cropped — the top and
+       bottom of the subject, exactly what lets you recognize it. */
     .card-thumb {
       position: relative;
       width: 100%; aspect-ratio: 4/3;
@@ -202,14 +202,14 @@
     }
     .card:hover .card-thumb img { transform: scale(1.045); }
 
-    /* Provenance de la vignette. Un thumbnail de WIP n'engage pas la même confiance qu'un
-       publish : l'UI le DIT au lieu de laisser croire à un asset publié. Rien n'est affiché
-       pour un thumb de publish — le cas normal ne mérite pas de bruit visuel. */
-    /* Badge de type EN OVERLAY sur la vignette, pas a cote du nom. Constat visuel direct :
-       cote a cote dans un header de 260px, le badge mangeait la moitie de la largeur et les
-       noms de la convention TYPE_Nom_Variant (deja longs) s'ellipsaient des le 12e caractere
-       — soit exactement l'information qui distingue deux assets. Le nom reprend toute la
-       largeur, le type reste lisible la ou il ne coute rien. */
+    /* Thumbnail provenance. A WIP thumbnail does not carry the same confidence as a
+       publish: the UI SAYS so instead of letting it pass for a published asset. Nothing is shown
+       for a publish thumb — the normal case does not deserve visual noise. */
+    /* Type badge AS AN OVERLAY on the thumbnail, not next to the name. Direct visual finding:
+       side by side in a 260px header, the badge ate half the width and the
+       TYPE_Name_Variant names (already long) ellipsized from the 12th character
+       — exactly the information that distinguishes two assets. The name takes the full
+       width, the type stays readable where it costs nothing. */
     .thumb-type {
       position: absolute; right: 8px; top: 8px;
       font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
@@ -225,7 +225,7 @@
     .thumb-tag.wip    { background: rgba(251,146,60,.22); color: #fdba74; border-color: rgba(251,146,60,.4); }
     .thumb-tag.custom { background: rgba(52,211,153,.18); color: #6ee7b7; border-color: rgba(52,211,153,.35); }
 
-    /* Entité orpheline (dossier sans manifest.json) — signalée, jamais masquée. */
+    /* Orphan entity (folder without manifest.json) — flagged, never hidden. */
     .card.broken { border-color: rgba(248,113,113,.45); }
     .card.broken:hover { border-color: rgba(248,113,113,.7); }
     .card-warn {
@@ -254,8 +254,8 @@
     .card-body { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; gap: 9px; }
 
     .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    /* min-width:0 obligatoire : sans lui, un flex item ne descend jamais sous sa largeur de
-       contenu — le nom poussait le badge de type hors de la carte au lieu de s'ellipser. */
+    /* min-width:0 mandatory: without it, a flex item never shrinks below its content
+       width — the name pushed the type badge out of the card instead of ellipsizing. */
     .card-name {
       font-size: 15px; font-weight: 600;
       min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -299,7 +299,7 @@
     .card-footer .btn { width: 100%; }
 
     /* ── Modal ───────────────────────────────────── */
-    /* position/z-index uniquement sur :not(.hidden) — évite tout GPU compositor layer au repos (bug Safari WebKit) */
+    /* position/z-index only on :not(.hidden) — avoids any GPU compositor layer at rest (Safari WebKit bug) */
     .modal-overlay {
       background: rgba(0,0,0,.65);
       display: flex; align-items: center; justify-content: center;
@@ -483,25 +483,25 @@
     <span class="logo">Ylos<em>Prod</em></span>
     <span class="project-pill">
       <span class="status-dot" id="js-dot"></span>
-      <span id="js-project-name">Aucun projet</span>
+      <span id="js-project-name">No project</span>
       <span id="js-project-target" class="badge-target hidden"></span>
     </span>
     <div id="js-recent-wrap" style="position:relative;display:inline-block">
-      <button id="js-recent-btn" class="btn btn-secondary hidden" type="button">Récents ▾</button>
+      <button id="js-recent-btn" class="btn btn-secondary hidden" type="button">Recent ▾</button>
       <ul id="js-recent-list" hidden></ul>
     </div>
   </div>
   <div class="header-right">
-    <span class="status-label" id="js-status-label">Connexion…</span>
-    <button class="btn btn-primary"   type="button" id="js-btn-new-project" onclick="openNewProjectModal()">+ Nouveau projet</button>
-    <button class="btn btn-secondary" type="button" id="js-btn-change" onclick="openModal()">Changer projet</button>
+    <span class="status-label" id="js-status-label">Connecting…</span>
+    <button class="btn btn-primary"   type="button" id="js-btn-new-project" onclick="openNewProjectModal()">+ New project</button>
+    <button class="btn btn-secondary" type="button" id="js-btn-change" onclick="openModal()">Change project</button>
   </div>
 </header>
 
 <!-- ── Server offline ──────────────────────────────── -->
 <div class="error-banner hidden" id="js-error-banner">
-  <h3>Serveur non détecté</h3>
-  <p>Le serveur Ylos n'est pas démarré. Lance-le dans un terminal :</p>
+  <h3>Server not detected</h3>
+  <p>The Ylos server is not running. Start it in a terminal:</p>
   <code class="error-cmd">python3 ylos_ui.py</code>
 </div>
 
@@ -509,14 +509,14 @@
 <div class="toolbar hidden" id="js-toolbar">
   <span class="filter-label">Type</span>
   <div class="pills" id="js-pills-type">
-    <span class="pill active" data-type="ALL">Tous</span>
+    <span class="pill active" data-type="ALL">All</span>
   </div>
 
   <div class="toolbar-sep"></div>
 
   <span class="filter-label">Famille</span>
   <div class="pills" id="js-pills-family">
-    <span class="pill active" data-fam="ALL">Tous</span>
+    <span class="pill active" data-fam="ALL">All</span>
     <span class="pill" data-fam="assets">Assets</span>
     <span class="pill" data-fam="sets">Sets</span>
     <span class="pill" data-fam="shots">Shots</span>
@@ -525,18 +525,18 @@
   <div class="toolbar-right">
     <span class="refresh-icon" id="js-refresh-icon"></span>
     <span class="asset-count" id="js-count"></span>
-    <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ Créer asset</button>
+    <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ New asset</button>
     <button class="btn btn-secondary" type="button" id="js-btn-sync-web" style="font-size:12px;padding:5px 12px" onclick="openWebSyncModal()">Sync Web</button>
-    <div class="density-group" id="js-density" title="Taille des vignettes">
+    <div class="density-group" id="js-density" title="Thumbnail size">
       <button type="button" data-d="s">S</button>
       <button type="button" data-d="m">M</button>
       <button type="button" data-d="l">L</button>
     </div>
     <select class="sort-select" id="js-sort">
-      <option value="name-asc">Nom A → Z</option>
-      <option value="name-desc">Nom Z → A</option>
+      <option value="name-asc">Name A → Z</option>
+      <option value="name-desc">Name Z → A</option>
       <option value="type">Type</option>
-      <option value="version">Version (plus récent)</option>
+      <option value="version">Version (newest)</option>
     </select>
   </div>
 </div>
@@ -549,9 +549,9 @@
       <rect x="2" y="3" width="20" height="14" rx="2"/>
       <polyline points="8 21 12 17 16 21"/>
     </svg>
-    <h3>Aucun projet actif</h3>
-    <p>Définis un projet pour afficher ses assets.</p>
-    <button class="btn btn-primary" type="button" id="js-btn-change-empty" onclick="openModal()">Choisir un projet</button>
+    <h3>No active project</h3>
+    <p>Set a project to display its assets.</p>
+    <button class="btn btn-primary" type="button" id="js-btn-change-empty" onclick="openModal()">Choose a project</button>
   </div>
 
   <div class="asset-grid hidden" id="js-grid"></div>
@@ -562,42 +562,42 @@
       <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
       <line x1="12" y1="22.08" x2="12" y2="12"/>
     </svg>
-    <h3>Aucun asset</h3>
-    <p id="js-empty-reason">Ce projet ne contient pas encore d'assets.</p>
+    <h3>No assets</h3>
+    <p id="js-empty-reason">This project has no assets yet.</p>
   </div>
 
 </main>
 
-<!-- ── Modal changer projet ────────────────────────── -->
+<!-- ── Change-project modal ────────────────────────── -->
 <div class="modal-overlay hidden" id="js-modal">
   <div class="modal">
-    <h2>Changer de projet</h2>
-    <p class="subtitle">Chemin absolu du dossier contenant <code>_pipeline/project.json</code>.</p>
+    <h2>Change project</h2>
+    <p class="subtitle">Absolute path of the folder containing <code>_pipeline/project.json</code>.</p>
     <div class="field">
-      <label>Chemin</label>
+      <label>Path</label>
       <input type="text" id="js-modal-input" spellcheck="false"
-             placeholder="/Volumes/Ylos/Projets/MonProjet">
+             placeholder="/Volumes/Ylos/Projects/MyProject">
     </div>
     <div class="modal-err" id="js-modal-err"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost"   type="button" id="js-modal-cancel">Annuler</button>
-      <button class="btn btn-primary" type="button" id="js-modal-ok">Confirmer</button>
+      <button class="btn btn-ghost"   type="button" id="js-modal-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-modal-ok">Confirm</button>
     </div>
   </div>
 </div>
 
 <!-- ── Toast ───────────────────────────────────────── -->
-<!-- ── Modal nouveau projet ────────────────────────── -->
+<!-- ── New-project modal ───────────────────────────── -->
 <div class="modal-overlay hidden" id="js-modal-new-project">
   <div class="modal">
-    <h2>Nouveau projet</h2>
-    <p class="subtitle">Crée un projet et en fait le projet actif.</p>
+    <h2>New project</h2>
+    <p class="subtitle">Creates a project and makes it the active project.</p>
     <div class="field">
-      <label>Nom</label>
-      <input type="text" id="js-np-name" spellcheck="false" placeholder="MonProjet">
+      <label>Name</label>
+      <input type="text" id="js-np-name" spellcheck="false" placeholder="MyProject">
     </div>
     <div class="field" style="margin-top:12px">
-      <label>Type de production</label>
+      <label>Production type</label>
       <select id="js-np-prod-type" class="modal-select">
         <option value="FILM">FILM</option>
         <option value="SERIES">SERIES</option>
@@ -606,62 +606,62 @@
       </select>
     </div>
     <div class="field" style="margin-top:12px">
-      <label>Dossier racine</label>
+      <label>Root folder</label>
       <div class="root-field">
-        <input type="text" id="js-np-root" spellcheck="false" placeholder="~/Projets">
-        <button class="btn btn-secondary" id="js-np-browse-btn" type="button">Parcourir</button>
+        <input type="text" id="js-np-root" spellcheck="false" placeholder="~/Projects">
+        <button class="btn btn-secondary" id="js-np-browse-btn" type="button">Browse</button>
       </div>
       <div class="browse-panel hidden" id="js-np-browse-panel"></div>
     </div>
     <div class="modal-err" id="js-np-err"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost"   type="button" id="js-np-cancel">Annuler</button>
-      <button class="btn btn-primary" type="button" id="js-np-ok">Créer</button>
+      <button class="btn btn-ghost"   type="button" id="js-np-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-np-ok">Create</button>
     </div>
   </div>
 </div>
 
-<!-- ── Modal sync web ───────────────────────────────── -->
+<!-- ── Web-sync modal ───────────────────────────────── -->
 <div class="modal-overlay hidden" id="js-modal-web-sync">
   <div class="modal">
-    <h2>Synchroniser vers le projet web</h2>
-    <p class="subtitle">Copie les GLB pinnés (project.json → web.pinned_assets) vers
-      <code>public/assets/</code> du projet Three.js cible.</p>
+    <h2>Sync to the web project</h2>
+    <p class="subtitle">Copies the pinned GLBs (project.json → web.pinned_assets) to
+      <code>public/assets/</code> of the target Three.js project.</p>
     <div class="field">
-      <label>Dossier du projet web (racine)</label>
+      <label>Web project folder (root)</label>
       <input type="text" id="js-ws-target" spellcheck="false"
-             placeholder="~/Projects/mon-site-three">
+             placeholder="~/Projects/my-three-site">
     </div>
     <div class="field">
-      <label>Assets pinnés (publishes GLB)</label>
+      <label>Pinned assets (GLB publishes)</label>
       <div class="ws-pins" id="js-ws-pins"></div>
     </div>
     <div class="modal-err" id="js-ws-err"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost"   type="button" id="js-ws-cancel">Annuler</button>
-      <button class="btn btn-primary" type="button" id="js-ws-ok">Synchroniser</button>
+      <button class="btn btn-ghost"   type="button" id="js-ws-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-ws-ok">Sync</button>
     </div>
   </div>
 </div>
 
-<!-- ── Modal scenefiles (historique WIP + commentaires) ── -->
+<!-- ── Scenefiles modal (WIP history + comments) ── -->
 <div class="modal-overlay hidden" id="js-modal-scenefiles">
   <div class="modal">
     <h2 id="js-sf-title">Scenefiles</h2>
-    <p class="subtitle">Historique des versions WIP (<code>.blend</code>), commentaire de
-      chaque <em>Save Version</em>.</p>
+    <p class="subtitle">History of WIP versions (<code>.blend</code>), comment of
+      each <em>Save Version</em>.</p>
     <div class="sf-body" id="js-sf-body"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" type="button" id="js-sf-close">Fermer</button>
+      <button class="btn btn-ghost" type="button" id="js-sf-close">Close</button>
     </div>
   </div>
 </div>
 
-<!-- ── Modal frame range (shots, schéma 2.1) ────────── -->
+<!-- ── Frame-range modal (shots, schema 2.1) ────────── -->
 <div class="modal-overlay hidden" id="js-modal-framerange">
   <div class="modal">
     <h2 id="js-fr-title">Frame range</h2>
-    <p class="subtitle">Plage d'images du shot (schéma 2.1). Le save recompose
+    <p class="subtitle">Frame range of the shot (schema 2.1). Saving recomposes
       <code>shot_root.usda</code> (timecodes).</p>
     <div class="fr-fields">
       <div class="field"><label for="js-fr-start">Start</label>
@@ -673,19 +673,19 @@
     </div>
     <div class="modal-err" id="js-fr-err"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost"   type="button" id="js-fr-cancel">Annuler</button>
-      <button class="btn btn-primary" type="button" id="js-fr-save">Enregistrer</button>
+      <button class="btn btn-ghost"   type="button" id="js-fr-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-fr-save">Save</button>
     </div>
   </div>
 </div>
 
-<!-- ── Modal nouvel asset ──────────────────────────── -->
+<!-- ── New-asset modal ─────────────────────────────── -->
 <div class="modal-overlay hidden" id="js-modal-new-asset">
   <div class="modal">
-    <h2>Créer un asset</h2>
-    <p class="subtitle">Scaffolde une nouvelle entité dans le projet actif.</p>
+    <h2>Create an asset</h2>
+    <p class="subtitle">Scaffolds a new entity in the active project.</p>
     <div class="field">
-      <label>Nom</label>
+      <label>Name</label>
       <input type="text" id="js-na-name" spellcheck="false" placeholder="Lina">
     </div>
     <div class="field" style="margin-top:12px">
@@ -697,7 +697,7 @@
       </select>
     </div>
     <div class="field" style="margin-top:12px">
-      <label>Type métier</label>
+      <label>Business type</label>
       <select id="js-na-type" class="modal-select"></select>
     </div>
     <div class="field" style="margin-top:12px">
@@ -706,8 +706,8 @@
     </div>
     <div class="modal-err" id="js-na-err"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost"   type="button" id="js-na-cancel">Annuler</button>
-      <button class="btn btn-primary" type="button" id="js-na-ok">Créer</button>
+      <button class="btn btn-ghost"   type="button" id="js-na-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-na-ok">Create</button>
     </div>
   </div>
 </div>
@@ -719,10 +719,10 @@
 console.log('[ylos] script start');
 'use strict';
 
-// Servie par ylos_ui.py : même origine que la page (suit --port automatiquement).
-// Fallback 8765 seulement si la page n'est pas servie en http (ouverture directe du
-// fichier — non supporté par la garde d'origine, cf. ylos_ui.py, mais on ne casse pas
-// l'URL pour autant).
+// Served by ylos_ui.py: same origin as the page (follows --port automatically).
+// Fallback 8765 only if the page is not served over http (direct file
+// open — not supported by the origin guard, see ylos_ui.py, but we don't break
+// the URL for it).
 const BASE     = location.protocol.startsWith('http')
   ? location.origin
   : 'http://127.0.0.1:8765';
@@ -741,10 +741,10 @@ const S = {
   filterFamily: 'ALL',
   sort:         'name-asc',
   density:      'm',
-  // Jeton de cache-bust des vignettes. Une vignette est MUTABLE à URL constante (republier
-  // un step réécrit thumb.png au même chemin) : sans ce jeton, un rafraîchissement manuel
-  // après publish peut resservir l'image en cache. Bougé UNIQUEMENT sur refresh explicite —
-  // le bouger à chaque poll re-téléchargerait toutes les vignettes en boucle.
+  // Thumbnail cache-bust token. A thumbnail is MUTABLE at a constant URL (republishing
+  // a step rewrites thumb.png at the same path): without this token, a manual refresh
+  // after a publish may re-serve the cached image. Moved ONLY on explicit refresh —
+  // moving it on every poll would re-download all thumbnails in a loop.
   thumbToken:   Date.now(),
   _thumbSig:    null,
 };
@@ -773,10 +773,10 @@ const TOAST        = el('js-toast');
 const MODAL_NP     = el('js-modal-new-project');
 const MODAL_NA     = el('js-modal-new-asset');
 
-// Fallback HORS-LIGNE uniquement. La source de vérité est le serveur (/api/config ←
-// create_project.py, logique unique) : rechargée au boot et à chaque changement de
-// projet (les steps dépendent du pipeline du projet actif). Ne pas éditer les valeurs
-// ici sans raison — serveur joignable, elles sont écrasées.
+// OFFLINE fallback only. The source of truth is the server (/api/config ←
+// create_project.py, single logic): reloaded at boot and on every project
+// change (steps depend on the active project's pipeline). Do not edit the values
+// here without reason — with the server reachable, they are overwritten.
 let FAMILY_CONFIG = {
   asset: {
     types: ['CHARACTER', 'PROP', 'VEHICLE', 'CREATURE', 'FX_ELEMENT'],
@@ -796,7 +796,7 @@ async function loadConfig() {
   try {
     const { ok, data } = await api('/api/config');
     if (ok && data.families) FAMILY_CONFIG = data.families;
-  } catch { /* hors-ligne : le fallback local ci-dessus reste en place */ }
+  } catch { /* offline: the local fallback above stays in place */ }
 }
 
 // ── API helper ──────────────────────────────────────
@@ -817,13 +817,13 @@ async function checkServer() {
     S.project = ok ? data : null;
     PROJECT_NAME.textContent = ok
       ? (data.display_name || data.name || data._project_path?.split('/').pop() || '—')
-      : 'Aucun projet';
+      : 'No project';
     PROJECT_TARGET.textContent = ok ? (data.pipeline_target || '') : '';
     PROJECT_TARGET.classList.toggle('hidden', !ok || !data.pipeline_target);
   } catch {
     setOnline(false);
     S.project = null;
-    PROJECT_NAME.textContent = 'Aucun projet';
+    PROJECT_NAME.textContent = 'No project';
     PROJECT_TARGET.classList.add('hidden');
   }
 }
@@ -831,7 +831,7 @@ async function checkServer() {
 function setOnline(v) {
   S.online = v;
   DOT.className          = 'status-dot ' + (v ? 'online' : 'offline');
-  STATUS_LBL.textContent = v ? 'Connecté' : 'Hors ligne';
+  STATUS_LBL.textContent = v ? 'Connected' : 'Offline';
   ERR_BANNER.classList.toggle('hidden', v);
 }
 
@@ -843,10 +843,10 @@ async function loadAssets() {
     const { ok, data } = await api('/api/assets');
     if (ok) {
       const next = data.assets || [];
-      // Cache-bust ciblé : le jeton ne bouge que si la SIGNATURE des vignettes a changé
-      // (chemin de thumb + dernières versions). Un publish réécrit thumb.png à URL
-      // constante — sans ce bump, le navigateur resservirait l'ancienne image ; en le
-      // bumpant à chaque poll, on re-téléchargerait toutes les vignettes en boucle.
+      // Targeted cache-bust: the token only moves if the SIGNATURE of the thumbnails changed
+      // (thumb path + latest versions). A publish rewrites thumb.png at a constant
+      // URL — without this bump, the browser would re-serve the old image; bumping it
+      // on every poll would re-download all thumbnails in a loop.
       const sig = a => `${a.name}|${a.thumb || ''}|${Object.entries(a.last_versions || {})
         .map(([s, v]) => s + v.version).sort().join(',')}`;
       const nextSig = next.map(sig).join(';');
@@ -902,15 +902,15 @@ function render() {
 
   if (visible.length === 0) {
     EMPTY_REASON.textContent = (S.filterType !== 'ALL' || S.filterFamily !== 'ALL')
-      ? 'Aucun asset ne correspond aux filtres.'
-      : "Ce projet ne contient pas encore d'assets.";
+      ? 'No asset matches the filters.'
+      : 'This project has no assets yet.';
     return;
   }
 
   GRID.innerHTML = visible.map(cardHTML).join('');
 
-  // Deux verbes, jamais de chemin construit ici (cf. INC-3) : le serveur résout
-  // {entity, step?} ('Ouvrir la scène') ou {entity, step, version} ('Importer').
+  // Two verbs, never a path built here (see INC-3): the server resolves
+  // {entity, step?} ('Open the scene') or {entity, step, version} ('Import').
   GRID.querySelectorAll('[data-open-entity]').forEach(btn =>
     btn.addEventListener('click', () => openScene(btn.dataset.openEntity, btn.dataset.openStep))
   );
@@ -938,14 +938,14 @@ function thumbURL(path) {
 }
 
 const THUMB_TAGS = {
-  wip:    ['wip',    'WIP',     'Vignette du dernier WIP — cette entité n\'a pas encore de publish'],
-  custom: ['custom', 'Preview', 'Vignette définie manuellement (preview.png)'],
+  wip:    ['wip',    'WIP',     'Latest WIP thumbnail — this entity has no publish yet'],
+  custom: ['custom', 'Preview', 'Manually set thumbnail (preview.png)'],
 };
 
 function cardHTML(asset) {
   const { name, family, type, last_versions = {}, frame_range, thumb, thumb_source, broken } = asset;
   const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
-  const color = TYPE_COLORS[type] || '#9c9cc8';  // aligné sur --text-muted (fix contraste 2026-08-03)
+  const color = TYPE_COLORS[type] || '#9c9cc8';  // aligned with --text-muted (contrast fix 2026-08-03)
 
   const tag = THUMB_TAGS[thumb_source];
   const tagHTML = (thumb && tag)
@@ -966,16 +966,16 @@ function cardHTML(asset) {
         const rowThumb = v.thumb
           ? `<img class="step-thumb" src="${esc(thumbURL(v.thumb))}" alt="" loading="lazy">`
           : `<span class="step-thumb step-thumb-empty">${iconBox(11)}</span>`;
-        return `<div class="step-row" data-import-entity="${esc(name)}" data-import-step="${esc(step)}" data-import-version="${v.version ?? ''}" title="Importer ${esc(step)} ${ver} (nouvelle session)">
+        return `<div class="step-row" data-import-entity="${esc(name)}" data-import-step="${esc(step)}" data-import-version="${v.version ?? ''}" title="Import ${esc(step)} ${ver} (new session)">
                   ${rowThumb}
                   <span class="step-name">${esc(step)}</span>
                   ${v.ext ? `<span class="step-ext">${esc(v.ext.toUpperCase())}</span>` : ''}
                   <span class="step-ver">${esc(ver)}</span>
                 </div>`;
       }).join('')
-    : `<span style="font-size:11px;color:var(--text-dim)">Aucun publish</span>`;
+    : `<span style="font-size:11px;color:var(--text-dim)">No publish</span>`;
 
-  // step dont le numéro de version est le plus élevé parmi last_versions
+  // step with the highest version number among last_versions
   const bestStep = steps.length
     ? steps.reduce((best, cur) => (cur[1].version || 0) > (best[1].version || 0) ? cur : best)[0]
     : null;
@@ -984,12 +984,12 @@ function cardHTML(asset) {
     ? `<div class="card-warn">${iconWarn(12)}<span>${esc(broken)}</span></div>`
     : '';
 
-  // frame_range : shots seulement (schéma 2.1), non éditable sur une entité orpheline.
+  // frame_range: shots only (schema 2.1), not editable on an orphan entity.
   const frameChip = (family === 'shots' && !broken)
-    ? `<button class="frame-chip${frame_range ? '' : ' unset'}" type="button" data-framerange-entity="${esc(name)}" title="Éditer la plage d'images (frame range)">
+    ? `<button class="frame-chip${frame_range ? '' : ' unset'}" type="button" data-framerange-entity="${esc(name)}" title="Edit the frame range">
          ${frame_range
             ? `${frame_range.start}–${frame_range.end}<span class="frame-fps">@${esc(String(frame_range.fps))}</span>`
-            : 'Définir les frames…'}
+            : 'Set frames…'}
        </button>`
     : '';
 
@@ -999,7 +999,7 @@ function cardHTML(asset) {
       <div class="card-body">
         <div class="card-head">
           <span class="card-name">${esc(name)}</span>
-          <button class="icon-btn" type="button" data-scenefiles-entity="${esc(name)}" title="Scenefiles (historique WIP)" style="flex-shrink:0">
+          <button class="icon-btn" type="button" data-scenefiles-entity="${esc(name)}" title="Scenefiles (WIP history)" style="flex-shrink:0">
             ${iconHistory(13)}
           </button>
         </div>
@@ -1009,9 +1009,9 @@ function cardHTML(asset) {
         <div class="card-footer">
           ${bestStep
             ? `<button class="btn btn-primary" type="button" data-open-entity="${esc(name)}" data-open-step="${esc(bestStep)}">
-                 ${iconPlay(13)} Ouvrir la scène
+                 ${iconPlay(13)} Open the scene
                </button>`
-            : `<button class="btn btn-secondary" type="button" disabled>Aucun publish</button>`}
+            : `<button class="btn btn-secondary" type="button" disabled>No publish</button>`}
         </div>
       </div>
     </div>`;
@@ -1053,22 +1053,22 @@ function esc(s) {
 }
 
 // ── Type filter rebuild ──────────────────────────────
-// Scopé à la famille active : les types d'asset/set/shot ne se mélangent plus dans la
-// même rangée de pills. Rappelé au chargement ET au changement de famille (cf. binding
-// js-pills-family plus bas) — jamais seulement au boot.
+// Scoped to the active family: asset/set/shot types no longer mix in the
+// same row of pills. Called at load AND on family change (see the
+// js-pills-family binding below) — never only at boot.
 function rebuildTypeFilter() {
   const scoped = S.filterFamily === 'ALL'
     ? S.assets
     : S.assets.filter(a => a.family === S.filterFamily);
   const types = [...new Set(scoped.map(a => a.type).filter(Boolean))].sort();
 
-  // Le type actif peut ne plus exister dans le nouveau scope (ex: famille changée) —
-  // retombe sur "Tous" plutôt que de garder un filtre invisible/actif dans le vide.
+  // The active type may no longer exist in the new scope (e.g. family changed) —
+  // falls back to "All" rather than keeping an invisible/active filter over nothing.
   if (S.filterType !== 'ALL' && !types.includes(S.filterType)) S.filterType = 'ALL';
 
   const ctnr  = el('js-pills-type');
 
-  ctnr.innerHTML = `<span class="pill ${S.filterType === 'ALL' ? 'active' : ''}" data-type="ALL">Tous</span>`;
+  ctnr.innerHTML = `<span class="pill ${S.filterType === 'ALL' ? 'active' : ''}" data-type="ALL">All</span>`;
   types.forEach(t => {
     const p = document.createElement('span');
     p.className    = 'pill' + (S.filterType === t ? ' active' : '');
@@ -1087,22 +1087,22 @@ function rebuildTypeFilter() {
 }
 
 // ── Open / Import (DCC) ───────────────────────────────
-// Deux verbes, jamais de chemin construit ici : le serveur résout {entity, step?} ou
-// {entity, step, version} contre l'orchestrateur (create_project) et construit lui-même
-// le chemin canonique + l'argv du launcher (cf. INC-3 - fini la reconstruction
-// project_root + rel côté client, cause du bug : segment 'assets/<entité>' manquant).
+// Two verbs, never a path built here: the server resolves {entity, step?} or
+// {entity, step, version} against the orchestrator (create_project) and builds itself
+// the canonical path + the launcher argv (see INC-3 - no more client-side
+// project_root + rel reconstruction, cause of the bug: missing 'assets/<entity>' segment).
 async function openScene(entity, step) {
   const payload = { entity };
   if (step) payload.step = step;
-  await _launchDcc(payload, 'Scène ouverte');
+  await _launchDcc(payload, 'Scene opened');
 }
 
 async function importPublish(entity, step, version) {
   if (!step || version === undefined || version === '') {
-    toast('Version manquante', 'err');
+    toast('Missing version', 'err');
     return;
   }
-  await _launchDcc({ entity, step, version: Number(version) }, 'Import lancé (nouvelle session)');
+  await _launchDcc({ entity, step, version: Number(version) }, 'Import started (new session)');
 }
 
 async function _launchDcc(payload, okMessage) {
@@ -1111,9 +1111,9 @@ async function _launchDcc(payload, okMessage) {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    ok ? toast(okMessage, 'ok') : toast(data.error || 'Erreur', 'err');
+    ok ? toast(okMessage, 'ok') : toast(data.error || 'Error', 'err');
   } catch {
-    toast('Serveur non disponible', 'err');
+    toast('Server unavailable', 'err');
   }
 }
 
@@ -1128,10 +1128,10 @@ function closeModal() { MODAL.classList.add('hidden'); }
 
 async function confirmModal() {
   const path = MODAL_INPUT.value.trim();
-  if (!path) { MODAL_ERR.textContent = 'Chemin requis.'; return; }
+  if (!path) { MODAL_ERR.textContent = 'Path required.'; return; }
   MODAL_ERR.textContent = '';
   MODAL_OK.disabled     = true;
-  MODAL_OK.textContent  = 'Chargement…';
+  MODAL_OK.textContent  = 'Loading…';
   try {
     const { ok, data } = await api('/api/set-project', {
       method: 'POST',
@@ -1143,15 +1143,15 @@ async function confirmModal() {
       await checkServer();
       await loadAssets();
       await loadRecent();
-      toast('Projet changé', 'ok');
+      toast('Project changed', 'ok');
     } else {
-      MODAL_ERR.textContent = data.error || 'Erreur inconnue';
+      MODAL_ERR.textContent = data.error || 'Unknown error';
     }
   } catch {
-    MODAL_ERR.textContent = 'Serveur non disponible';
+    MODAL_ERR.textContent = 'Server unavailable';
   } finally {
     MODAL_OK.disabled    = false;
-    MODAL_OK.textContent = 'Confirmer';
+    MODAL_OK.textContent = 'Confirm';
   }
 }
 
@@ -1194,10 +1194,10 @@ MODAL_INPUT.addEventListener('keydown', e => {
 
 el('js-sort').addEventListener('change', e => { S.sort = e.target.value; render(); });
 
-// Repli placeholder quand une vignette ne charge pas (404, fichier corrompu). Attaché UNE
-// SEULE FOIS ici, et non dans render() : render() est rappelé à chaque poll, donc l'ancien
-// addEventListener y empilait un écouteur par cycle (fuite silencieuse qui grossit tant que
-// l'onglet reste ouvert). En capture, car 'error' sur <img> ne bulle pas.
+// Placeholder fallback when a thumbnail fails to load (404, corrupted file). Attached ONCE
+// here, and not in render(): render() is called back on every poll, so the old
+// addEventListener stacked one listener per cycle (silent leak that grows as long as
+// the tab stays open). In capture, because 'error' on <img> does not bubble.
 GRID.addEventListener('error', e => {
   if (e.target.tagName === 'IMG') {
     e.target.style.display = 'none';
@@ -1221,7 +1221,7 @@ el('js-pills-family').querySelectorAll('.pill').forEach(p =>
   p.addEventListener('click', () => {
     S.filterFamily = p.dataset.fam;
     el('js-pills-family').querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x === p));
-    rebuildTypeFilter();  // les pills Type dépendent de la famille active
+    rebuildTypeFilter();  // the Type pills depend on the active family
     render();
   })
 );
@@ -1245,10 +1245,10 @@ function renderBrowsePanel(data) {
   const panel = el('js-np-browse-panel');
   let html = '';
   if (data.parent !== null) {
-    html += `<div class="browse-row browse-parent" data-path="${esc(data.parent)}">↑ Dossier parent</div>`;
+    html += `<div class="browse-row browse-parent" data-path="${esc(data.parent)}">↑ Parent folder</div>`;
   }
   if (!data.dirs.length) {
-    html += `<div class="browse-row" style="color:var(--text-dim);cursor:default">Dossier vide</div>`;
+    html += `<div class="browse-row" style="color:var(--text-dim);cursor:default">Empty folder</div>`;
   } else {
     html += data.dirs.map(d =>
       `<div class="browse-row" data-path="${esc(d.path)}">
@@ -1276,15 +1276,15 @@ async function browseTo(path) {
   try {
     const res  = await fetch(url);
     const data = await res.json();
-    if (!res.ok) { el('js-np-err').textContent = data.error || 'Erreur browse'; return; }
+    if (!res.ok) { el('js-np-err').textContent = data.error || 'Browse error'; return; }
     renderBrowsePanel(data);
     if (data.path) el('js-np-root').value = data.path;
   } catch {
-    el('js-np-err').textContent = 'Serveur non disponible';
+    el('js-np-err').textContent = 'Server unavailable';
   }
 }
 
-// ── Modal nouveau projet ──────────────────────────────
+// ── New-project modal ─────────────────────────────────
 function openNewProjectModal() {
   el('js-np-name').value      = '';
   el('js-np-root').value      = '';
@@ -1304,11 +1304,11 @@ async function confirmNewProject() {
   console.log('[ylos] root:', el('js-np-root').value.trim());
   const name = el('js-np-name').value.trim();
   const root = el('js-np-root').value.trim();
-  if (!name) { el('js-np-err').textContent = 'Nom requis.'; return; }
-  if (!root) { el('js-np-err').textContent = 'Dossier racine requis.'; return; }
+  if (!name) { el('js-np-err').textContent = 'Name required.'; return; }
+  if (!root) { el('js-np-err').textContent = 'Root folder required.'; return; }
   el('js-np-err').textContent = '';
   const btn = el('js-np-ok');
-  btn.disabled = true; btn.textContent = 'Création…';
+  btn.disabled = true; btn.textContent = 'Creating…';
   try {
     const { ok, data } = await api('/api/create-project', {
       method: 'POST',
@@ -1322,18 +1322,18 @@ async function confirmNewProject() {
       await loadConfig();
       await loadAssets();
       await loadRecent();
-      toast('Projet créé', 'ok');
+      toast('Project created', 'ok');
     } else {
-      el('js-np-err').textContent = data.error || 'Erreur inconnue';
+      el('js-np-err').textContent = data.error || 'Unknown error';
     }
   } catch {
-    el('js-np-err').textContent = 'Serveur non disponible';
+    el('js-np-err').textContent = 'Server unavailable';
   } finally {
-    btn.disabled = false; btn.textContent = 'Créer';
+    btn.disabled = false; btn.textContent = 'Create';
   }
 }
 
-// ── Modal nouvel asset ────────────────────────────────
+// ── New-asset modal ───────────────────────────────────
 function rebuildAssetModal(family) {
   const cfg = FAMILY_CONFIG[family] || FAMILY_CONFIG.asset;
   el('js-na-type').innerHTML = cfg.types.map(t =>
@@ -1357,11 +1357,11 @@ function closeNewAssetModal() { MODAL_NA.classList.add('hidden'); }
 async function confirmNewAsset() {
   const name  = el('js-na-name').value.trim();
   const steps = [...el('js-na-steps').querySelectorAll('input:checked')].map(i => i.value);
-  if (!name)         { el('js-na-err').textContent = 'Nom requis.'; return; }
-  if (!steps.length) { el('js-na-err').textContent = 'Au moins un step requis.'; return; }
+  if (!name)         { el('js-na-err').textContent = 'Name required.'; return; }
+  if (!steps.length) { el('js-na-err').textContent = 'At least one step required.'; return; }
   el('js-na-err').textContent = '';
   const btn = el('js-na-ok');
-  btn.disabled = true; btn.textContent = 'Création…';
+  btn.disabled = true; btn.textContent = 'Creating…';
   try {
     const { ok, data } = await api('/api/create-asset', {
       method: 'POST',
@@ -1376,14 +1376,14 @@ async function confirmNewAsset() {
       closeNewAssetModal();
       if (data.first_step) await openScene(name, data.first_step);
       await loadAssets();
-      toast('Asset créé', 'ok');
+      toast('Asset created', 'ok');
     } else {
-      el('js-na-err').textContent = data.error || 'Erreur inconnue';
+      el('js-na-err').textContent = data.error || 'Unknown error';
     }
   } catch {
-    el('js-na-err').textContent = 'Serveur non disponible';
+    el('js-na-err').textContent = 'Server unavailable';
   } finally {
-    btn.disabled = false; btn.textContent = 'Créer';
+    btn.disabled = false; btn.textContent = 'Create';
   }
 }
 
@@ -1393,8 +1393,8 @@ const MODAL_WS = el('js-modal-web-sync');
 function openWebSyncModal() {
   el('js-ws-target').value = S.project?.web?.target_dir || '';
   el('js-ws-err').textContent = '';
-  el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Chargement…</div>';
-  loadWebPins();  // async, remplit la liste dès la réponse
+  el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Loading…</div>';
+  loadWebPins();  // async, fills the list as soon as the response arrives
   MODAL_WS.classList.remove('hidden');
   setTimeout(() => el('js-ws-target').focus(), 40);
 }
@@ -1405,12 +1405,12 @@ async function loadWebPins() {
     const { ok, data } = await api('/api/web-pins');
     if (!ok) {
       el('js-ws-pins').innerHTML =
-        `<div class="ws-pins-empty">${esc(data.error || 'Erreur')}</div>`;
+        `<div class="ws-pins-empty">${esc(data.error || 'Error')}</div>`;
       return;
     }
     renderWebPins(data);
   } catch {
-    el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Serveur non disponible</div>';
+    el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Server unavailable</div>';
   }
 }
 
@@ -1418,13 +1418,13 @@ function renderWebPins(data) {
   const names = Object.keys(data.available).sort();
   if (!names.length) {
     el('js-ws-pins').innerHTML =
-      '<div class="ws-pins-empty">Aucun publish GLB dans ce projet — exporter en GLB depuis Blender d’abord.</div>';
+      '<div class="ws-pins-empty">No GLB publish in this project — export to GLB from Blender first.</div>';
     return;
   }
   el('js-ws-pins').innerHTML = names.map(name => {
     const pin = data.pins[name];
     const cur = pin ? `${pin.step}|${pin.version}` : '';
-    const opts = ['<option value="">— non pinné —</option>'];
+    const opts = ['<option value="">— not pinned —</option>'];
     let curFound = cur === '';
     for (const [step, versions] of Object.entries(data.available[name])) {
       for (const v of versions) {
@@ -1434,10 +1434,10 @@ function renderWebPins(data) {
                   `${esc(step)} v${String(v).padStart(3, '0')}</option>`);
       }
     }
-    // Pin pointant vers un publish disparu (édition manuelle, disque) : le montrer tel
-    // quel plutôt que d'afficher "non pinné" alors que le serveur a un pin.
+    // Pin pointing to a vanished publish (manual edit, disk): show it as-is
+    // rather than displaying "not pinned" while the server has a pin.
     if (!curFound)
-      opts.push(`<option value="${esc(cur)}" selected>${esc(pin.step)} v${String(pin.version).padStart(3, '0')} (introuvable)</option>`);
+      opts.push(`<option value="${esc(cur)}" selected>${esc(pin.step)} v${String(pin.version).padStart(3, '0')} (not found)</option>`);
     return `<div class="ws-pin-row"><span class="ws-pin-name" title="${esc(name)}">${esc(name)}</span>` +
            `<select data-asset="${esc(name)}">${opts.join('')}</select></div>`;
   }).join('');
@@ -1464,11 +1464,11 @@ el('js-ws-pins').addEventListener('change', async e => {
     if (resp.ok) {
       el('js-ws-err').textContent = '';
     } else {
-      el('js-ws-err').textContent = resp.data.error || 'Erreur inconnue';
-      await loadWebPins();  // resynchronise l'affichage sur l'état serveur réel
+      el('js-ws-err').textContent = resp.data.error || 'Unknown error';
+      await loadWebPins();  // resync the display with the real server state
     }
   } catch {
-    el('js-ws-err').textContent = 'Serveur non disponible';
+    el('js-ws-err').textContent = 'Server unavailable';
   } finally {
     sel.disabled = false;
   }
@@ -1476,31 +1476,31 @@ el('js-ws-pins').addEventListener('change', async e => {
 
 async function confirmWebSync() {
   const targetDir = el('js-ws-target').value.trim();
-  if (!targetDir) { el('js-ws-err').textContent = 'Dossier requis.'; return; }
+  if (!targetDir) { el('js-ws-err').textContent = 'Folder required.'; return; }
   el('js-ws-err').textContent = '';
   const btn = el('js-ws-ok');
-  btn.disabled = true; btn.textContent = 'Synchronisation…';
+  btn.disabled = true; btn.textContent = 'Syncing…';
   try {
     const set = await api('/api/set-web-target', {
       method: 'POST',
       body: JSON.stringify({ target_dir: targetDir }),
     });
-    if (!set.ok) { el('js-ws-err').textContent = set.data.error || 'Erreur inconnue'; return; }
+    if (!set.ok) { el('js-ws-err').textContent = set.data.error || 'Unknown error'; return; }
 
     const { ok, data } = await api('/api/sync-web', { method: 'POST' });
     if (ok) {
       closeWebSyncModal();
       const n = Object.keys(data.synced || {}).length;
       const warn = (data.warnings || []).length;
-      toast(`Sync web : ${n} asset${n !== 1 ? 's' : ''}${warn ? `, ${warn} avertissement(s)` : ''}`,
+      toast(`Web sync: ${n} asset${n !== 1 ? 's' : ''}${warn ? `, ${warn} warning(s)` : ''}`,
             (n === 0 && warn > 0) ? 'err' : 'ok');
     } else {
-      el('js-ws-err').textContent = data.error || 'Erreur inconnue';
+      el('js-ws-err').textContent = data.error || 'Unknown error';
     }
   } catch {
-    el('js-ws-err').textContent = 'Serveur non disponible';
+    el('js-ws-err').textContent = 'Server unavailable';
   } finally {
-    btn.disabled = false; btn.textContent = 'Synchroniser';
+    btn.disabled = false; btn.textContent = 'Sync';
   }
 }
 
@@ -1511,12 +1511,12 @@ el('js-ws-target').addEventListener('keydown', e => {
   if (e.key === 'Enter') confirmWebSync(); if (e.key === 'Escape') closeWebSyncModal();
 });
 
-// ── Scenefiles (historique WIP + commentaires, INC-4) ─
+// ── Scenefiles (WIP history + comments, INC-4) ─
 const MODAL_SF = el('js-modal-scenefiles');
 
 function openScenefilesModal(entity) {
   el('js-sf-title').textContent = `Scenefiles — ${entity}`;
-  el('js-sf-body').innerHTML = '<div class="sf-empty">Chargement…</div>';
+  el('js-sf-body').innerHTML = '<div class="sf-empty">Loading…</div>';
   MODAL_SF.classList.remove('hidden');
   loadScenefiles(entity);
 }
@@ -1526,19 +1526,19 @@ async function loadScenefiles(entity) {
   try {
     const { ok, data } = await api(`/api/asset/${encodeURIComponent(entity)}`);
     if (!ok) {
-      el('js-sf-body').innerHTML = `<div class="sf-empty">${esc(data.error || 'Erreur')}</div>`;
+      el('js-sf-body').innerHTML = `<div class="sf-empty">${esc(data.error || 'Error')}</div>`;
       return;
     }
     renderScenefiles(data.scenefiles || {});
   } catch {
-    el('js-sf-body').innerHTML = '<div class="sf-empty">Serveur non disponible</div>';
+    el('js-sf-body').innerHTML = '<div class="sf-empty">Server unavailable</div>';
   }
 }
 
 function renderScenefiles(scenefiles) {
   const steps = Object.keys(scenefiles).sort();
   if (!steps.length) {
-    el('js-sf-body').innerHTML = '<div class="sf-empty">Aucun WIP sauvé pour cette entité.</div>';
+    el('js-sf-body').innerHTML = '<div class="sf-empty">No WIP saved for this entity.</div>';
     return;
   }
   el('js-sf-body').innerHTML = steps.map(step => {
@@ -1548,7 +1548,7 @@ function renderScenefiles(scenefiles) {
       const meta = [v.user, v.date].filter(Boolean).join(' · ');
       const comment = v.comment
         ? `<div class="sf-comment">${esc(v.comment)}</div>`
-        : '<div class="sf-comment sf-comment-empty">Pas de commentaire</div>';
+        : '<div class="sf-comment sf-comment-empty">No comment</div>';
       return `<div class="sf-row">
                 <div class="sf-row-head">
                   <span class="sf-ver">${esc(ver)}</span>
@@ -1564,14 +1564,14 @@ function renderScenefiles(scenefiles) {
 el('js-sf-close').addEventListener('click', closeScenefilesModal);
 MODAL_SF.addEventListener('click', e => { if (e.target === MODAL_SF) closeScenefilesModal(); });
 
-// ── Frame range (shots, schéma 2.1) ─────────────────
+// ── Frame range (shots, schema 2.1) ─────────────────
 const MODAL_FR = el('js-modal-framerange');
 let _frEntity = null;
 
 function openFrameRangeModal(entity) {
   _frEntity = entity;
   const asset = S.assets.find(a => a.name === entity);
-  const fr = asset && asset.frame_range;   // {start, end, fps} ou null (pas encore posé)
+  const fr = asset && asset.frame_range;   // {start, end, fps} or null (not set yet)
   el('js-fr-title').textContent = `Frame range — ${entity}`;
   el('js-fr-start').value = fr ? fr.start : 1001;
   el('js-fr-end').value   = fr ? fr.end   : 1100;
@@ -1583,24 +1583,24 @@ function openFrameRangeModal(entity) {
 function closeFrameRangeModal() { MODAL_FR.classList.add('hidden'); _frEntity = null; }
 
 async function saveFrameRange() {
-  // Validation client = confort ; le serveur (create_project.set_frame_range) reste
-  // l'autorité (mêmes règles : start<end, fps>0, entité=shot).
+  // Client validation = convenience; the server (create_project.set_frame_range) stays
+  // the authority (same rules: start<end, fps>0, entity=shot).
   const start = parseInt(el('js-fr-start').value, 10);
   const end   = parseInt(el('js-fr-end').value, 10);
   const fpsRaw = el('js-fr-fps').value.trim();
   const fps    = fpsRaw === '' ? null : parseFloat(fpsRaw);
   if (!Number.isInteger(start) || !Number.isInteger(end)) {
-    el('js-fr-err').textContent = 'Start et End doivent être des entiers.'; return;
+    el('js-fr-err').textContent = 'Start and End must be integers.'; return;
   }
   if (start >= end) {
-    el('js-fr-err').textContent = 'Start doit être strictement inférieur à End.'; return;
+    el('js-fr-err').textContent = 'Start must be strictly less than End.'; return;
   }
   if (fps !== null && !(fps > 0)) {
-    el('js-fr-err').textContent = 'FPS doit être un nombre positif.'; return;
+    el('js-fr-err').textContent = 'FPS must be a positive number.'; return;
   }
   el('js-fr-err').textContent = '';
   const btn = el('js-fr-save');
-  btn.disabled = true; btn.textContent = 'Enregistrement…';
+  btn.disabled = true; btn.textContent = 'Saving…';
   try {
     const body = { entity: _frEntity, start, end };
     if (fps !== null) body.fps = fps;
@@ -1610,14 +1610,14 @@ async function saveFrameRange() {
     if (ok) {
       closeFrameRangeModal();
       await loadAssets();
-      toast('Frame range enregistré', 'ok');
+      toast('Frame range saved', 'ok');
     } else {
-      el('js-fr-err').textContent = data.error || 'Erreur inconnue';
+      el('js-fr-err').textContent = data.error || 'Unknown error';
     }
   } catch {
-    el('js-fr-err').textContent = 'Serveur non disponible';
+    el('js-fr-err').textContent = 'Server unavailable';
   } finally {
-    btn.disabled = false; btn.textContent = 'Enregistrer';
+    btn.disabled = false; btn.textContent = 'Save';
   }
 }
 
@@ -1662,7 +1662,7 @@ async function loadRecent() {
     list.querySelectorAll('li').forEach(li =>
       li.addEventListener('click', () => setProject(li.dataset.path))
     );
-  } catch { /* serveur hors ligne */ }
+  } catch { /* server offline */ }
 }
 
 async function setProject(path) {
@@ -1678,12 +1678,12 @@ async function setProject(path) {
       await loadConfig();
       await loadAssets();
       await loadRecent();
-      toast('Projet changé', 'ok');
+      toast('Project changed', 'ok');
     } else {
-      toast(data.error || 'Erreur', 'err');
+      toast(data.error || 'Error', 'err');
     }
   } catch {
-    toast('Serveur non disponible', 'err');
+    toast('Server unavailable', 'err');
   }
 }
 
