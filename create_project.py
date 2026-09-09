@@ -231,7 +231,7 @@ def _now():
 def _validate_segment(name):
     """A name = a single path segment, no edge whitespace, no separator."""
     if not name or "/" in name or "\\" in name or name.strip() != name:
-        raise ValueError(f"Nom invalide (un seul segment, sans /): {name!r}")
+        raise ValueError(f"Invalid name (single segment, no /): {name!r}")
 
 
 def _resolve(explicit, env_name, fallback):
@@ -242,8 +242,8 @@ def _resolve(explicit, env_name, fallback):
     if env_val:
         return Path(env_val).expanduser().resolve()
     sys.stderr.write(
-        f"[warn] ${env_name} non definie - fallback sur {fallback}. "
-        f"Pose ${env_name} pour un design relocalisable.\n"
+        f"[warn] ${env_name} not set - falling back to {fallback}. "
+        f"Set ${env_name} for a relocatable design.\n"
     )
     return fallback.expanduser().resolve()
 
@@ -416,12 +416,12 @@ def validate_manifest(manifest):
     required = ("schema_version", "name", "created_utc", "env", "structure", "pipeline", "scene")
     missing = [k for k in required if k not in manifest]
     if missing:
-        raise ValueError(f"project.json invalide - cles manquantes : {missing}")
+        raise ValueError(f"project.json invalid - missing keys: {missing}")
     major = str(manifest["schema_version"]).split(".")[0]
     if major != SCHEMA_VERSION.split(".")[0]:
         raise ValueError(
-            f"Incompatibilite de schema : projet={manifest['schema_version']} "
-            f"vs outil={SCHEMA_VERSION}. Migration requise."
+            f"Schema incompatibility: project={manifest['schema_version']} "
+            f"vs tool={SCHEMA_VERSION}. Migration required."
         )
     return True
 
@@ -623,13 +623,13 @@ def set_frame_range(project_root, shot_name, start, end, fps=None):
     see CLAUDE.md). Returns the written frame_range."""
     start, end = int(start), int(end)
     if start >= end:
-        raise ValueError(f"frame_range invalide : start ({start}) doit etre < end ({end})")
+        raise ValueError(f"frame_range invalid: start ({start}) must be < end ({end})")
     entity_dir, manifest_path = _find_asset_entity(project_root, shot_name)
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("entity_type") != "shot":
             raise ValueError(
-                f"frame_range reserve aux shots : '{shot_name}' est de type "
+                f"frame_range is reserved for shots: '{shot_name}' is of type "
                 f"{manifest.get('entity_type')!r}."
             )
         if fps is None:
@@ -927,7 +927,7 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
         project_root = read_active_project()
     if project_root is None:
         return {"path": None, "kind": None, "step": step, "exists": False,
-                "reason": "aucun projet actif (project_root=None et ~/.ylos/active_project absent)"}
+                "reason": "no active project (project_root=None and ~/.ylos/active_project missing)"}
 
     project_root = Path(project_root)
     try:
@@ -972,8 +972,8 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
 
     # 4. explicit failure (business case, not an exception)
     return {"path": None, "kind": None, "step": step, "exists": False,
-            "reason": (f"aucun WIP pour le step {step!r}, ni scene par defaut ({root_name}), "
-                       f"ni publish USD pour '{entity_name}'")}
+            "reason": (f"no WIP for step {step!r}, no default scene ({root_name}), "
+                       f"no USD publish for '{entity_name}'")}
 
 
 def _project_steps(project_dir, entity_type):
@@ -1007,7 +1007,7 @@ def create(name, root=None, cache=None, force=False, prod_type="FILM", display_n
 
     if source.exists() and not force:
         raise FileExistsError(
-            f"Le projet existe deja : {source} (passer force=True pour forcer)"
+            f"Project already exists: {source} (pass force=True to force)"
         )
 
     # 1. source tree (external, permanent)
@@ -1047,7 +1047,7 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
     Returns {name, entity_type, path, manifest, asset_root}. Non-destructive."""
     project_dir = Path(project_dir)
     if entity_type not in ENTITY_DIR:
-        raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
+        raise ValueError(f"invalid entity_type: {entity_type!r} (asset|set|shot)")
     _validate_segment(name)
     # Name validation at creation - single point (see validate_entity_name): covers
     # web UI, Blender, CLI, future. _validate_segment protects the path, this protects the
@@ -1060,7 +1060,7 @@ def create_asset(project_dir, name, entity_type="asset", asset_type="OTHER",
     entity_dir = project_dir / ENTITY_DIR[entity_type] / name
     if entity_dir.exists() and not force:
         raise FileExistsError(
-            f"L'entite existe deja : {entity_dir} (passer force=True pour forcer)"
+            f"Entity already exists: {entity_dir} (pass force=True to force)"
         )
 
     # 1. step folders generated from the declared steps: wip/ (DCC work) +
@@ -1114,9 +1114,9 @@ def publish_asset(project_root, asset_name, step, source_file):
     """
     import warnings
     warnings.warn(
-        "publish_asset() est deprecie - utiliser allocate_publish_version()/"
-        "finalize_publish_version() (kind=<step>), le contrat deux-phases avec thumbnail "
-        "requis adopte par tous les bridges DCC.",
+        "publish_asset() is deprecated - use allocate_publish_version()/"
+        "finalize_publish_version() (kind=<step>), the two-phase contract with a required "
+        "thumbnail adopted by all DCC bridges.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -1124,7 +1124,7 @@ def publish_asset(project_root, asset_name, step, source_file):
     source_file = Path(source_file)
 
     if not source_file.is_file():
-        raise FileNotFoundError(f"Fichier source introuvable : {source_file}")
+        raise FileNotFoundError(f"Source file not found: {source_file}")
 
     # Locate the entity in assets/ sets/ shots/
     entity_dir = None
@@ -1135,7 +1135,7 @@ def publish_asset(project_root, asset_name, step, source_file):
             break
     if entity_dir is None:
         raise FileNotFoundError(
-            f"Entite '{asset_name}' introuvable dans {project_root} (assets/, sets/, shots/)."
+            f"Entity '{asset_name}' not found in {project_root} (assets/, sets/, shots/)."
         )
 
     manifest_path = entity_dir / ASSET_MANIFEST_NAME
@@ -1150,7 +1150,7 @@ def publish_asset(project_root, asset_name, step, source_file):
         valid_steps = manifest.get("steps", [])
         if step not in valid_steps:
             raise ValueError(
-                f"Step '{step}' invalide pour '{asset_name}' (steps declares : {valid_steps})."
+                f"Step '{step}' invalid for '{asset_name}' (declared steps: {valid_steps})."
             )
 
         # Next version number
@@ -1166,7 +1166,7 @@ def publish_asset(project_root, asset_name, step, source_file):
 
         if target.exists():
             raise FileExistsError(
-                f"Version deja presente, non ecrasee : {target}"
+                f"Version already present, not overwritten: {target}"
             )
 
         shutil.copy2(source_file, target)
@@ -1220,10 +1220,10 @@ def validate_entity_name(name, entity_type, sub_type):
     historical contract, see validate_publish_asset_name)."""
     valid_types = _TYPES_BY_ENTITY.get(entity_type)
     if valid_types is None:
-        raise ValueError(f"entity_type invalide : {entity_type!r} (asset|set|shot)")
+        raise ValueError(f"invalid entity_type: {entity_type!r} (asset|set|shot)")
     if sub_type not in valid_types:
         raise ValueError(
-            f"type invalide : {sub_type!r} (attendu un de {valid_types} pour entity_type={entity_type!r})"
+            f"invalid type: {sub_type!r} (expected one of {valid_types} for entity_type={entity_type!r})"
         )
     prefix = f"{sub_type}_"
     valid = False
@@ -1234,8 +1234,8 @@ def validate_entity_name(name, entity_type, sub_type):
     if not valid:
         suggestion = _suggested_entity_name(name, sub_type)
         raise ValueError(
-            f"{name!r} invalide - suggestion : {suggestion!r}. "
-            f"Convention : TYPE_Nom_Variant, familles valides : {', '.join(valid_types)}."
+            f"{name!r} invalid - suggestion: {suggestion!r}. "
+            f"Convention: TYPE_Name_Variant, valid families: {', '.join(valid_types)}."
         )
     return True
 
@@ -1257,8 +1257,8 @@ def _find_asset_entity(project_root, asset_name):
         if manifest_path.is_file():
             return candidate, manifest_path
     raise FileNotFoundError(
-        f"Entite '{asset_name}' introuvable sous {project_root} (assets/, sets/, shots/) "
-        f"(doit etre creee via create_asset() avant tout publish)."
+        f"Entity '{asset_name}' not found under {project_root} (assets/, sets/, shots/) "
+        f"(must be created via create_asset() before any publish)."
     )
 
 
@@ -1301,7 +1301,7 @@ def publish_version_from_dir(final_dir):
     file name with an extension (see publish_asset)."""
     m = _DIR_VER_RE.search(Path(final_dir).name)
     if not m:
-        raise ValueError(f"final_dir ne contient pas de suffixe de version : {final_dir!r}")
+        raise ValueError(f"final_dir has no version suffix: {final_dir!r}")
     return int(m.group(1))
 
 
@@ -1353,8 +1353,8 @@ def allocate_publish_version(project_root, asset_name, asset_type=None, comment=
             declared_type = manifest.get("type")
             if declared_type != asset_type:
                 raise ValueError(
-                    f"asset_type {asset_type!r} ne correspond pas au type declare de "
-                    f"'{asset_name}' dans manifest.json ({declared_type!r})."
+                    f"asset_type {asset_type!r} does not match the declared type of "
+                    f"'{asset_name}' in manifest.json ({declared_type!r})."
                 )
 
         existing = _publish_entries(manifest, kind)
@@ -1366,7 +1366,7 @@ def allocate_publish_version(project_root, asset_name, asset_type=None, comment=
         staging_dir = staging_root / f"{versioned_name}.staging-{os.getpid()}"
 
         if final_dir.exists():
-            raise FileExistsError(f"Version deja presente, non ecrasee : {final_dir}")
+            raise FileExistsError(f"Version already present, not overwritten: {final_dir}")
 
         # publish_root must exist so the future os.replace() has a valid parent;
         # final_dir itself must NOT exist (it is the target of the replace).
@@ -1444,13 +1444,13 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
     final_dir = Path(final_dir)
 
     if not staging_dir.is_dir():
-        raise FileNotFoundError(f"staging_dir introuvable : {staging_dir}")
+        raise FileNotFoundError(f"staging_dir not found: {staging_dir}")
 
     missing = _missing_artifacts(staging_dir, expected_artifacts)
     if missing:
         raise ValueError(
-            f"Publish incomplet pour '{asset_name}' v{version:03d} - artefact(s) manquant(s) ou "
-            f"vide(s) dans {staging_dir} : {missing}. staging_dir preserve, rien commit."
+            f"Incomplete publish for '{asset_name}' v{version:03d} - missing or empty "
+            f"artifact(s) in {staging_dir}: {missing}. staging_dir preserved, nothing committed."
         )
 
     kind_dirname = final_dir.parent.parent.name
@@ -1464,8 +1464,8 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         entry = next((e for e in existing if e.get("version") == version), None)
         if entry is None:
             raise ValueError(
-                f"Aucune reservation 'pending' trouvee pour la version {version} de "
-                f"'{asset_name}' (allocate_publish_version() a-t-il ete appele ?)."
+                f"No 'pending' reservation found for version {version} of "
+                f"'{asset_name}' (was allocate_publish_version() called?)."
             )
         entry["status"] = "complete"
         # Discover the files actually written rather than an assumed extension: under
@@ -1682,12 +1682,12 @@ def pin_web_asset(project_root, asset, step, version):
     step = (step or "").strip()
     # bool is an int in Python: version=True would match version 1 - we exclude it.
     if not asset or not step or not isinstance(version, int) or isinstance(version, bool):
-        return {"ok": False, "error": "asset (str), step (str) et version (int) requis."}
+        return {"ok": False, "error": "asset (str), step (str) and version (int) required."}
     available = _pinnable_glb_versions(project_root, asset, step)
     if version not in available:
         return {"ok": False, "error": (
-            f"Aucun publish GLB 'complete' pour {asset!r} en {step} v{version:03d}. "
-            f"Disponibles : {available or 'aucun'}")}
+            f"No 'complete' GLB publish for {asset!r} in {step} v{version:03d}. "
+            f"Available: {available or 'none'}")}
     _update_web(project_root, lambda web: web.setdefault("pinned_assets", {}).__setitem__(
         asset, {"step": step, "version": version}))
     return {"ok": True, "asset": asset, "step": step, "version": version}
@@ -1699,7 +1699,7 @@ def unpin_web_asset(project_root, asset):
     'asset' is empty."""
     asset = (asset or "").strip()
     if not asset:
-        return {"ok": False, "error": "asset (str) requis."}
+        return {"ok": False, "error": "asset (str) required."}
     removed = []
     _update_web(project_root, lambda web: removed.append(
         web.setdefault("pinned_assets", {}).pop(asset, None)))
@@ -1752,18 +1752,18 @@ def sync_web_assets(project_root, web_project_dir):
         step = pin.get("step")
         version = pin.get("version")
         if not step or not isinstance(version, int):
-            warnings.append(f"Pin invalide pour {asset_name!r} : {pin!r}")
+            warnings.append(f"Invalid pin for {asset_name!r}: {pin!r}")
             continue
         try:
             entity_dir, _ = _find_asset_entity(project_root, asset_name)
         except FileNotFoundError:
-            warnings.append(f"Asset pinne introuvable : {asset_name!r}")
+            warnings.append(f"Pinned asset not found: {asset_name!r}")
             continue
 
         stem = f"{asset_name}_{step}_v{version:03d}"
         src = entity_dir / step / LOP_PUBLISH_DIR_NAME / stem / f"{stem}.glb"
         if not src.is_file():
-            warnings.append(f"GLB pinne introuvable pour {asset_name!r} : {src}")
+            warnings.append(f"Pinned GLB not found for {asset_name!r}: {src}")
             continue
 
         dest_filename = f"{asset_name}_v{version:03d}.glb"
@@ -1798,52 +1798,52 @@ def sync_web_assets(project_root, web_project_dir):
 # --------------------------------------------------------------------------------------
 
 def _cli(argv=None):
-    p = argparse.ArgumentParser(description="Createur projet & assets - pipeline Ylos.")
+    p = argparse.ArgumentParser(description="Project & asset creator - Ylos pipeline.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pp = sub.add_parser("project", help="Cree un projet (coquille asset-centric).")
-    pp.add_argument("name", help="Nom du projet (un seul segment, pas de /)")
-    pp.add_argument("--root", help=f"Racine source (defaut ${ENV_ROOT})")
-    pp.add_argument("--cache", help=f"Racine cache (defaut ${ENV_CACHE})")
-    pp.add_argument("--prod-type", default="FILM", help="Type de production (defaut FILM)")
-    pp.add_argument("--display-name", help="Nom affichable (defaut = name)")
-    pp.add_argument("--force", action="store_true", help="Passer outre si le projet existe")
+    pp = sub.add_parser("project", help="Create a project (asset-centric shell).")
+    pp.add_argument("name", help="Project name (single segment, no /)")
+    pp.add_argument("--root", help=f"Source root (default ${ENV_ROOT})")
+    pp.add_argument("--cache", help=f"Cache root (default ${ENV_CACHE})")
+    pp.add_argument("--prod-type", default="FILM", help="Production type (default FILM)")
+    pp.add_argument("--display-name", help="Display name (default = name)")
+    pp.add_argument("--force", action="store_true", help="Override if the project exists")
 
-    pa = sub.add_parser("asset", help="Cree une entite (asset/set/shot) dans un projet.")
-    pa.add_argument("project", help="Chemin du projet existant")
-    pa.add_argument("name", help="Nom de l'entite (un seul segment, pas de /)")
+    pa = sub.add_parser("asset", help="Create an entity (asset/set/shot) in a project.")
+    pa.add_argument("project", help="Path of the existing project")
+    pa.add_argument("name", help="Entity name (single segment, no /)")
     pa.add_argument("--entity-type", default="asset", choices=["asset", "set", "shot"],
-                    help="Famille de l'entite (defaut asset)")
+                    help="Entity family (default asset)")
     pa.add_argument("--type", dest="asset_type", default="OTHER",
-                    help="Sous-type metier - requis pour respecter la convention TYPE_Nom_Variant "
+                    help="Business sub-type - required to satisfy the TYPE_Name_Variant convention "
                          "(asset: CHARACTER/PROP/VEHICLE/CREATURE/FX_ELEMENT, set: EXTERIOR/INTERIOR/"
-                         "HERO_SET/MODULAR_KIT, shot: LAYOUT/ANIMATION/FX/LIGHTING/COMP ; defaut OTHER, "
-                         "toujours invalide - create_asset() explique la convention si omis)")
-    pa.add_argument("--steps", help="Steps separes par virgules (defaut : pipeline du projet)")
-    pa.add_argument("--force", action="store_true", help="Passer outre si l'entite existe")
+                         "HERO_SET/MODULAR_KIT, shot: LAYOUT/ANIMATION/FX/LIGHTING/COMP ; default OTHER, "
+                         "always invalid - create_asset() explains the convention if omitted)")
+    pa.add_argument("--steps", help="Comma-separated steps (default: project pipeline)")
+    pa.add_argument("--force", action="store_true", help="Override if the entity exists")
 
-    pub = sub.add_parser("publish", help="Publie un fichier USD dans un step d'entite.")
-    pub.add_argument("project", help="Chemin du projet existant")
-    pub.add_argument("asset", help="Nom de l'entite")
-    pub.add_argument("step", help="Step de publication (ex: modeling, lookdev)")
-    pub.add_argument("file", help="Fichier source a publier (.usda ou .usdc)")
+    pub = sub.add_parser("publish", help="Publish a USD file into an entity step.")
+    pub.add_argument("project", help="Path of the existing project")
+    pub.add_argument("asset", help="Entity name")
+    pub.add_argument("step", help="Publish step (e.g. modeling, lookdev)")
+    pub.add_argument("file", help="Source file to publish (.usda or .usdc)")
 
     pfr = sub.add_parser("set-frame-range",
-                         help="Pose la plage d'images d'un shot (schema 2.1) et recompose "
-                              "son shot_root.usda (timecodes).")
-    pfr.add_argument("project", help="Chemin du projet existant")
-    pfr.add_argument("shot", help="Nom du shot")
-    pfr.add_argument("start", type=int, help="Premiere image (inclusive)")
-    pfr.add_argument("end", type=int, help="Derniere image (inclusive), > start")
+                         help="Set a shot's frame range (schema 2.1) and recompose "
+                              "its shot_root.usda (timecodes).")
+    pfr.add_argument("project", help="Path of the existing project")
+    pfr.add_argument("shot", help="Shot name")
+    pfr.add_argument("start", type=int, help="First frame (inclusive)")
+    pfr.add_argument("end", type=int, help="Last frame (inclusive), > start")
     pfr.add_argument("--fps", type=float, default=None,
-                     help="Images par seconde (defaut : fps existant du shot ou defaut scene)")
+                     help="Frames per second (default: shot's existing fps or scene default)")
 
     pcs = sub.add_parser("clean-staging",
-                         help="Purge les staging_dirs orphelins (process mort) + rapporte "
-                              "les entrees manifest 'pending' sans staging correspondant.")
-    pcs.add_argument("project", help="Chemin du projet existant")
+                         help="Purge orphan staging_dirs (dead process) + report "
+                              "manifest 'pending' entries with no matching staging.")
+    pcs.add_argument("project", help="Path of the existing project")
     pcs.add_argument("--apply", action="store_true",
-                     help="Supprime reellement (defaut : dry-run, rapporte sans rien supprimer)")
+                     help="Actually delete (default: dry-run, reports without deleting anything)")
 
     args = p.parse_args(argv)
 
@@ -1851,43 +1851,43 @@ def _cli(argv=None):
         if args.cmd == "project":
             info = create(args.name, root=args.root, cache=args.cache, force=args.force,
                           prod_type=args.prod_type, display_name=args.display_name)
-            print(f"[ok] projet '{info['name']}' cree")
-            print(f"  source    : {info['source']}")
-            print(f"  cache     : {info['cache']}")
-            print(f"  manifeste : {info['manifest']}")
+            print(f"[ok] project '{info['name']}' created")
+            print(f"  source   : {info['source']}")
+            print(f"  cache    : {info['cache']}")
+            print(f"  manifest : {info['manifest']}")
         elif args.cmd == "asset":
             steps = [s.strip() for s in args.steps.split(",") if s.strip()] if args.steps else None
             info = create_asset(args.project, args.name, entity_type=args.entity_type,
                                 asset_type=args.asset_type, steps=steps, force=args.force)
-            print(f"[ok] {info['entity_type']} '{info['name']}' cree")
+            print(f"[ok] {info['entity_type']} '{info['name']}' created")
             print(f"  path      : {info['path']}")
-            print(f"  manifeste : {info['manifest']}")
+            print(f"  manifest  : {info['manifest']}")
             if info["asset_root"]:
                 print(f"  asset_root: {info['asset_root']}")
         elif args.cmd == "publish":
             info = publish_asset(args.project, args.asset, args.step, args.file)
             print(f"[ok] publish {info['name']} / {info['step']} v{info['version']:03d}")
-            print(f"  publish   : {info['publish_path']}")
-            print(f"  manifeste : {info['manifest']}")
+            print(f"  publish  : {info['publish_path']}")
+            print(f"  manifest : {info['manifest']}")
             if info["asset_root"]:
                 print(f"  asset_root: {info['asset_root']}")
         elif args.cmd == "set-frame-range":
             fr = set_frame_range(args.project, args.shot, args.start, args.end, fps=args.fps)
             print(f"[ok] frame_range {args.shot} : {fr['start']}-{fr['end']} @ {fr['fps']} fps")
-            print("  shot_root.usda recompose (timecodes)")
+            print("  shot_root.usda recomposed (timecodes)")
         else:  # clean-staging
             info = clean_stale_staging(args.project, dry_run=not args.apply)
-            verb = "supprime(s)" if args.apply else "a supprimer (dry-run - passer --apply pour executer)"
+            verb = "removed" if args.apply else "to remove (dry-run - pass --apply to execute)"
             print(f"[ok] {len(info['removed_staging'])} staging_dir(s) {verb}")
             for path in info["removed_staging"]:
                 print(f"  - {path}")
             if info["pending_without_staging"]:
-                print(f"[rapport] {len(info['pending_without_staging'])} entree(s) manifest "
-                      f"'pending' sans staging correspondant (non modifiees) :")
+                print(f"[report] {len(info['pending_without_staging'])} manifest 'pending' "
+                      f"entry(ies) with no matching staging (left unchanged):")
                 for e in info["pending_without_staging"]:
                     print(f"  - {e['entity']} / {e['kind']} v{e['version']:03d}  ({e['manifest']})")
     except (ValueError, FileExistsError, FileNotFoundError) as e:
-        sys.stderr.write(f"[erreur] {e}\n")
+        sys.stderr.write(f"[error] {e}\n")
         return 1
     return 0
 
