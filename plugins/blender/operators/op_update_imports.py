@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Detection + application des mises a jour d'import states (State-Manager-lite, INC-5).
+# Detection + application of import-state updates (State-Manager-lite, INC-5).
 import bpy
 import os
 import sys
@@ -18,15 +18,15 @@ def _cp():
     return create_project
 
 
-# Cache du dernier ylos.check_updates - meme pattern que op_scene_check.py
-# (get_cached_results()) : un operateur explicite calcule une fois, le panel lit le cache
-# au redraw plutot que d'interroger le disque a chaque frame d'UI.
+# Cache of the last ylos.check_updates - same pattern as op_scene_check.py
+# (get_cached_results()): an explicit operator computes once, the panel reads the cache
+# at redraw rather than querying the disk on every UI frame.
 _update_cache = {}
 
 
 def get_cached_update_results() -> dict:
-    """{collection_name: {'current': int, 'latest': int, 'has_update': bool}} - vide tant
-    que ylos.check_updates n'a jamais tourne dans cette session."""
+    """{collection_name: {'current': int, 'latest': int, 'has_update': bool}} - empty until
+    ylos.check_updates has run in this session."""
     return _update_cache
 
 
@@ -78,9 +78,9 @@ class YLOS_OT_CheckUpdates(bpy.types.Operator):
 class YLOS_OT_UpdateImport(bpy.types.Operator):
     """Replace a tagged import collection's content with the latest published version.
 
-    v1 : remplacement pur (retire tout, reimporte a neuf) - AUCUN remap d'overrides
-    (materiaux/contraintes/animation ajoutes manuellement sur les objets importes) : la
-    perte est signalee explicitement dans le rapport, jamais silencieuse."""
+    v1: pure replacement (removes everything, re-imports fresh) - NO override remap
+    (materials/constraints/animation added manually on the imported objects): the
+    loss is reported explicitly, never silent."""
     bl_idname = "ylos.update_import"
     bl_label = "Update Import"
     bl_description = ("Replace this import's content with the latest published version "

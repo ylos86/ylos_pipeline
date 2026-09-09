@@ -23,13 +23,13 @@ def _cp():
     return create_project
 
 
-# Steps a cocher a la creation : (valeur, label) generes depuis vocab.STEP_ITEMS[ctx] (donc
-# create_project.DEFAULT_*_STEPS, seule source), jamais de liste/taille codee en dur - purge
-# INC-2. Avant : trois BoolVectorProperty a taille FIGEE (ex Shot=6) qui ont drifte du
-# vocabulaire reel (DEFAULT_SHOT_STEPS en compte 4 aujourd'hui) : un vecteur de bools ne peut
-# pas changer de taille sans redeclarer la classe, ce qui EST le bug. Remplace par une
-# CollectionProperty (taille dynamique) reconstruite depuis vocab.STEP_ITEMS[ctx] a chaque
-# changement de context_type (cf. YLOS_PG_StepToggle plus bas) - ne peut plus driver.
+# Steps to check at creation: (value, label) generated from vocab.STEP_ITEMS[ctx] (hence
+# create_project.DEFAULT_*_STEPS, the only source), never a hard-coded list/size - purged in
+# INC-2. Before: three FIXED-size BoolVectorProperty (e.g. Shot=6) that drifted from the
+# real vocabulary (DEFAULT_SHOT_STEPS has 4 today): a bool vector cannot
+# change size without re-declaring the class, which IS the bug. Replaced by a
+# CollectionProperty (dynamic size) rebuilt from vocab.STEP_ITEMS[ctx] on every
+# context_type change (see YLOS_PG_StepToggle below) - can no longer drift.
 _STEP_ITEMS_BY_CTX = {
     "ASSET": vocab.STEP_ITEMS["ASSET"],
     "SHOT":  vocab.STEP_ITEMS["SHOT"],
@@ -58,9 +58,9 @@ def _update_context_type(self, context):
 
 
 # Collection hierarchy (get_or_create_collection/link_collection/resolve_parent_collection/
-# collection_target_label) : deplacee dans core/project.py (INC-5) - partagee avec
-# op_import_product.py, qui doit ranger un import publie au meme endroit qu'une entite
-# creee localement. cf. core/project.py pour la logique.
+# collection_target_label): moved into core/project.py (INC-5) - shared with
+# op_import_product.py, which must place a published import in the same location as an entity
+# created locally. See core/project.py for the logic.
 
 def _create_entity_collection(entity_name, asset_type, context_type, scene):
     parent, parent_display = resolve_parent_collection(asset_type, context_type, scene)
@@ -87,8 +87,8 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         default="",
     )
 
-    # Vocabulaire (valeurs) = create_project via core/vocab.py, seul home. Tuples
-    # *_ITEMS module-level (piege GC bpy). Defauts inchanges.
+    # Vocabulary (values) = create_project via core/vocab.py, the only home. Module-level
+    # *_ITEMS tuples (bpy GC trap). Defaults unchanged.
     context_type: EnumProperty(
         name="Type",
         items=vocab.CONTEXT_TYPE_ITEMS,
@@ -205,11 +205,11 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         context_type = self.context_type
 
         if not self.steps_to_create:
-            # invoke() peuple steps_to_create depuis vocab (chemin dialog). Un appel
-            # scripte qui saute invoke() (bpy.ops.ylos.new_asset(...) en contexte EXEC -
-            # agent d'automatisation, cf. CLAUDE.md) verrait sinon une collection vide ->
-            # zero step cree en silence. Defaut : tous les steps actives (meme semantique
-            # que l'ancien defaut BoolVectorProperty).
+            # invoke() populates steps_to_create from vocab (dialog path). A scripted
+            # call that skips invoke() (bpy.ops.ylos.new_asset(...) in EXEC context -
+            # automation agent, see CLAUDE.md) would otherwise see an empty collection ->
+            # zero step created silently. Default: all steps enabled (same semantics
+            # as the old BoolVectorProperty default).
             _rebuild_steps(self, context_type)
 
         steps = [item.step for item in self.steps_to_create if item.enabled]
@@ -235,14 +235,14 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         if context_type == "ASSET":
             scene.ylos_asset_type = self.asset_type
 
-        # ylos_current_step est une propriete Scene UNIQUE partagee entre familles
-        # (STEP_ITEMS_ALL, cf. vocab.py) : elle ne se remet jamais a jour toute seule au
-        # changement de contexte. Bug reel observe : creer un Set apres avoir travaille sur
-        # un Asset laisse le step sur 'modeling' (invalide pour un Set) -> le State Manager
-        # le recopie tel quel dans un export state (state_add_export) -> Publish rejette
-        # loin du symptome ("Step 'modeling' is not valid for a set."). On clampe ici au
-        # premier step valide de la famille si le step courant ne l'est pas (meme domaine
-        # que is_step_valid_for_context, cf. core/project.py).
+        # ylos_current_step is a SINGLE Scene property shared across families
+        # (STEP_ITEMS_ALL, see vocab.py): it never updates on its own at a
+        # context change. Real observed bug: creating a Set after working on
+        # an Asset leaves the step at 'modeling' (invalid for a Set) -> the State Manager
+        # copies it as-is into an export state (state_add_export) -> Publish rejects it
+        # far from the symptom ("Step 'modeling' is not valid for a set."). We clamp here to
+        # the family's first valid step if the current one is not (same domain
+        # as is_step_valid_for_context, see core/project.py).
         valid_steps = vocab.values(vocab.STEP_ITEMS.get(context_type, vocab.STEP_ITEMS["ASSET"]))
         if valid_steps and scene.ylos_current_step not in valid_steps:
             scene.ylos_current_step = valid_steps[0]

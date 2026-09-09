@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Capture de preview d'entite (parite Prism 'set preview').
+"""Entity preview capture (Prism 'set preview' parity).
 
-Ecrit '<entite>/preview.png' - l'override MANUEL en tete de la cascade de resolution
-(cf. create_project.resolve_entity_thumbnail). Consomme tel quel par la web UI ET le panel
-Blender : un seul geste, les deux browsers suivent.
+Writes '<entity>/preview.png' - the MANUAL override at the top of the resolution cascade
+(see create_project.resolve_entity_thumbnail). Consumed as-is by the web UI AND the Blender
+panel: a single gesture, both browsers follow.
 
-Pourquoi un override explicite alors qu'une vignette est deja resolue automatiquement : la
-derniere version publiee n'est pas toujours l'image qui REPRESENTE l'asset (un publish de
-rig cadre mal, un WIP en cours de blocking, un lookdev pas encore fait). Un artiste doit
-pouvoir figer la bonne image sans dependre de l'ordre des publishes.
+Why an explicit override when a thumbnail is already auto-resolved: the
+latest published version is not always the image that REPRESENTS the asset (a rig
+publish frames badly, a WIP mid-blocking, a lookdev not yet done). An artist must be able
+to lock in the right image without depending on the publish order.
 """
 
 import os
@@ -74,10 +74,10 @@ class YLOS_OT_CapturePreview(bpy.types.Operator):
             self.report({"INFO"}, "No manual preview to remove.")
             return {"CANCELLED"}
 
-        # generate_thumbnail ecrit '<stem>_thumb.png' a cote du chemin donne : on lui passe un
-        # stem bidon dans le dossier de l'entite, puis on renomme. Reutiliser le rendu viewport
-        # existant plutot que d'en ecrire un second (principe 5) - et c'est bien le VIEWPORT
-        # qu'on veut ici : l'artiste cadre lui-meme ce qui represente son asset.
+        # generate_thumbnail writes '<stem>_thumb.png' next to the given path: we pass it a
+        # dummy stem in the entity's folder, then rename. Reuse the existing viewport render
+        # rather than writing a second one (principle 5) - and the VIEWPORT is indeed what
+        # we want here: the artist frames themselves what represents their asset.
         stem_path = os.path.join(resolved["dir"], "_ylos_preview.blend")
         produced = generate_thumbnail(stem_path, context)
         if not produced:

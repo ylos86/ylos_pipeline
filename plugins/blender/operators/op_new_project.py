@@ -36,8 +36,8 @@ class YLOS_OT_NewProject(bpy.types.Operator):
         subtype="NONE",
     )
 
-    # Vocabulaire = create_project via core/vocab.py (seul home). Ecrit dans
-    # scene.ylos_prod_type (meme PROD_TYPE_ITEMS) et passe a create_project.create().
+    # Vocabulary = create_project via core/vocab.py (the only home). Written to
+    # scene.ylos_prod_type (same PROD_TYPE_ITEMS) and passed to create_project.create().
     prod_type: EnumProperty(
         name="Production Type",
         items=vocab.PROD_TYPE_ITEMS,

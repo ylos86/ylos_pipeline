@@ -56,8 +56,8 @@ class YLOS_OT_SwitchStep(bpy.types.Operator):
     bl_description = "Switch production step with unsaved-changes warning"
     bl_options = {"REGISTER"}
 
-    # Round-trip avec scene.ylos_current_step (STEP_ITEMS_ALL) : recopie en invoke,
-    # reecrit en execute -> meme domaine complet, sinon l'affectation croisee casse.
+    # Round-trip with scene.ylos_current_step (STEP_ITEMS_ALL): copied in invoke,
+    # rewritten in execute -> same full domain, otherwise the cross-assignment breaks.
     new_step: EnumProperty(
         name="Step",
         items=vocab.STEP_ITEMS_ALL,

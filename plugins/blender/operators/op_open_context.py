@@ -25,10 +25,10 @@ def _cp():
 
 
 def _set_enum_safe(scene, prop, value, items, operator):
-    """Affecte une valeur d'enum lue d'un manifeste SANS jamais crasher : une valeur absente
-    des items (ex prod_type 'XR'/'SERIES' d'un manifeste, ou une valeur legacy inconnue) ->
-    warning + fallback (valeur laissee inchangee), jamais d'exception. Retourne True si
-    l'affectation a eu lieu."""
+    """Assign an enum value read from a manifest WITHOUT ever crashing: a value absent
+    from the items (e.g. prod_type 'XR'/'SERIES' from a manifest, or an unknown legacy value) ->
+    warning + fallback (value left unchanged), never an exception. Returns True if
+    the assignment happened."""
     valid = {v for v, _label, _desc in items}
     if value in valid:
         setattr(scene, prop, value)
@@ -42,9 +42,9 @@ def _set_enum_safe(scene, prop, value, items, operator):
 
 
 def _open_resolved(operator, target):
-    """Ouvre le fichier resolu par create_project.resolve_open_target selon son 'kind' :
-    'wip' -> open_mainfile (.blend) ; 'scene_default'/'publish' -> usd_import (layer USD).
-    Une valeur inattendue est signalee, jamais levee."""
+    """Opens the file resolved by create_project.resolve_open_target according to its 'kind':
+    'wip' -> open_mainfile (.blend); 'scene_default'/'publish' -> usd_import (USD layer).
+    An unexpected value is reported, never raised."""
     path, kind = target["path"], target["kind"]
     try:
         if kind == "wip":
@@ -137,19 +137,19 @@ class YLOS_OT_OpenContext(bpy.types.Operator):
         scene = context.scene
         scene.ylos_project_path = project_path
         scene.ylos_project_name = config["project"]["name"]
-        # prod_type vient du manifeste : une valeur hors enum (ex 'XR' d'un projet reel, cf.
-        # Pachamama) crashait l'affectation directe. Affectation gardee + fallback.
+        # prod_type comes from the manifest: an out-of-enum value (e.g. 'XR' from a real project, see
+        # Pachamama) crashed direct assignment. Guarded assignment + fallback.
         _set_enum_safe(scene, "ylos_prod_type", prod_type, vocab.PROD_TYPE_ITEMS, self)
 
-        # apply_scene_preset no-op proprement pour un prod_type qu'il ne connait pas.
+        # apply_scene_preset cleanly no-ops for a prod_type it does not know.
         apply_scene_preset(scene, prod_type)
 
         self.report({"INFO"}, f"Project loaded: {config['project']['name']}")
 
-        # Si un contexte d'entite est deja restaure (asset + step), resoudre le fichier a
-        # ouvrir via l'orchestrateur (create_project.resolve_open_target - logique unique,
-        # reutilisable par Houdini). Ne jamais lever : resolve renvoie un dict exists=False
-        # avec raison. dry_run : imprimer/reporter le chemin resolu sans ouvrir.
+        # If an entity context is already restored (asset + step), resolve the file to
+        # open via the orchestrator (create_project.resolve_open_target - single logic,
+        # reusable by Houdini). Never raises: resolve returns a dict exists=False
+        # with a reason. dry_run: print/report the resolved path without opening.
         asset = scene.ylos_current_asset
         if asset:
             target = _cp().resolve_open_target(

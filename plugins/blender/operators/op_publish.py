@@ -25,18 +25,18 @@ def _cp():
 
 
 def _fallback_objects(scene):
-    """Objets pour le thumbnail quand aucun objet d'asset n'a ete resolu (fallback
-    full-scene) - le thumbnail est requis meme dans ce cas."""
+    """Objects for the thumbnail when no asset object was resolved (full-scene
+    fallback) - the thumbnail is required even in that case."""
     return [o for o in scene.objects if o.type in ("MESH", "ARMATURE", "CURVE") and not o.hide_get()]
 
 
 def _normalize_datablock_names(objects):
-    """Hygiene des noms AVANT export : aligne le nom du datablock sur celui de l'objet quand
-    le datablock est mono-utilisateur. Sans ca, un objet renomme mais dont la donnee garde
-    'Cube.001' sort en prim USD 'Cube_001' / node glTF errone -> un Load Latest ramene un
-    objet qui ne porte plus le nom de l'asset. Un datablock MULTI-user n'est JAMAIS renomme
-    (le rename affecterait les autres utilisateurs) -> collecte pour warning, jamais
-    silencieux. Retourne (n_renommes, [descriptions des partages non touches])."""
+    """Name hygiene BEFORE export: aligns the datablock name with the object's when
+    the datablock is single-user. Without this, an object renamed but whose data keeps
+    'Cube.001' exports as USD prim 'Cube_001' / a wrong glTF node -> a Load Latest brings back
+    an object no longer carrying the asset's name. A MULTI-user datablock is NEVER renamed
+    (the rename would affect the other users) -> collected for a warning, never
+    silent. Returns (n_renamed, [descriptions of the untouched shared ones])."""
     renamed = 0
     shared = []
     for obj in objects:
@@ -52,9 +52,9 @@ def _normalize_datablock_names(objects):
 
 
 def _glb_export(filepath: str, context, objects: list) -> tuple:
-    """Export glTF binaire (GLB) vers un filepath exact (staging_dir, cf. execute()). Miroir de
-    _usd_export : selection = objets gather (use_selection) sinon scene entiere. +Y up par
-    defaut de l'exporter (correct pour Three.js). Retourne (success, error_message)."""
+    """Binary glTF (GLB) export to an exact filepath (staging_dir, see execute()). Mirror of
+    _usd_export: selection = gathered objects (use_selection) otherwise the whole scene. +Y up
+    by the exporter default (correct for Three.js). Returns (success, error_message)."""
     scene = context.scene
     prev_selected = [o for o in scene.objects if o.select_get()]
     prev_active   = context.view_layer.objects.active
@@ -122,13 +122,13 @@ def _usd_export(filepath: str, context, objects: list) -> tuple:
 
 def publish_entity_step(context, project_path, entity, step, *,
                         allow_full_scene=False, comment="", load_after=False):
-    """Coeur de publish REUTILISABLE : le bouton simple (ylos.publish, step courant) ET le
-    batch du State Manager (ylos.publish_states, states empiles) passent par ici - logique
-    unique, principe 5. La famille de l'entite est resolue par create_project.resolve_entity
-    (un state peut cibler asset/set/shot, pas seulement le contexte scene courant). Ne leve
-    JAMAIS pour un cas metier : retourne un dict
-    {ok, version, message, path, method, warning}. Contrat deux-phases inchange (allocate ->
-    export USD/GLB selon la cible -> thumbnail requis -> finalize)."""
+    """REUSABLE publish core: the simple button (ylos.publish, current step) AND the
+    State Manager batch (ylos.publish_states, stacked states) go through here - single
+    logic, principle 5. The entity's family is resolved by create_project.resolve_entity
+    (a state can target asset/set/shot, not only the current scene context). NEVER raises
+    for a business case: returns a dict
+    {ok, version, message, path, method, warning}. Two-phase contract unchanged (allocate ->
+    USD/GLB export per target -> thumbnail required -> finalize)."""
     cp = _cp()
     scene = context.scene
 
@@ -155,14 +155,14 @@ def publish_entity_step(context, project_path, entity, step, *,
             method=method,
         )
 
-    # Hygiene des noms AVANT export : un datablock mono-user non renomme ('Cube.001') sort en
-    # prim USD / node glTF errone. Jamais silencieux. Full-scene -> normalise toute la scene.
+    # Name hygiene BEFORE export: a single-user datablock not renamed ('Cube.001') exports as a
+    # wrong USD prim / glTF node. Never silent. Full-scene -> normalizes the whole scene.
     export_objects = objects if objects else list(scene.objects)
     n_renamed, shared = _normalize_datablock_names(export_objects)
     for s in shared:
-        print(f"[Ylos publish] datablock partage non renomme (nom d'objet conserve): {s}")
+        print(f"[Ylos publish] shared datablock not renamed (object name kept): {s}")
 
-    # Format d'artifact = decision d'orchestrateur (cible pipeline), jamais du DCC.
+    # Artifact format = orchestrator decision (pipeline target), never the DCC's.
     target = cp.get_pipeline_target(project_path)
     ext = ".glb" if target == "web" else ".usd"
 
@@ -201,14 +201,14 @@ def publish_entity_step(context, project_path, entity, step, *,
     except Exception as e:
         return _fail(str(e), method=method, warning=warning)
 
-    # Le publish vient de poser un thumb.png : la vignette de l'entite change (et passe de
-    # 'wip' a 'publish'). Sans cette purge, le panel garderait l'ancienne jusqu'au TTL.
+    # The publish just wrote a thumb.png: the entity's thumbnail changes (and goes from
+    # 'wip' to 'publish'). Without this purge, the panel would keep the old one until the TTL.
     entity_thumbs.invalidate(project_path)
 
     pub_path = os.path.join(info["final_dir"], stem + ext)
     message = (
         f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}] - "
-        f"{n_renamed} datablocks renommes, {len(shared)} partages non touches (voir console)"
+        f"{n_renamed} datablocks renamed, {len(shared)} shared untouched (see console)"
     )
 
     if load_after:
@@ -243,9 +243,9 @@ class YLOS_OT_Publish(bpy.types.Operator):
         default=False,
     )
 
-    # Round-trip avec scene.ylos_current_step (STEP_ITEMS_ALL) : lu en invoke, ecrit
-    # en execute -> meme domaine complet. Le filtrage par famille reste assure a
-    # l'execution par is_step_valid_for_context (garde semantique conservee).
+    # Round-trip with scene.ylos_current_step (STEP_ITEMS_ALL): read in invoke, written
+    # in execute -> same full domain. Per-family filtering stays ensured at
+    # execution by is_step_valid_for_context (semantic guard preserved).
     step: EnumProperty(
         name="Step",
         items=vocab.STEP_ITEMS_ALL,
@@ -253,8 +253,8 @@ class YLOS_OT_Publish(bpy.types.Operator):
     )
 
     _next_ver: int = 1        # display-only, computed in invoke
-    _target: str = "offline"  # display-only : cible pipeline (web|offline), calculee en invoke
-    _ext: str = ".usd"        # display-only : extension d'artifact deduite de la cible
+    _target: str = "offline"  # display-only: pipeline target (web|offline), computed in invoke
+    _ext: str = ".usd"        # display-only: artifact extension derived from the target
 
     def invoke(self, context, event):
         scene = context.scene
@@ -270,7 +270,7 @@ class YLOS_OT_Publish(bpy.types.Operator):
             scene.ylos_context_type.lower(),
         )
         self._next_ver = latest + 1
-        # Format = decision d'orchestrateur (cible pipeline), pas du DCC : le dialog l'affiche.
+        # Format = orchestrator decision (pipeline target), not the DCC's: the dialog shows it.
         self._target = _cp().get_pipeline_target(scene.ylos_project_path)
         self._ext = ".glb" if self._target == "web" else ".usd"
         return context.window_manager.invoke_props_dialog(self, width=380)
@@ -297,10 +297,10 @@ class YLOS_OT_Publish(bpy.types.Operator):
         box.label(text="Version assigned by create_project.py", icon="INFO")
 
     def execute(self, context):
-        # Wrapper mince : toute la logique vit dans publish_entity_step (partagee avec le
-        # State Manager batch, principe 5). Ici : lire le contexte scene, reporter, et
-        # aligner scene.ylos_current_step sur le step publie (UX du bouton simple - le dialog
-        # autorise un step != courant).
+        # Thin wrapper: all the logic lives in publish_entity_step (shared with the
+        # State Manager batch, principle 5). Here: read the scene context, report, and
+        # align scene.ylos_current_step with the published step (simple-button UX - the dialog
+        # allows a step != current).
         scene = context.scene
         result = publish_entity_step(
             context,

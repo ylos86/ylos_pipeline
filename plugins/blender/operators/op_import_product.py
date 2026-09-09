@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-# Import states (State-Manager-lite, INC-5). Absorbe l'ancien op_load_publish.py (USD-only,
-# import a plat par chemin, aucun suivi de ce qui a ete importe) : un import cree desormais
-# une collection TAGUEE (custom props ylos_import_entity/step/version/path) rangee sous le
-# meme parent que la creation d'entite (core.project.resolve_parent_collection), routee par
-# extension (GLB -> import_scene.gltf, USD -> wm.usd_import). La collection est l'identite
-# stable de l'import ('<entity>_<step>') : ylos.update_import (op_update_imports.py) en
-# remplace le CONTENU sans en changer le nom, pour que les references externes (cameras,
-# animation) restent valides d'une version a l'autre.
+# Import states (State-Manager-lite, INC-5). Absorbs the old op_load_publish.py (USD-only,
+# flat import by path, no tracking of what was imported): an import now creates
+# a TAGGED collection (custom props ylos_import_entity/step/version/path) placed under the
+# same parent as entity creation (core.project.resolve_parent_collection), routed by
+# extension (GLB -> import_scene.gltf, USD -> wm.usd_import). The collection is the stable
+# identity of the import ('<entity>_<step>'): ylos.update_import (op_update_imports.py)
+# replaces its CONTENT without changing its name, so that external references (cameras,
+# animation) stay valid from one version to another.
 import bpy
 import os
 import sys
@@ -27,25 +27,25 @@ def _cp():
     return create_project
 
 
-# Miroir de launch_context.py (routage par extension identique) : USD -> merge via
-# wm.usd_import, GLB/GLTF -> merge via import_scene.gltf. Extensions inconnues -> erreur
-# explicite, jamais un import silencieusement ignore.
+# Mirror of launch_context.py (identical extension routing): USD -> merge via
+# wm.usd_import, GLB/GLTF -> merge via import_scene.gltf. Unknown extensions -> explicit
+# error, never a silently ignored import.
 USD_IMPORT_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
 GLB_IMPORT_EXTS = (".glb", ".gltf")
 
 
 def import_state_collection_name(entity: str, step: str) -> str:
-    """Identite stable d'un import : '<entity>_<step>'. Une seule 'state' par (entity,
-    step) dans une scene - re-importer le meme couple doit passer par Update, pas creer un
-    doublon (cf. YLOS_OT_ImportProduct.execute)."""
+    """Stable identity of an import: '<entity>_<step>'. Only one 'state' per (entity,
+    step) in a scene - re-importing the same pair must go through Update, not create a
+    duplicate (see YLOS_OT_ImportProduct.execute)."""
     return f"{entity}_{step}"
 
 
 def import_artifact(abs_path: str) -> None:
-    """Importe 'abs_path' dans la collection ACTIVE (jamais un chemin resolu ici - deja
-    fourni par l'appelant via l'orchestrateur). Leve ValueError sur extension inconnue :
-    l'appelant convertit en report d'erreur, jamais de crash silencieux ni de mainfile
-    ouvert par erreur sur un artefact non gere."""
+    """Imports 'abs_path' into the ACTIVE collection (never a path resolved here - already
+    provided by the caller via the orchestrator). Raises ValueError on an unknown extension:
+    the caller turns it into an error report, never a silent crash nor a mainfile
+    opened by mistake on an unsupported artifact."""
     ext = os.path.splitext(abs_path)[1].lower()
     if ext in GLB_IMPORT_EXTS:
         bpy.ops.import_scene.gltf(filepath=abs_path)
@@ -71,8 +71,8 @@ class YLOS_OT_ImportProduct(bpy.types.Operator):
 
     entity: StringProperty(name="Entity")
     step: StringProperty(name="Step")
-    # 0 = derniere version publiee (pas de sentinelle string 'latest' - cf. spec
-    # 'version|latest', un IntProperty=0 est plus sur cote UI/RNA qu'une chaine magique).
+    # 0 = latest published version (no 'latest' string sentinel - see the
+    # 'version|latest' spec, an IntProperty=0 is safer on the UI/RNA side than a magic string).
     version: IntProperty(name="Version", default=0, min=0)
 
     def execute(self, context):
@@ -116,8 +116,8 @@ class YLOS_OT_ImportProduct(bpy.types.Operator):
         try:
             import_artifact(abs_path)
         except Exception as e:
-            # Collection vide/tagable creee pour rien - la retirer plutot que laisser un
-            # "import" fantome sans contenu dans l'outliner.
+            # Empty/taggable collection created for nothing - remove it rather than leave a
+            # ghost "import" with no content in the outliner.
             bpy.data.collections.remove(collection)
             self.report({"ERROR"}, f"Import failed: {e}")
             return {"CANCELLED"}

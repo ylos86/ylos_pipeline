@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# State Manager (facon Prism) : operateurs de gestion des export states + le Publish unique.
+# State Manager (Prism-style): export-state management operators + the single Publish.
 #
-# Le Publish batch itere les states 'enabled' et delegue CHAQUE publish a
-# publish_entity_step (op_publish.py) - logique unique, principe 5. Aucune duplication de la
-# logique de publish ici : cet operateur n'est qu'un orchestrateur de la recette.
+# The batch Publish iterates the 'enabled' states and delegates EACH publish to
+# publish_entity_step (op_publish.py) - single logic, principle 5. No duplication of the
+# publish logic here: this operator is only an orchestrator of the recipe.
 
 import os
 import sys
@@ -13,15 +13,15 @@ from bpy.props import EnumProperty
 from .op_publish import publish_entity_step
 from ..core.project import is_step_valid_for_context
 from ..core import vocab
-# ui.state_manager est importe PARESSEUSEMENT dans draw() (pas au niveau module) : sinon
-# cycle - ui.state_manager charge le package operators (op_update_imports), qui charge ce
-# module, avant que draw_state_manager n'existe. Import differe = cycle casse.
+# ui.state_manager is imported LAZILY in draw() (not at module level): otherwise a
+# cycle - ui.state_manager loads the operators package (op_update_imports), which loads this
+# module, before draw_state_manager exists. Deferred import = cycle broken.
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
 
 def _cp():
-    # Meme pattern que op_publish.py/op_new_asset.py - create_project vit a la racine du repo.
+    # Same pattern as op_publish.py/op_new_asset.py - create_project lives at the repo root.
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)
     import create_project
@@ -53,15 +53,15 @@ class YLOS_OT_StateAddExport(bpy.types.Operator):
         scene = context.scene
         state = scene.ylos_export_states.add()
         state.entity = scene.ylos_current_asset or ""
-        # scene.ylos_current_step et state.step partagent STEP_ITEMS_ALL -> assignation TOUJOURS
-        # valide au niveau Blender (meme domaine d'enum), mais pas forcement valide pour la
-        # FAMILLE reelle de l'entite (ylos_current_step ne se recale jamais tout seul au
-        # changement de contexte - cf. fix op_new_asset.py). Sans ca : un step perime (ex
-        # 'modeling' recopie d'un Asset precedent) atterrit dans le state, Publish le rejette
-        # plus tard avec un message qui ne dit rien de l'origine du probleme. On revalide ici
-        # contre resolve_entity() - meme source disque autoritative qu'au publish
-        # (op_publish.py::publish_entity_step) - et on retombe sur le premier step valide de
-        # la famille en cas de mismatch, jamais un echec silencieux plus tard.
+        # scene.ylos_current_step and state.step share STEP_ITEMS_ALL -> assignment ALWAYS
+        # valid at the Blender level (same enum domain), but not necessarily valid for the
+        # entity's real FAMILY (ylos_current_step never realigns on its own at a
+        # context change - see op_new_asset.py fix). Without this: a stale step (e.g.
+        # 'modeling' copied from a previous Asset) lands in the state, Publish rejects it
+        # later with a message that says nothing about the origin of the problem. We revalidate here
+        # against resolve_entity() - the same authoritative disk source as at publish
+        # (op_publish.py::publish_entity_step) - and fall back to the family's first valid
+        # step on a mismatch, never a silent failure later.
         step = scene.ylos_current_step
         if state.entity and scene.ylos_project_path:
             resolved = _cp().resolve_entity(scene.ylos_project_path, state.entity)
@@ -127,7 +127,7 @@ class YLOS_OT_StateMoveExport(bpy.types.Operator):
 
 
 class YLOS_OT_PublishStates(bpy.types.Operator):
-    """Le bouton Publish UNIQUE du State Manager : execute tous les export states 'enabled'."""
+    """The State Manager's SINGLE Publish button: runs all 'enabled' export states."""
     bl_idname = "ylos.publish_states"
     bl_label = "Publish"
     bl_description = "Run every enabled export state in one go (Prism-style single Publish)"
@@ -147,8 +147,8 @@ class YLOS_OT_PublishStates(bpy.types.Operator):
 
         n_ok = n_fail = 0
         for s in states:
-            # Un echec n'interrompt PAS les suivants (le staging du state en echec reste
-            # preserve pour audit/retry, cf. contrat deux-phases). Detail complet en console.
+            # A failure does NOT interrupt the following ones (the failed state's staging stays
+            # preserved for audit/retry, see two-phase contract). Full detail in the console.
             result = publish_entity_step(
                 context, project_path, s.entity, s.step,
                 allow_full_scene=s.allow_full_scene, comment=s.comment,
@@ -169,8 +169,8 @@ class YLOS_OT_PublishStates(bpy.types.Operator):
 
 
 class YLOS_OT_OpenStateManager(bpy.types.Operator):
-    """Ouvre le State Manager en fenetre (popup large), facon Prism - meme draw que la
-    section N-panel (draw_state_manager, jamais duplique)."""
+    """Opens the State Manager in a window (large popup), Prism-style - same draw as the
+    N-panel section (draw_state_manager, never duplicated)."""
     bl_idname = "ylos.open_state_manager"
     bl_label = "State Manager"
     bl_description = "Open the Ylos State Manager (export states + imports)"
@@ -180,7 +180,7 @@ class YLOS_OT_OpenStateManager(bpy.types.Operator):
         return context.window_manager.invoke_popup(self, width=500)
 
     def draw(self, context):
-        from ..ui.state_manager import draw_state_manager  # lazy - cf. note en tete de module
+        from ..ui.state_manager import draw_state_manager  # lazy - see note at the top of the module
         draw_state_manager(self.layout, context)
 
     def execute(self, context):
