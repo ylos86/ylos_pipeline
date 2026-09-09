@@ -20,7 +20,7 @@ Endpoints:
     GET  /api/project          retourne project.json du projet actif
     GET  /api/config           types/steps par famille (source unique : create_project.py,
                                steps surchargés par le pipeline du projet actif)
-    GET  /api/assets           liste assets/* sets/* (manifest + dernière version + thumb)
+    GET  /api/assets           liste assets/* sets/* shots/* (manifest + dernière version + thumb)
     GET  /api/asset/<name>     détail + toutes les versions par step + scenefiles (WIP,
                                commentaire/user/date du sidecar '<wip>.blend.json')
     POST /api/open-blender     {entity, step?} ouvre la scène (WIP-first) OU
@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+from email.utils import formatdate
 import os
 import re
 import subprocess
@@ -141,41 +142,14 @@ def _read_asset_manifest(asset_dir: Path) -> dict | None:
         return None
 
 
-def _latest_step_publish_thumb(manifest: dict) -> str | None:
-    """Cherche le thumb du publish 'complete' le plus recent dans manifest['step_publishes']
-    (contrat deux-phases generalise, cf. create_project.finalize_publish_version — kind=step).
-    Retourne le chemin relatif a l'entite (ex 'modeling/publish/Asset_modeling_v003/thumb.png'),
-    ou None si aucun publish de ce type n'existe (projet/asset legacy)."""
-    best = None  # (version, thumb_rel_path)
-    for entries in manifest.get("step_publishes", {}).values():
-        for e in entries:
-            if e.get("status") != "complete" or not e.get("thumb"):
-                continue
-            if best is None or e["version"] > best[0]:
-                best = (e["version"], e["thumb"])
-    return best[1] if best else None
-
-
-def _find_thumb(asset_dir: Path, asset_name: str, manifest: dict | None = None) -> str | None:
-    """Retourne '<asset_name>/<chemin relatif depuis asset_dir>' → URL /thumb/<asset>/<rest>.
-    Priorite au contrat deux-phases (manifest['step_publishes'], thumb toujours present et
-    localise sans scan disque) ; repli sur un scan plat de <step>/publish/ pour les assets/
-    projets legacy (publish_asset(), sans thumbnail garanti)."""
-    if manifest is not None:
-        rel = _latest_step_publish_thumb(manifest)
-        if rel and (asset_dir / rel).is_file():
-            return f"{asset_name}/{rel}"
-
-    for step_dir in sorted(asset_dir.iterdir()):
-        if not step_dir.is_dir():
-            continue
-        pub = step_dir / "publish"
-        if not pub.is_dir():
-            continue
-        for f in sorted(pub.iterdir()):
-            if f.is_file() and f.suffix.lower() in THUMB_EXTS:
-                return f"{asset_name}/{step_dir.name}/publish/{f.name}"
-    return None
+def _find_thumb(project_dir: Path, asset_name: str) -> tuple[str | None, str]:
+    """Adaptateur MINCE vers create_project.resolve_entity_thumbnail (point unique, principe 5
+    — la cascade custom/publish/legacy/wip vit dans l'orchestrateur, partagée avec le panel
+    Blender ; la dupliquer ici garantirait la dérive). Retourne
+    ('<asset_name>/<rel>', source) pour construire l'URL /thumb/<asset>/<rest>, ou (None, 'none')."""
+    info = create_project.resolve_entity_thumbnail(project_dir, asset_name)
+    rel = info.get("rel")
+    return (f"{asset_name}/{rel}" if rel else None), info.get("source", "none")
 
 
 def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict:
@@ -246,17 +220,39 @@ def _list_scenefiles(asset_dir: Path, steps: list) -> dict:
 
 def _list_assets(project_dir: Path) -> list[dict]:
     result: list[dict] = []
-    for family in ("assets", "sets"):
+    for family in ("assets", "sets", "shots"):
         family_dir = project_dir / family
         if not family_dir.is_dir():
             continue
         for asset_dir in sorted(family_dir.iterdir()):
-            if not asset_dir.is_dir():
+            if not asset_dir.is_dir() or asset_dir.name.startswith("."):
                 continue
             manifest = _read_asset_manifest(asset_dir)
             if manifest is None:
+                # Entite ORPHELINE : un dossier existe sous assets/sets/shots mais sans
+                # manifest.json — donc jamais passee par create_asset() (nommage non valide,
+                # steps non declares, jamais publiable). Cas reel observe : un WIP sauve sur
+                # un nom d'entite tape a la main cree l'arborescence a la volee.
+                # Elle etait SILENCIEUSEMENT sautee ici : invisible cote web alors que le
+                # panel Blender, lui, la listait (il scanne le disque). Un dossier fantome
+                # que l'outil refuse d'afficher est pire qu'un dossier signale — on la
+                # remonte marquee, l'UI la rend actionnable.
+                thumb, source = _find_thumb(project_dir, asset_dir.name)
+                result.append({
+                    "name": asset_dir.name,
+                    "family": family,
+                    "entity_type": None,
+                    "type": None,
+                    "steps": sorted(d.name for d in asset_dir.iterdir()
+                                    if d.is_dir() and not d.name.startswith(".")),
+                    "last_versions": {},
+                    "thumb": f"/thumb/{thumb}" if thumb else None,
+                    "thumb_source": source,
+                    "broken": "manifest.json manquant — entite jamais creee par le pipeline "
+                              "(create_asset), non publiable en l'etat",
+                })
                 continue
-            thumb = _find_thumb(asset_dir, asset_dir.name, manifest)
+            thumb, source = _find_thumb(project_dir, asset_dir.name)
             result.append({
                 "name": asset_dir.name,
                 "family": family,
@@ -265,6 +261,8 @@ def _list_assets(project_dir: Path) -> list[dict]:
                 "steps": manifest.get("steps", []),
                 "last_versions": _last_versions(project_dir, asset_dir.name, manifest),
                 "thumb": f"/thumb/{thumb}" if thumb else None,
+                "thumb_source": source,
+                "broken": None,
             })
     return result
 
@@ -410,7 +408,11 @@ class YlosHandler(BaseHTTPRequestHandler):
         elif p.startswith("/api/asset/"):
             self._get_asset(p[len("/api/asset/"):])
         elif p.startswith("/thumb/"):
-            self._get_thumb(p[len("/thumb/"):])
+            # urlparse().path AVANT de couper : une vignette est mutable a URL constante,
+            # le client lui accole donc un jeton de cache-bust ('?t=...'). Passer self.path
+            # brut ferait chercher un fichier nomme 'thumb.png?t=1786...' -> 404 sur TOUTES
+            # les vignettes des que le cache-bust existe cote client.
+            self._get_thumb(urlparse(p).path[len("/thumb/"):])
         elif p == "/favicon.ico":
             self.send_response(204); self.end_headers()
         elif p.startswith("/api/browse"):
@@ -569,7 +571,7 @@ class YlosHandler(BaseHTTPRequestHandler):
         asset_name, sub_path = parts
 
         file_path: Path | None = None
-        for family in ("assets", "sets"):
+        for family in ("assets", "sets", "shots"):
             asset_dir = project_dir / family / asset_name
             candidate = asset_dir / sub_path
             if candidate.is_file():
@@ -589,6 +591,18 @@ class YlosHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
+        # Une vignette est MUTABLE a URL constante : republier un step reecrit thumb.png au
+        # meme chemin. Sans en-tete explicite le navigateur applique son heuristique de cache
+        # et peut resservir l'ancienne image apres un publish — un bug de fraicheur qui se
+        # lit comme "le thumbnail ne se met pas a jour". 'no-cache' = revalidation obligatoire
+        # (pas 'no-store' : avec l'ETag, un 304 evite quand meme de renvoyer les octets).
+        try:
+            st = file_path.stat()
+            self.send_header("ETag", f'"{int(st.st_mtime)}-{st.st_size}"')
+            self.send_header("Last-Modified", formatdate(st.st_mtime, usegmt=True))
+        except OSError:
+            pass
+        self.send_header("Cache-Control", "no-cache")
         _cors(self)
         self.end_headers()
         self.wfile.write(data)

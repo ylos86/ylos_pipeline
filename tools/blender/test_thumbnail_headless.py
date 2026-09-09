@@ -64,6 +64,89 @@ def main():
         _fail(f"thumb.png vide ({size} octets)")
     print(f"ok  render_publish_thumbnail -> {thumb} ({size} octets)")
 
+    # --- Helper : ecart-type des pixels. Un thumbnail "plat" (fond uni, sujet absent ou
+    # noir sur noir) a un ecart-type quasi nul. C'est la SEULE mesure qui distingue un rendu
+    # reussi d'un rendu qui n'a leve aucune erreur mais ne montre rien : les trois bugs
+    # historiques (eclairage, clipping, hide_render) produisaient tous un fichier PNG valide
+    # et non vide. Verifier "le fichier existe" ne les aurait jamais attrapes.
+    def _std(path):
+        img = bpy.data.images.load(path)
+        try:
+            px = list(img.pixels)
+            rgb = px[0::4] + px[1::4] + px[2::4]
+            mean = sum(rgb) / len(rgb)
+            return (sum((v - mean) ** 2 for v in rgb) / len(rgb)) ** 0.5
+        finally:
+            bpy.data.images.remove(img)
+
+    FLAT = 0.02
+
+    std = _std(thumb)
+    if std < FLAT:
+        _fail(f"thumbnail du cube PLAT (std={std:.4f}) : rendu sans contenu visible")
+    print(f"ok  cube non plat (std={std:.4f})")
+
+    # 3. REGRESSION clipping (bug reel) : une camera neuve a clip_end=1000 en dur. Un sujet
+    #    de plusieurs centaines d'unites est cadre a une distance SUPERIEURE a ce far plane
+    #    -> l'image ne contenait que le fond du world, sans la moindre erreur remontee.
+    cube.scale = (250.0, 250.0, 250.0)
+    bpy.context.view_layer.update()
+    big_dir = tempfile.mkdtemp(prefix="ylos_thumb_big_")
+    big = thumbnails.render_publish_thumbnail([cube], big_dir)
+    if not big:
+        _fail(f"rendu d'un sujet de 500 unites echoue - LAST_ERROR={thumbnails.LAST_ERROR!r}")
+    big_std = _std(big)
+    if big_std < FLAT:
+        _fail(f"sujet de 500 unites PLAT (std={big_std:.4f}) : regression du clipping camera")
+    print(f"ok  sujet 500 unites non plat (std={big_std:.4f}) - clipping derive du cadrage")
+    cube.scale = (1.0, 1.0, 1.0)
+    bpy.context.view_layer.update()
+
+    # 4. REGRESSION hide_render (bug reel) : les meshes sources d'un scattering sont
+    #    hide_render=True. Incluses dans la bbox, elles reculaient la camera sur du vide.
+    bpy.ops.mesh.primitive_cube_add(size=2.0, location=(400, 400, 0))
+    far = bpy.context.active_object
+    far.hide_render = True
+    framed = thumbnails.renderable_objects([cube, far])
+    if far in framed:
+        _fail("renderable_objects() garde un objet hide_render=True")
+    if cube not in framed:
+        _fail("renderable_objects() a perdu l'objet visible")
+    print("ok  renderable_objects() exclut les objets hide_render")
+
+    mixed = tempfile.mkdtemp(prefix="ylos_thumb_mixed_")
+    res_mixed = thumbnails.render_publish_thumbnail([cube, far], mixed)
+    if not res_mixed:
+        _fail(f"rendu mixte echoue - LAST_ERROR={thumbnails.LAST_ERROR!r}")
+    mixed_std = _std(res_mixed)
+    if mixed_std < FLAT:
+        _fail(f"rendu mixte PLAT (std={mixed_std:.4f}) : le hide_render pollue encore le cadrage")
+    print(f"ok  rendu mixte non plat (std={mixed_std:.4f})")
+
+    # 5. INTEGRITE (trou reel trouve en production) : un publish ne contenant qu'un EMPTY
+    #    (zero geometrie) etait marque 'complete' - _missing_artifacts ne verifie que
+    #    "le fichier existe et n'est pas vide". Le thumbnail doit ECHOUER pour que le
+    #    contrat deux-phases rejette ce publish au lieu de le commiter en silence.
+    bpy.ops.object.empty_add(location=(0, 0, 0))
+    empty = bpy.context.active_object
+    empty_dir = tempfile.mkdtemp(prefix="ylos_thumb_empty_")
+    res_empty = thumbnails.render_publish_thumbnail([empty], empty_dir)
+    if res_empty:
+        _fail("un publish sans aucune geometrie a produit un thumbnail : "
+              "le garde-fou d'integrite ne se declenche pas")
+    if "no renderable geometry" not in thumbnails.LAST_ERROR:
+        _fail(f"cause d'echec non remontee a l'appelant : LAST_ERROR={thumbnails.LAST_ERROR!r}")
+    print(f"ok  publish sans geometrie refuse ({thumbnails.LAST_ERROR!r})")
+
+    # 6. Aucun datablock temporaire ne survit (try/finally strict).
+    leftovers = ([s.name for s in bpy.data.scenes if s.name.startswith("YLOS_thumb")]
+                 + [o.name for o in bpy.data.objects if o.name.startswith("YLOS_thumb")]
+                 + [w.name for w in bpy.data.worlds if w.name.startswith("YLOS_thumb")]
+                 + [l.name for l in bpy.data.lights if l.name.startswith("YLOS_thumb")])
+    if leftovers:
+        _fail(f"datablocks temporaires non purges : {leftovers}")
+    print("ok  aucun datablock YLOS_thumb_* residuel")
+
     print("\nPASS: thumbnail publish headless OK")
     sys.exit(0)
 

@@ -11,6 +11,7 @@ from ..core.asset import (
 )
 from ..core import vocab
 from ..core.thumbnails import generate_thumbnail, reload_thumb_icon
+from ..core import entity_thumbs
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -104,6 +105,39 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
             self.report({"ERROR"}, "No active project or asset.")
             return {"CANCELLED"}
 
+        # GARDE-FOU (bug reel observe) : resolve_wip_save_path + os.makedirs CREENT
+        # l'arborescence a la volee. Sans verification, un nom d'entite tape a la main dans
+        # scene.ylos_current_asset (StringProperty libre) suffisait a fabriquer une entite
+        # FANTOME : 'sets/lecube/lookdev/wip/lecube_lookdev_v001.blend' existe sur disque, mais
+        # sans manifest.json, hors convention de nommage TYPE_Nom_Variant, et donc :
+        #   - invisible cote web UI (qui exige un manifeste),
+        #   - impossible a publier (allocate_publish_version ne resout pas l'entite),
+        #   - visible seulement dans le panel Blender, qui scanne le disque -> divergence
+        #     entre les deux browsers, sur une donnee qui n'aurait jamais du naitre.
+        # Le manifeste est la source de verite (principe 3) : on refuse d'ecrire a cote de
+        # lui, avec un message qui dit quoi faire, plutot que de laisser le pipeline
+        # accumuler des dossiers qu'aucun outil ne sait consommer.
+        cp = _cp()
+        resolved = cp.resolve_entity(project_path, asset_name)
+        if resolved is None:
+            self.report(
+                {"ERROR"},
+                f"L'entite '{asset_name}' n'existe pas dans ce projet (aucun manifest.json). "
+                f"Cree-la d'abord avec '+ New' dans la section Assets — un WIP sauve ici "
+                f"produirait un dossier orphelin, non publiable.",
+            )
+            return {"CANCELLED"}
+
+        declared = resolved.get("manifest", {}).get("steps") or []
+        if declared and self.step not in declared:
+            self.report(
+                {"ERROR"},
+                f"Le step '{self.step}' n'est pas declare pour '{asset_name}' "
+                f"(steps du manifeste : {', '.join(declared)}). Sauver ici creerait un "
+                f"dossier de step hors manifeste, ignore par la composition et le publish.",
+            )
+            return {"CANCELLED"}
+
         save_path = resolve_wip_save_path(
             project_path, asset_name, self.step, self.version, ctx_type
         )
@@ -133,6 +167,9 @@ class YLOS_OT_SaveWip(bpy.types.Operator):
         thumb = generate_thumbnail(save_path, context)
         if thumb:
             reload_thumb_icon(save_path)
+            # Une entite sans publish tire sa vignette de son dernier WIP : ce save vient
+            # peut-etre de la changer, le cache d'icones du panel doit la relire.
+            entity_thumbs.invalidate(project_path)
             self.report({"INFO"}, f"Saved: {os.path.basename(save_path)} + thumbnail")
         else:
             self.report({"INFO"}, f"Saved: {os.path.basename(save_path)} (no thumbnail)")

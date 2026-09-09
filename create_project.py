@@ -750,6 +750,141 @@ def list_publishes(project_root, entity_name, step, entity_type="asset"):
     return [by_version[v] for v in sorted(by_version)]
 
 
+# ---------------------------------------------------------------------------
+# Resolution de vignette d'entite - POINT UNIQUE (principe 5).
+#
+# Vit ici, dans l'orchestrateur, et pas dans un consommateur : la web UI (ylos_ui) ET le
+# panel Blender ET un futur panel Houdini/n8n ont exactement le meme besoin. Ecrire la
+# cascade dans le serveur HTTP l'aurait rendue invisible aux DCC, qui l'auraient
+# reimplementee - c'est precisement le motif de derive que le principe 5 interdit (meme
+# raison que refresh_entity_root ou resolve_entity).
+# ---------------------------------------------------------------------------
+
+THUMB_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+ENTITY_PREVIEW_NAME = "preview.png"
+
+# '<stem>_v<NNN>_thumb.<ext>' - convention posee par le save WIP Blender
+# (plugins/blender/core/thumbnails.py::get_thumb_path).
+_WIP_THUMB_RE = re.compile(r"_v(\d{3})_thumb\.(?:png|jpg|jpeg|webp)$", re.IGNORECASE)
+
+
+def _latest_publish_thumb_rel(manifest):
+    """Thumb du publish 'complete' de version max, tous steps confondus (contrat deux-phases).
+    Chemin relatif a l'entite, ou None."""
+    best = None  # (version, rel)
+    for entries in (manifest.get("step_publishes") or {}).values():
+        for e in entries:
+            if e.get("status") != "complete":
+                continue
+            rel = e.get("thumbnail") or e.get("thumb")
+            if not rel:
+                continue
+            if best is None or e.get("version", 0) > best[0]:
+                best = (e.get("version", 0), rel)
+    return best[1] if best else None
+
+
+def _latest_wip_thumb_rel(entity_dir):
+    """Vignette du WIP le plus recent, tous steps confondus ('<step>/wip/<stem>_v<NNN>_thumb.png',
+    ecrite par ylos.save_wip). Tri par (mtime, version) : le WIP sauve en dernier represente le
+    mieux l'etat courant, la version departage a mtime egal. Relatif a l'entite, ou None."""
+    best = None  # (mtime, version, rel)
+    try:
+        step_dirs = sorted(d for d in entity_dir.iterdir() if d.is_dir())
+    except OSError:
+        return None
+    for step_dir in step_dirs:
+        wip = step_dir / "wip"
+        if not wip.is_dir():
+            continue
+        try:
+            files = list(wip.iterdir())
+        except OSError:
+            continue
+        for f in files:
+            if not f.is_file() or f.suffix.lower() not in THUMB_EXTENSIONS:
+                continue
+            m = _WIP_THUMB_RE.search(f.name)
+            if not m:
+                continue
+            try:
+                key = (f.stat().st_mtime, int(m.group(1)))
+            except OSError:
+                continue
+            if best is None or key > best[:2]:
+                best = (key[0], key[1], f"{step_dir.name}/wip/{f.name}")
+    return best[2] if best else None
+
+
+def resolve_entity_thumbnail(project_root, entity_name):
+    """Vignette representative d'une entite (asset/set/shot), pour TOUT consommateur d'UI.
+
+    Retourne {"rel": <chemin relatif a l'entite ou None>, "path": <chemin absolu ou None>,
+    "source": "custom"|"publish"|"legacy"|"wip"|"none"}. Ne leve JAMAIS pour un cas metier
+    (meme convention que resolve_entity / pin_web_asset) : entite absente -> source 'none'.
+
+    Cascade, du plus intentionnel au plus automatique :
+      1. custom  - '<entite>/preview.png', override humain explicite (pattern Prism
+                   'set preview'). Gagne toujours : un geste humain prime sur une heuristique.
+      2. publish - dernier publish 'complete' du contrat deux-phases (aucun scan disque, le
+                   manifeste porte deja le chemin).
+      3. legacy  - scan plat de '<step>/publish/*.png' (projets pre-deux-phases).
+      4. wip     - derniere vignette de WIP. Comble le trou UX principal : entre la CREATION
+                   d'une entite et son premier publish reussi, il n'existe aucun thumb de
+                   publish - l'entite s'affichait donc en placeholder gris alors qu'une
+                   preview de son WIP existait deja sur disque. C'est l'etat le plus frequent
+                   pour un artiste : ce qu'il vient de creer n'est pas encore publie.
+
+    La SOURCE fait partie du contrat : un thumb de WIP n'engage pas la meme confiance qu'un
+    publish, un consommateur doit pouvoir le signaler plutot que de laisser croire a un
+    publie."""
+    none = {"rel": None, "path": None, "source": "none"}
+    try:
+        entity_dir, manifest_path = _find_asset_entity(Path(project_root), entity_name)
+    except (FileNotFoundError, ValueError, OSError):
+        return none
+    if entity_dir is None:
+        return none
+
+    def _hit(rel, source):
+        return {"rel": rel, "path": str(entity_dir / rel), "source": source}
+
+    if (entity_dir / ENTITY_PREVIEW_NAME).is_file():
+        return _hit(ENTITY_PREVIEW_NAME, "custom")
+
+    manifest = {}
+    if manifest_path is not None and Path(manifest_path).is_file():
+        try:
+            manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            manifest = {}
+
+    rel = _latest_publish_thumb_rel(manifest)
+    if rel and (entity_dir / rel).is_file():
+        return _hit(rel, "publish")
+
+    try:
+        step_dirs = sorted(d for d in entity_dir.iterdir() if d.is_dir())
+    except OSError:
+        step_dirs = []
+    for step_dir in step_dirs:
+        pub = step_dir / "publish"
+        if not pub.is_dir():
+            continue
+        try:
+            flat = sorted(f for f in pub.iterdir()
+                          if f.is_file() and f.suffix.lower() in THUMB_EXTENSIONS)
+        except OSError:
+            continue
+        if flat:
+            return _hit(f"{step_dir.name}/publish/{flat[0].name}", "legacy")
+
+    rel = _latest_wip_thumb_rel(entity_dir)
+    if rel:
+        return _hit(rel, "wip")
+    return none
+
+
 def latest_publish_artifact(project_root, entity_name, step, entity_type="asset"):
     """Entree publish 'complete' de version max pour le step (deux-phases + legacy fusionnes,
     cf. list_publishes), enrichie 'abs_path'/'exists'/'legacy'. dict ou None (aucun publish

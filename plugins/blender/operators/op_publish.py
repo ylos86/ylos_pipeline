@@ -12,6 +12,7 @@ from ..core import vocab
 from ..core.scene_checker import get_asset_objects_for_publish
 from ..core.thumbnails import render_publish_thumbnail
 from ..core import thumbnails
+from ..core import entity_thumbs
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -199,6 +200,10 @@ def publish_entity_step(context, project_path, entity, step, *,
         )
     except Exception as e:
         return _fail(str(e), method=method, warning=warning)
+
+    # Le publish vient de poser un thumb.png : la vignette de l'entite change (et passe de
+    # 'wip' a 'publish'). Sans cette purge, le panel garderait l'ancienne jusqu'au TTL.
+    entity_thumbs.invalidate(project_path)
 
     pub_path = os.path.join(info["final_dir"], stem + ext)
     message = (

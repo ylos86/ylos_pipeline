@@ -346,6 +346,20 @@ def register_properties():
     )
     # Filtre du Product Browser (panel Import / Export, ylos.open_io). Sur Scene pour que
     # draw_io le lise quel que soit le point de montage.
+    # Taille de la preview d'entite dans la section Assets. Un cran 'OFF' existe parce que
+    # le N-panel est etroit : sur un ecran partage, rendre la vignette repliable evite d'avoir
+    # a choisir entre "visuel" et "compact" une fois pour toutes.
+    bpy.types.Scene.ylos_preview_size = bpy.props.EnumProperty(
+        name="Preview",
+        description="Size of the active entity preview thumbnail",
+        items=[
+            ("OFF", "Off",    "Hide the preview thumbnail", "HIDE_ON",   0),
+            ("S",   "Small",  "Small preview",              "IMAGE_DATA", 1),
+            ("M",   "Medium", "Medium preview",             "IMAGE_DATA", 2),
+            ("L",   "Large",  "Large preview",              "IMAGE_DATA", 3),
+        ],
+        default="M",
+    )
     bpy.types.Scene.ylos_io_search = bpy.props.StringProperty(
         name="Search",
         description="Filter published products by entity or step name",
@@ -358,7 +372,7 @@ def unregister_properties():
     props = [
         "ylos_project_path", "ylos_project_name", "ylos_prod_type",
         "ylos_current_asset", "ylos_current_step", "ylos_context_type",
-        "ylos_asset_type", "ylos_wip_comment", "ylos_io_search",
+        "ylos_asset_type", "ylos_wip_comment", "ylos_io_search", "ylos_preview_size",
     ]
     for prop in props:
         if hasattr(bpy.types.Scene, prop):

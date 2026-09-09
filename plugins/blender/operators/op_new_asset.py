@@ -235,6 +235,18 @@ class YLOS_OT_NewAsset(bpy.types.Operator):
         if context_type == "ASSET":
             scene.ylos_asset_type = self.asset_type
 
+        # ylos_current_step est une propriete Scene UNIQUE partagee entre familles
+        # (STEP_ITEMS_ALL, cf. vocab.py) : elle ne se remet jamais a jour toute seule au
+        # changement de contexte. Bug reel observe : creer un Set apres avoir travaille sur
+        # un Asset laisse le step sur 'modeling' (invalide pour un Set) -> le State Manager
+        # le recopie tel quel dans un export state (state_add_export) -> Publish rejette
+        # loin du symptome ("Step 'modeling' is not valid for a set."). On clampe ici au
+        # premier step valide de la famille si le step courant ne l'est pas (meme domaine
+        # que is_step_valid_for_context, cf. core/project.py).
+        valid_steps = vocab.values(vocab.STEP_ITEMS.get(context_type, vocab.STEP_ITEMS["ASSET"]))
+        if valid_steps and scene.ylos_current_step not in valid_steps:
+            scene.ylos_current_step = valid_steps[0]
+
         invalidate_entity_cache(project_path)
 
         _, parent_display = _create_entity_collection(

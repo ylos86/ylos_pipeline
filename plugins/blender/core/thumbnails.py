@@ -6,7 +6,7 @@ import math
 import os
 import bpy
 from bpy.utils import previews
-from mathutils import Vector
+from mathutils import Euler, Vector
 from pathlib import Path
 
 _pcoll = None
@@ -114,7 +114,30 @@ def load_icon(abs_path: str) -> int:
             print(f"[Ylos] Preview load failed for {abs_path}: {e}")
             return 0
 
-    return _pcoll[key].icon_id
+    preview = _pcoll[key]
+    # Blender charge les previews PARESSEUSEMENT : tant que rien ne lit leurs pixels, un
+    # template_icon(icon_value=...) affiche l'indicateur de chargement au lieu de l'image
+    # (constate en direct dans le N-panel). Toucher image_size force le decodage tout de
+    # suite. On paie ici, hors draw() (ce module est appele depuis les caches), jamais dans
+    # la boucle de redraw.
+    try:
+        _ = preview.image_size[:]   # image plein format (template_icon)
+        _ = preview.icon_size[:]    # icone reduite (icon_value d'un bouton d'operateur)
+    except Exception:
+        pass
+    return preview.icon_id
+
+
+def reload_icon(abs_path: str) -> int:
+    """Force le rechargement d'un preview pour un chemin ABSOLU arbitraire.
+
+    Necessaire parce que _pcoll memoise par chemin : un thumb.png reecrit AU MEME CHEMIN (ce
+    que fait chaque republish d'un step) resterait affiche avec l'ancienne image tant que la
+    session Blender vit. Miroir de reload_thumb_icon pour la convention '<stem>_thumb.png'."""
+    global _pcoll
+    if _pcoll is not None and abs_path in _pcoll:
+        del _pcoll[abs_path]
+    return load_icon(abs_path)
 
 
 def reload_thumb_icon(blend_path: str) -> int:
@@ -139,7 +162,7 @@ def reload_thumb_icon(blend_path: str) -> int:
 # rendu EEVEE reel sur scene/camera temporaires.
 # ---------------------------------------------------------------------------
 
-_BBOX_TYPES = {"MESH", "ARMATURE", "CURVE"}
+_BBOX_TYPES = {"MESH", "ARMATURE", "CURVE", "SURFACE", "META", "FONT", "VOLUME"}
 
 # Derniere cause d'echec de render_publish_thumbnail() (texte de l'exception sous-jacente),
 # posee module-level pour que l'appelant (op_publish) remonte la CAUSE a l'utilisateur sans
@@ -168,23 +191,83 @@ def _pick_render_engine(scene) -> str:
     return scene.render.engine
 
 
+def renderable_objects(objects):
+    """Sous-ensemble de 'objects' qui contribuera REELLEMENT au rendu du thumbnail.
+
+    Bug reel corrige : un set de layout publie ses meshes sources de scattering avec
+    hide_render=True (elles n'existent que comme geometrie d'instanciation). Elles entraient
+    quand meme dans _world_bbox() -> bbox gonflee, camera reculee sur du vide, zero pixel de
+    sujet. Le cadrage doit porter sur ce que la camera VERRA, pas sur ce que l'appelant a
+    collecte.
+
+    Repli sur la liste complete si le filtre vide tout (mieux vaut un cadrage imparfait
+    qu'aucun thumbnail : le contrat deux-phases REJETTE le publish sans thumb.png)."""
+    visible = [o for o in objects if not getattr(o, "hide_render", False)]
+    return visible or list(objects)
+
+
+def has_visible_geometry(objects) -> bool:
+    """True si au moins un objet porte de la geometrie REELLE (et pas seulement un transform).
+
+    Sert de controle d'integrite au publish, pas de detail de cadrage. Trou reel trouve en
+    conditions de production : un publish GLB de CHARACTER_Sissa02_Default ne contenait qu'un
+    EMPTY — zero mesh — et etait pourtant marque 'complete'. Le garde-fou du contrat
+    deux-phases (_missing_artifacts) ne verifie que "le fichier existe et n'est pas vide" :
+    un .glb ne contenant qu'un empty pese quelques ko, donc il passe. Le seul signal etait un
+    thumbnail plat... que l'ancien code produisait de toute facon, donc inexploitable.
+
+    En rendant l'absence de geometrie FATALE pour le thumbnail, on la rend fatale pour le
+    publish (thumbnail requis partout -> finalize_publish_version refuse le commit et preserve
+    le staging). Le thumbnail cesse d'etre decoratif : il devient le test de fumee du publish.
+
+    Un EMPTY, une CAMERA, une LIGHT ou un mesh a 0 vertex ne comptent pas. Un ARMATURE compte
+    (un publish d'anim/rig est legitime) des lors qu'il a des os."""
+    for obj in objects:
+        t = obj.type
+        data = getattr(obj, "data", None)
+        if t == "MESH":
+            if data is not None and len(data.vertices) > 0:
+                return True
+        elif t == "ARMATURE":
+            if data is not None and len(getattr(data, "bones", ())) > 0:
+                return True
+        elif t in _BBOX_TYPES:
+            return True
+    return False
+
+
 def _world_bbox(objects):
-    """Bbox monde (min, max) unifiee des objets avec geometrie reelle (MESH/ARMATURE/CURVE).
-    Retombe sur tous les objets si aucun ne qualifie (ex: que des EMPTY)."""
+    """Bbox monde (min, max) unifiee des objets avec geometrie reelle. Retombe sur tous les
+    objets si aucun ne qualifie (ex: que des EMPTY). Retourne (None, None) si aucun coin
+    exploitable - l'appelant tranche, jamais d'inf/nan propage au cadrage."""
     candidates = [o for o in objects if o.type in _BBOX_TYPES] or list(objects)
     mins = Vector((float("inf"),) * 3)
     maxs = Vector((float("-inf"),) * 3)
+    seen = False
     for obj in candidates:
         for corner in obj.bound_box:
             world_co = obj.matrix_world @ Vector(corner)
+            if any(math.isnan(c) or math.isinf(c) for c in world_co):
+                continue
             mins = Vector(min(a, b) for a, b in zip(mins, world_co))
             maxs = Vector(max(a, b) for a, b in zip(maxs, world_co))
+            seen = True
+    if not seen:
+        return None, None
     return mins, maxs
 
 
 def _frame_camera(cam_obj, cam_data, mins, maxs,
                   azimuth_deg=45.0, elevation_deg=30.0, padding=1.4):
-    """Cadrage trois-quarts : place cam_obj pour englober (mins, maxs) avec une marge."""
+    """Cadrage trois-quarts : place cam_obj pour englober (mins, maxs) avec une marge, ET
+    accorde les plans de clipping a la distance calculee.
+
+    Bug reel corrige (2e cause des thumbnails plats, independante de l'eclairage) : une camera
+    neuve (bpy.data.cameras.new) a clip_end = 1000 EN DUR. La distance de cadrage vaut
+    radius * padding / sin(fov/2) - pour une entite de ~690 unites (un set de layout avec son
+    terrain) ca donne ~1420 : le sujet ENTIER passe derriere le far plane et l'image ne
+    contient que le fond du world, sans la moindre erreur remontee. Le clipping doit donc etre
+    derive du cadrage, jamais laisse au defaut. Retourne la distance camera-centre."""
     center = (mins + maxs) / 2.0
     diagonal = (maxs - mins).length
     radius = max(diagonal / 2.0, 0.5)  # plancher pour eviter un cadrage degenere (bbox nulle)
@@ -202,16 +285,80 @@ def _frame_camera(cam_obj, cam_data, mins, maxs,
     direction = center - cam_obj.location
     cam_obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
+    # Clipping derive du cadrage : le sujet occupe [distance - radius, distance + radius].
+    # Marges larges pour absorber un bbox sous-estime (modifiers, instances) sans jamais
+    # tomber sous les limites RNA (clip_start > 0).
+    cam_data.clip_start = max(distance * 0.001, 1e-4)
+    cam_data.clip_end = max((distance + radius * 4.0) * 1.5, 10.0)
+    return distance
 
-def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -> str:
+
+def _add_key_and_fill(tmp_scene, cam_obj, center):
+    """Eclairage deterministe : une key alignee camera + une fill laterale plus faible.
+
+    Bug reel corrige (1re cause des thumbnails plats) : un monde plat (use_nodes=False)
+    eclaire un materiau diffus de facon UNIFORME quelle que soit la normale - sans lumiere
+    directe, sujet et fond rendent a une luminance quasi identique. La key (alignee sur l'axe
+    camera, facon flash monte camera) garantit que les faces visibles sont les faces
+    eclairees ; la fill (azimut +75 deg, ~2.5x plus faible) casse la silhouette plate et donne
+    du volume - sans elle un cube lu de face reste une tache uniforme.
+
+    Retourne la liste des (objet, data) crees, a purger par l'appelant."""
+    created = []
+    to_center = center - cam_obj.location
+    key_dir = to_center.normalized() if to_center.length else Vector((0.0, 0.0, -1.0))
+
+    key_data = bpy.data.lights.new("YLOS_thumb_key", type="SUN")
+    key_data.energy = 4.0
+    key_data.angle = math.radians(10.0)
+    key_obj = bpy.data.objects.new("YLOS_thumb_key", key_data)
+    tmp_scene.collection.objects.link(key_obj)
+    key_obj.rotation_euler = key_dir.to_track_quat("-Z", "Y").to_euler()
+    created.append((key_obj, key_data))
+
+    # Fill : meme direction pivotee de +75 deg autour de Z, elevation remontee -> eclaire le
+    # cote laisse dans l'ombre par la key, sans jamais partir en contre-jour total.
+    fill_dir = key_dir.copy()
+    fill_dir.rotate(Euler((0.0, 0.0, math.radians(75.0)), "XYZ"))
+    fill_dir.z = min(fill_dir.z + 0.25, -0.05)
+    fill_data = bpy.data.lights.new("YLOS_thumb_fill", type="SUN")
+    fill_data.energy = 1.6
+    fill_data.angle = math.radians(25.0)
+    fill_obj = bpy.data.objects.new("YLOS_thumb_fill", fill_data)
+    tmp_scene.collection.objects.link(fill_obj)
+    fill_obj.rotation_euler = fill_dir.normalized().to_track_quat("-Z", "Y").to_euler()
+    created.append((fill_obj, fill_data))
+    return created
+
+
+def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 512) -> str:
     """
-    Rend un thumbnail headless (256x256 EEVEE par defaut, camera trois-quarts auto-cadree
-    sur la bbox de 'objects', fond neutre) dans staging_dir/thumb.png.
+    Rend un thumbnail headless (512x512 EEVEE par defaut, camera trois-quarts auto-cadree sur
+    la bbox de 'objects', fond neutre, key+fill) dans staging_dir/thumb.png.
 
-    try/finally strict : scene temporaire, camera (objet + data) et world temporaire sont
-    purges quoi qu'il arrive - jamais de datablock residuel dans le .blend utilisateur, et
-    bpy.context.scene n'est jamais modifie (bpy.context.temp_override(scene=...) le temps
-    du rendu, pas de bascule de la scene active).
+    try/finally strict : scene temporaire, camera (objet + data), lumieres et world temporaire
+    sont purges quoi qu'il arrive - jamais de datablock residuel dans le .blend utilisateur.
+
+    TROIS bugs reels corriges, cumulatifs (chacun suffisait a produire un thumbnail plat) :
+
+    1. Ciblage de tmp_scene au rendu : bpy.ops.render.render() lit la scene a rendre via
+       window.scene au niveau C, PAS via bpy.context.scene - un bpy.context.temp_override(
+       scene=tmp_scene) est SILENCIEUSEMENT ignore par cet operateur des qu'une fenetre
+       existe. Pattern officiel : bascule reelle de window.scene, restauree juste apres. En
+       pur --background (bpy.context.window is None) on retombe sur temp_override, seul
+       mecanisme disponible et suffisant dans ce mode.
+    2. Eclairage : cf. _add_key_and_fill.
+    3. Clipping camera : cf. _frame_camera (clip_end=1000 en dur sur une camera neuve).
+
+    Objets caches au rendu (hide_render) exclus du cadrage ET du lien - cf.
+    renderable_objects(). Aucune geometrie visible du tout -> ECHEC explicite (cf.
+    has_visible_geometry) : le thumbnail est le test de fumee du publish, pas une decoration.
+
+    Color management EPINGLE (Standard, exposure 0, gamma 1) : une scene neuve herite des
+    defauts du fichier de demarrage - un utilisateur avec un view transform exotique ou une
+    exposure decalee obtiendrait des thumbnails incoherents d'une machine a l'autre. Un
+    thumbnail est une donnee de pipeline, pas un rendu artistique : il doit etre
+    reproductible.
 
     Retourne le chemin du thumb en succes, "" en echec (meme convention que
     generate_thumbnail ci-dessus) - le garde-fou de completude vit deja dans
@@ -225,12 +372,14 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
         print("[Ylos] Publish thumbnail: no objects to frame")
         return ""
 
+    framed = renderable_objects(objects)
     thumb_path = str(Path(staging_dir) / "thumb.png")
 
     tmp_scene = None
     tmp_world = None
     cam_obj = None
     cam_data = None
+    lights = []
     engine = "?"
 
     try:
@@ -243,6 +392,21 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
         tmp_scene.render.image_settings.file_format = "PNG"
         tmp_scene.render.filepath = thumb_path
         tmp_scene.render.film_transparent = False
+        # Color management epingle - cf. docstring. try/except : les enums de view transform
+        # dependent de l'OCIO config, 'Standard' existe partout mais on ne parie pas dessus.
+        try:
+            tmp_scene.view_settings.view_transform = "Standard"
+            tmp_scene.view_settings.look = "None"
+            tmp_scene.view_settings.exposure = 0.0
+            tmp_scene.view_settings.gamma = 1.0
+        except TypeError:
+            pass
+        # Echantillonnage bas : un thumbnail 256px n'a pas besoin de 64 samples (EEVEE only,
+        # l'attribut n'existe pas sur tous les moteurs).
+        try:
+            tmp_scene.eevee.taa_render_samples = 16
+        except AttributeError:
+            pass
 
         tmp_world = bpy.data.worlds.new("YLOS_thumb_world")
         tmp_world.use_nodes = False
@@ -254,15 +418,40 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
         tmp_scene.collection.objects.link(cam_obj)
         tmp_scene.camera = cam_obj
 
-        for obj in objects:
+        for obj in framed:
             if obj.name not in tmp_scene.collection.objects:
                 tmp_scene.collection.objects.link(obj)
 
-        mins, maxs = _world_bbox(objects)
-        _frame_camera(cam_obj, cam_data, mins, maxs)
+        if not has_visible_geometry(framed):
+            LAST_ERROR = ("no renderable geometry among the %d object(s) to frame "
+                          "(a publish with no visible content would be committed silently)"
+                          % len(framed))
+            print("[Ylos] Publish thumbnail: " + LAST_ERROR)
+            return ""
 
-        with bpy.context.temp_override(scene=tmp_scene):
-            bpy.ops.render.render(write_still=True)
+        mins, maxs = _world_bbox(framed)
+        if mins is None:
+            LAST_ERROR = "degenerate bounding box (no usable geometry)"
+            print("[Ylos] Publish thumbnail: degenerate bbox")
+            return ""
+        _frame_camera(cam_obj, cam_data, mins, maxs)
+        lights = _add_key_and_fill(tmp_scene, cam_obj, (mins + maxs) / 2.0)
+
+        window = bpy.context.window
+        if window is not None:
+            # Session interactive : window.scene est ce que render.render() lit reellement -
+            # cf. docstring. Restaure inconditionnellement, meme si le rendu leve.
+            orig_window_scene = window.scene
+            try:
+                window.scene = tmp_scene
+                bpy.ops.render.render(write_still=True)
+            finally:
+                window.scene = orig_window_scene
+        else:
+            # --background pur (pas de fenetre) : pas de window.scene a bousculer, l'override
+            # de contexte suffit (cf. test_thumbnail_headless.py, --background).
+            with bpy.context.temp_override(scene=tmp_scene):
+                bpy.ops.render.render(write_still=True)
 
     except Exception as e:
         LAST_ERROR = str(e)
@@ -271,15 +460,21 @@ def render_publish_thumbnail(objects: list, staging_dir: str, size: int = 256) -
 
     finally:
         if tmp_scene is not None:
-            for obj in objects:
+            for obj in framed:
                 if obj.name in tmp_scene.collection.objects:
                     tmp_scene.collection.objects.unlink(obj)
             if cam_obj is not None and cam_obj.name in tmp_scene.collection.objects:
                 tmp_scene.collection.objects.unlink(cam_obj)
+            for lobj, _ldata in lights:
+                if lobj.name in tmp_scene.collection.objects:
+                    tmp_scene.collection.objects.unlink(lobj)
         if cam_obj is not None:
             bpy.data.objects.remove(cam_obj, do_unlink=True)
         if cam_data is not None:
             bpy.data.cameras.remove(cam_data)
+        for lobj, ldata in lights:
+            bpy.data.objects.remove(lobj, do_unlink=True)
+            bpy.data.lights.remove(ldata)
         if tmp_world is not None:
             bpy.data.worlds.remove(tmp_world)
         if tmp_scene is not None:

@@ -2,6 +2,7 @@
 import bpy
 from bpy.props import StringProperty
 from ..core.asset import list_project_entities, invalidate_entity_cache
+from ..core import entity_thumbs
 
 
 class YLOS_OT_AssetBrowser(bpy.types.Operator):
@@ -72,5 +73,6 @@ class YLOS_OT_RefreshAssetList(bpy.types.Operator):
 
     def execute(self, context):
         invalidate_entity_cache(context.scene.ylos_project_path)
+        entity_thumbs.invalidate(context.scene.ylos_project_path)
         self.report({"INFO"}, "Asset list refreshed.")
         return {"FINISHED"}

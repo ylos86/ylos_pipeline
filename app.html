@@ -15,8 +15,14 @@
       --border:       #2a2a32;
       --border-hi:    #3c3c50;
       --text:         #e8e8f0;
-      --text-muted:   #7070a0;
-      --text-dim:     #44445a;
+      /* text-muted / text-dim : recalibrés WCAG AA (>=4.5:1) le 2026-08-03. Les deux portent
+         du vrai texte lisible (labels, compteurs, placeholders — pas seulement décoratif),
+         donc la hiérarchie muted > dim s'exprime par taille/graisse/letter-spacing plutôt
+         que par un écart de contraste agressif, impossible à tenir sur fond sombre sans
+         faire échouer l'un des deux. Vérifié par calcul (luminance relative) sur les 3 fonds
+         --bg/--bg-2/--bg-3 : les deux passent >=4.5:1 partout où ils apparaissent. */
+      --text-muted:   #9c9cc8;
+      --text-dim:     #82829e;
       --accent:       #6366f1;
       --accent-glow:  #6366f130;
       --green:        #34d399;
@@ -153,9 +159,15 @@
     /* ── Asset grid ──────────────────────────────── */
     .asset-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 260px), 1fr));
       gap: 14px;
     }
+    /* Densité de grille — le browser d'assets est d'abord un outil VISUEL : selon qu'on
+       cherche une vignette précise ou qu'on balaye un projet entier, la bonne taille de
+       carte n'est pas la même. Trois crans, pas un slider (un cran nommé se retrouve). */
+    body[data-density="s"] .asset-grid { --card-min: 190px; }
+    body[data-density="m"] .asset-grid { --card-min: 260px; }
+    body[data-density="l"] .asset-grid { --card-min: 360px; }
 
     /* ── Card ────────────────────────────────────── */
     .card {
@@ -169,11 +181,62 @@
       box-shadow: 0 8px 24px rgba(0,0,0,.4);
     }
 
+    /* 4/3 et non 16/9 : les thumbnails sont rendus CARRÉS (cadrage trois-quarts sur la
+       bbox). En 16/9 + object-fit:cover, on rognait ~44% de la hauteur — soit le haut et le
+       bas du sujet, exactement ce qui permet de le reconnaître. */
     .card-thumb {
-      width: 100%; aspect-ratio: 16/9;
+      position: relative;
+      width: 100%; aspect-ratio: 4/3;
       background: var(--bg-3); overflow: hidden;
     }
-    .card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .card-thumb img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      transition: transform .35s cubic-bezier(.2,.7,.3,1);
+    }
+    .card:hover .card-thumb img { transform: scale(1.045); }
+
+    /* Provenance de la vignette. Un thumbnail de WIP n'engage pas la même confiance qu'un
+       publish : l'UI le DIT au lieu de laisser croire à un asset publié. Rien n'est affiché
+       pour un thumb de publish — le cas normal ne mérite pas de bruit visuel. */
+    /* Badge de type EN OVERLAY sur la vignette, pas a cote du nom. Constat visuel direct :
+       cote a cote dans un header de 260px, le badge mangeait la moitie de la largeur et les
+       noms de la convention TYPE_Nom_Variant (deja longs) s'ellipsaient des le 12e caractere
+       — soit exactement l'information qui distingue deux assets. Le nom reprend toute la
+       largeur, le type reste lisible la ou il ne coute rien. */
+    .thumb-type {
+      position: absolute; right: 8px; top: 8px;
+      font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 4px; border: 1px solid transparent;
+      backdrop-filter: blur(6px); pointer-events: none;
+    }
+    .thumb-tag {
+      position: absolute; left: 8px; bottom: 8px;
+      font-size: 9px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+      padding: 2px 6px; border-radius: 4px; backdrop-filter: blur(6px);
+      border: 1px solid transparent; pointer-events: none;
+    }
+    .thumb-tag.wip    { background: rgba(251,146,60,.22); color: #fdba74; border-color: rgba(251,146,60,.4); }
+    .thumb-tag.custom { background: rgba(52,211,153,.18); color: #6ee7b7; border-color: rgba(52,211,153,.35); }
+
+    /* Entité orpheline (dossier sans manifest.json) — signalée, jamais masquée. */
+    .card.broken { border-color: rgba(248,113,113,.45); }
+    .card.broken:hover { border-color: rgba(248,113,113,.7); }
+    .card-warn {
+      display: flex; gap: 6px; align-items: flex-start;
+      font-size: 11px; line-height: 1.45; color: #fca5a5;
+      background: rgba(248,113,113,.09); border: 1px solid rgba(248,113,113,.25);
+      border-radius: 5px; padding: 6px 8px;
+    }
+    .card-warn svg { flex-shrink: 0; margin-top: 1px; }
+
+    .density-group { display: flex; gap: 2px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+    .density-group button {
+      background: none; border: 0; color: var(--text-dim); cursor: pointer;
+      font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
+      transition: background .15s, color .15s;
+    }
+    .density-group button:hover  { color: var(--text-muted); }
+    .density-group button.active { background: var(--accent-glow); color: var(--accent); }
     .thumb-placeholder {
       width: 100%; height: 100%;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -183,8 +246,13 @@
 
     .card-body { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; gap: 9px; }
 
-    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-    .card-name { font-size: 15px; font-weight: 600; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    /* min-width:0 obligatoire : sans lui, un flex item ne descend jamais sous sa largeur de
+       contenu — le nom poussait le badge de type hors de la carte au lieu de s'ellipser. */
+    .card-name {
+      font-size: 15px; font-weight: 600;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
 
     .badge {
       display: inline-block; padding: 2px 7px; border-radius: 4px;
@@ -429,6 +497,7 @@
     <span class="pill active" data-fam="ALL">Tous</span>
     <span class="pill" data-fam="assets">Assets</span>
     <span class="pill" data-fam="sets">Sets</span>
+    <span class="pill" data-fam="shots">Shots</span>
   </div>
 
   <div class="toolbar-right">
@@ -436,6 +505,11 @@
     <span class="asset-count" id="js-count"></span>
     <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ Créer asset</button>
     <button class="btn btn-secondary" type="button" id="js-btn-sync-web" style="font-size:12px;padding:5px 12px" onclick="openWebSyncModal()">Sync Web</button>
+    <div class="density-group" id="js-density" title="Taille des vignettes">
+      <button type="button" data-d="s">S</button>
+      <button type="button" data-d="m">M</button>
+      <button type="button" data-d="l">L</button>
+    </div>
     <select class="sort-select" id="js-sort">
       <option value="name-asc">Nom A → Z</option>
       <option value="name-desc">Nom Z → A</option>
@@ -622,6 +696,13 @@ const S = {
   filterType:   'ALL',
   filterFamily: 'ALL',
   sort:         'name-asc',
+  density:      'm',
+  // Jeton de cache-bust des vignettes. Une vignette est MUTABLE à URL constante (republier
+  // un step réécrit thumb.png au même chemin) : sans ce jeton, un rafraîchissement manuel
+  // après publish peut resservir l'image en cache. Bougé UNIQUEMENT sur refresh explicite —
+  // le bouger à chaque poll re-téléchargerait toutes les vignettes en boucle.
+  thumbToken:   Date.now(),
+  _thumbSig:    null,
 };
 let _pollTimer  = null;
 let _toastTimer = null;
@@ -717,7 +798,16 @@ async function loadAssets() {
   try {
     const { ok, data } = await api('/api/assets');
     if (ok) {
-      S.assets = data.assets || [];
+      const next = data.assets || [];
+      // Cache-bust ciblé : le jeton ne bouge que si la SIGNATURE des vignettes a changé
+      // (chemin de thumb + dernières versions). Un publish réécrit thumb.png à URL
+      // constante — sans ce bump, le navigateur resservirait l'ancienne image ; en le
+      // bumpant à chaque poll, on re-téléchargerait toutes les vignettes en boucle.
+      const sig = a => `${a.name}|${a.thumb || ''}|${Object.entries(a.last_versions || {})
+        .map(([s, v]) => s + v.version).sort().join(',')}`;
+      const nextSig = next.map(sig).join(';');
+      if (nextSig !== S._thumbSig) { S._thumbSig = nextSig; S.thumbToken = Date.now(); }
+      S.assets = next;
       rebuildTypeFilter();
     }
   } catch {
@@ -775,14 +865,6 @@ function render() {
 
   GRID.innerHTML = visible.map(cardHTML).join('');
 
-  GRID.addEventListener('error', e => {
-    if (e.target.tagName === 'IMG') {
-      e.target.style.display = 'none';
-      const ph = e.target.nextElementSibling;
-      if (ph) ph.style.display = 'flex';
-    }
-  }, true);
-
   // Deux verbes, jamais de chemin construit ici (cf. INC-3) : le serveur résout
   // {entity, step?} ('Ouvrir la scène') ou {entity, step, version} ('Importer').
   GRID.querySelectorAll('[data-open-entity]').forEach(btn =>
@@ -801,21 +883,38 @@ function render() {
 }
 
 // ── Card HTML ────────────────────────────────────────
-function cardHTML(asset) {
-  const { name, type, last_versions = {}, thumb } = asset;
-  const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
-  const color = TYPE_COLORS[type] || '#7070a0';
+function thumbURL(path) {
+  return `${BASE}${path}${path.includes('?') ? '&' : '?'}t=${S.thumbToken}`;
+}
 
-  const thumbSection = thumb
-    ? `<img src="${BASE}${esc(thumb)}" alt="${esc(name)}" loading="lazy">
+const THUMB_TAGS = {
+  wip:    ['wip',    'WIP',     'Vignette du dernier WIP — cette entité n\'a pas encore de publish'],
+  custom: ['custom', 'Preview', 'Vignette définie manuellement (preview.png)'],
+};
+
+function cardHTML(asset) {
+  const { name, type, last_versions = {}, thumb, thumb_source, broken } = asset;
+  const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
+  const color = TYPE_COLORS[type] || '#9c9cc8';  // aligné sur --text-muted (fix contraste 2026-08-03)
+
+  const tag = THUMB_TAGS[thumb_source];
+  const tagHTML = (thumb && tag)
+    ? `<span class="thumb-tag ${tag[0]}" title="${esc(tag[2])}">${esc(tag[1])}</span>`
+    : '';
+  const typeHTML = type
+    ? `<span class="thumb-type" style="background:${color}26;color:${color};border-color:${color}55">${esc(type)}</span>`
+    : '';
+
+  const thumbSection = (thumb
+    ? `<img src="${esc(thumbURL(thumb))}" alt="${esc(name)}" loading="lazy">
        <div class="thumb-placeholder" style="display:none">${placeholderInner(type)}</div>`
-    : `<div class="thumb-placeholder">${placeholderInner(type)}</div>`;
+    : `<div class="thumb-placeholder">${placeholderInner(type)}</div>`) + tagHTML + typeHTML;
 
   const stepsSection = steps.length
     ? steps.map(([step, v]) => {
         const ver = v.version ? `v${String(v.version).padStart(3, '0')}` : '—';
         const rowThumb = v.thumb
-          ? `<img class="step-thumb" src="${BASE}${esc(v.thumb)}" alt="" loading="lazy">`
+          ? `<img class="step-thumb" src="${esc(thumbURL(v.thumb))}" alt="" loading="lazy">`
           : `<span class="step-thumb step-thumb-empty">${iconBox(11)}</span>`;
         return `<div class="step-row" data-import-entity="${esc(name)}" data-import-step="${esc(step)}" data-import-version="${v.version ?? ''}" title="Importer ${esc(step)} ${ver} (nouvelle session)">
                   ${rowThumb}
@@ -831,19 +930,21 @@ function cardHTML(asset) {
     ? steps.reduce((best, cur) => (cur[1].version || 0) > (best[1].version || 0) ? cur : best)[0]
     : null;
 
+  const warnHTML = broken
+    ? `<div class="card-warn">${iconWarn(12)}<span>${esc(broken)}</span></div>`
+    : '';
+
   return `
-    <div class="card">
+    <div class="card${broken ? ' broken' : ''}">
       <div class="card-thumb">${thumbSection}</div>
       <div class="card-body">
         <div class="card-head">
           <span class="card-name">${esc(name)}</span>
-          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-            ${type ? `<span class="badge" style="background:${color}22;color:${color};border-color:${color}44">${esc(type)}</span>` : ''}
-            <button class="icon-btn" type="button" data-scenefiles-entity="${esc(name)}" title="Scenefiles (historique WIP)">
-              ${iconHistory(13)}
-            </button>
-          </span>
+          <button class="icon-btn" type="button" data-scenefiles-entity="${esc(name)}" title="Scenefiles (historique WIP)" style="flex-shrink:0">
+            ${iconHistory(13)}
+          </button>
         </div>
+        ${warnHTML}
         <div class="steps-list">${stepsSection}</div>
         <div class="card-footer">
           ${bestStep
@@ -870,6 +971,12 @@ function iconBox(s) {
     <line x1="12" y1="22.08" x2="12" y2="12"/>
   </svg>`;
 }
+function iconWarn(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>`;
+}
 function iconHistory(s) {
   return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
     <path d="M3 12a9 9 0 1 0 3-6.7"/>
@@ -886,8 +993,19 @@ function esc(s) {
 }
 
 // ── Type filter rebuild ──────────────────────────────
+// Scopé à la famille active : les types d'asset/set/shot ne se mélangent plus dans la
+// même rangée de pills. Rappelé au chargement ET au changement de famille (cf. binding
+// js-pills-family plus bas) — jamais seulement au boot.
 function rebuildTypeFilter() {
-  const types = [...new Set(S.assets.map(a => a.type).filter(Boolean))].sort();
+  const scoped = S.filterFamily === 'ALL'
+    ? S.assets
+    : S.assets.filter(a => a.family === S.filterFamily);
+  const types = [...new Set(scoped.map(a => a.type).filter(Boolean))].sort();
+
+  // Le type actif peut ne plus exister dans le nouveau scope (ex: famille changée) —
+  // retombe sur "Tous" plutôt que de garder un filtre invisible/actif dans le vide.
+  if (S.filterType !== 'ALL' && !types.includes(S.filterType)) S.filterType = 'ALL';
+
   const ctnr  = el('js-pills-type');
 
   ctnr.innerHTML = `<span class="pill ${S.filterType === 'ALL' ? 'active' : ''}" data-type="ALL">Tous</span>`;
@@ -1016,10 +1134,34 @@ MODAL_INPUT.addEventListener('keydown', e => {
 
 el('js-sort').addEventListener('change', e => { S.sort = e.target.value; render(); });
 
+// Repli placeholder quand une vignette ne charge pas (404, fichier corrompu). Attaché UNE
+// SEULE FOIS ici, et non dans render() : render() est rappelé à chaque poll, donc l'ancien
+// addEventListener y empilait un écouteur par cycle (fuite silencieuse qui grossit tant que
+// l'onglet reste ouvert). En capture, car 'error' sur <img> ne bulle pas.
+GRID.addEventListener('error', e => {
+  if (e.target.tagName === 'IMG') {
+    e.target.style.display = 'none';
+    const ph = e.target.nextElementSibling;
+    if (ph && ph.classList.contains('thumb-placeholder')) ph.style.display = 'flex';
+  }
+}, true);
+
+function setDensity(d) {
+  S.density = d;
+  document.body.dataset.density = d;
+  el('js-density').querySelectorAll('button')
+    .forEach(b => b.classList.toggle('active', b.dataset.d === d));
+}
+el('js-density').querySelectorAll('button').forEach(b =>
+  b.addEventListener('click', () => setDensity(b.dataset.d))
+);
+setDensity(S.density);
+
 el('js-pills-family').querySelectorAll('.pill').forEach(p =>
   p.addEventListener('click', () => {
     S.filterFamily = p.dataset.fam;
     el('js-pills-family').querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x === p));
+    rebuildTypeFilter();  // les pills Type dépendent de la famille active
     render();
   })
 );

@@ -47,8 +47,11 @@ def _step_folder(scene, sub):
     )
 
 
-def _abbrev(label):
-    return label[:3]
+# Les steps s'ecrivent EN TOUTES LETTRES. L'ancien _abbrev(label) = label[:3] donnait
+# "Mod"/"Sur"/"Lay"/"Loo"/"Lig" : 30px gagnes en largeur contre un decodage a chaque lecture,
+# et deux steps pouvaient collider sur leurs 3 premieres lettres. Le N-panel est etroit mais
+# redimensionnable - Blender tronque proprement un libelle trop long, ce que ne fait pas un
+# cerveau avec "Loo".
 
 
 # ---------------------------------------------------------------------------
@@ -122,10 +125,12 @@ class YLOS_PT_Context(bpy.types.Panel):
         col.separator(factor=0.3)
         col.label(text="Step:", icon="SEQUENCE")
         steps = vocab.STEP_ITEMS.get(scene.ylos_context_type, vocab.STEP_ITEMS["ASSET"])
-        step_row = col.row(align=True)
-        step_row.scale_y = 1.1
+        # column(align=True) et non row : en colonne chaque step garde son nom entier quelle
+        # que soit la largeur du N-panel, la ou une rangee de 5 boutons les ecrase tous.
+        step_col = col.column(align=True)
+        step_col.scale_y = 1.05
         for value, label, _desc in steps:
-            b = step_row.operator("ylos.switch_step_confirm", text=_abbrev(label),
+            b = step_col.operator("ylos.switch_step_confirm", text=label,
                                   depress=(scene.ylos_current_step == value))
             b.new_step = value
 

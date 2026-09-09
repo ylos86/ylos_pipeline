@@ -1,0 +1,21 @@
+// Tasks Zed pour Ylos Pipeline — committées au repo (contrairement au keymap.json qui
+// reste global/user, cf. discussion). Lancement : Cmd-Shift-R (task::Spawn) puis taper
+// le début du label, Entrée. Rerun du dernier : Cmd-Alt-R.
+[
+  {
+    "label": "Ylos UI: launch",
+    "command": "python3 ylos_ui.py --port 8765 && open http://127.0.0.1:8765/",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  },
+  {
+    "label": "Tests: run all (stdlib)",
+    "command": "python3 -m unittest discover -s tests -v",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always"
+  }
+]

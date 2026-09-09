@@ -5,13 +5,27 @@
 # publish_entity_step (op_publish.py) - logique unique, principe 5. Aucune duplication de la
 # logique de publish ici : cet operateur n'est qu'un orchestrateur de la recette.
 
+import os
+import sys
 import bpy
 from bpy.props import EnumProperty
 
 from .op_publish import publish_entity_step
+from ..core.project import is_step_valid_for_context
+from ..core import vocab
 # ui.state_manager est importe PARESSEUSEMENT dans draw() (pas au niveau module) : sinon
 # cycle - ui.state_manager charge le package operators (op_update_imports), qui charge ce
 # module, avant que draw_state_manager n'existe. Import differe = cycle casse.
+
+REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
+
+
+def _cp():
+    # Meme pattern que op_publish.py/op_new_asset.py - create_project vit a la racine du repo.
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+    import create_project
+    return create_project
 
 
 class YLOS_UL_ExportStates(bpy.types.UIList):
@@ -39,8 +53,31 @@ class YLOS_OT_StateAddExport(bpy.types.Operator):
         scene = context.scene
         state = scene.ylos_export_states.add()
         state.entity = scene.ylos_current_asset or ""
-        # scene.ylos_current_step et state.step partagent STEP_ITEMS_ALL -> assignation toujours valide.
-        state.step = scene.ylos_current_step
+        # scene.ylos_current_step et state.step partagent STEP_ITEMS_ALL -> assignation TOUJOURS
+        # valide au niveau Blender (meme domaine d'enum), mais pas forcement valide pour la
+        # FAMILLE reelle de l'entite (ylos_current_step ne se recale jamais tout seul au
+        # changement de contexte - cf. fix op_new_asset.py). Sans ca : un step perime (ex
+        # 'modeling' recopie d'un Asset precedent) atterrit dans le state, Publish le rejette
+        # plus tard avec un message qui ne dit rien de l'origine du probleme. On revalide ici
+        # contre resolve_entity() - meme source disque autoritative qu'au publish
+        # (op_publish.py::publish_entity_step) - et on retombe sur le premier step valide de
+        # la famille en cas de mismatch, jamais un echec silencieux plus tard.
+        step = scene.ylos_current_step
+        if state.entity and scene.ylos_project_path:
+            resolved = _cp().resolve_entity(scene.ylos_project_path, state.entity)
+            if resolved is not None and not is_step_valid_for_context(step, resolved["family"]):
+                fallback = vocab.values(
+                    vocab.STEP_ITEMS.get(resolved["family"].upper(), vocab.STEP_ITEMS["ASSET"])
+                )
+                if fallback:
+                    old_step = step
+                    step = fallback[0]
+                    self.report(
+                        {"WARNING"},
+                        f"Step '{old_step}' invalid for {resolved['family']} '{state.entity}' "
+                        f"- defaulted to '{step}'.",
+                    )
+        state.step = step
         state.enabled = True
         scene.ylos_export_states_index = len(scene.ylos_export_states) - 1
         self.report({"INFO"}, f"Added export state: {state.entity or '(no entity)'} / {state.step}")

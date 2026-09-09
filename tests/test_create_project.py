@@ -740,5 +740,73 @@ class TestResolveEntity(TempProjectTestCase):
         self.assertIsNone(cp.resolve_entity(self.project, "NOPE_Absent_Default"))
 
 
+class TestResolveEntityThumbnail(TempProjectTestCase):
+    """resolve_entity_thumbnail : POINT UNIQUE de la vignette d'entite (web UI + panel Blender
+    + futur n8n/Houdini, principe 5). Cascade du plus intentionnel au plus automatique :
+    custom -> publish -> legacy -> wip -> none. Ne leve JAMAIS pour un cas metier ; la 'source'
+    fait partie du contrat (un consommateur doit pouvoir signaler un WIP plutot que de le faire
+    passer pour un publie)."""
+
+    NAME = "PROP_Tente_Default"
+
+    def setUp(self):
+        super().setUp()
+        cp.create_asset(self.project, self.NAME, asset_type="PROP")
+        r = cp.resolve_entity(self.project, self.NAME)
+        self.edir = Path(r["dir"])
+        # Un step qui a bien un sous-dossier publish/ : le resolveur scanne exactement ceux-la.
+        self.step = sorted(d.name for d in self.edir.iterdir()
+                           if (d / "publish").is_dir())[0]
+
+    def test_publish_thumbnail(self):
+        # Un publish 'complete' du contrat deux-phases porte deja son thumb dans le manifeste.
+        self._publish_step(self.NAME, self.step)
+        r = cp.resolve_entity_thumbnail(self.project, self.NAME)
+        self.assertEqual(r["source"], "publish")
+        self.assertTrue(r["rel"].endswith("thumb.png"))
+        self.assertTrue(Path(r["path"]).is_file())
+
+    def test_custom_preview_beats_publish(self):
+        # Un geste humain explicite (preview.png) prime toujours sur l'heuristique.
+        self._publish_step(self.NAME, self.step)
+        (self.edir / cp.ENTITY_PREVIEW_NAME).write_bytes(b"png")
+        r = cp.resolve_entity_thumbnail(self.project, self.NAME)
+        self.assertEqual(r["source"], "custom")
+        self.assertEqual(r["rel"], cp.ENTITY_PREVIEW_NAME)
+        self.assertEqual(Path(r["path"]), self.edir / cp.ENTITY_PREVIEW_NAME)
+
+    def test_legacy_flat_publish_scan(self):
+        # Projet pre-deux-phases : un .png a plat sous <step>/publish/, aucune entree manifeste.
+        pub = self.edir / self.step / "publish"
+        pub.mkdir(parents=True, exist_ok=True)
+        (pub / "old_preview.png").write_bytes(b"png")
+        r = cp.resolve_entity_thumbnail(self.project, self.NAME)
+        self.assertEqual(r["source"], "legacy")
+        self.assertEqual(r["rel"], f"{self.step}/publish/old_preview.png")
+
+    def test_wip_thumbnail_when_nothing_published(self):
+        # Le trou UX principal : entre la creation et le 1er publish, seul un thumb de WIP existe.
+        wip = self.edir / self.step / "wip"
+        wip.mkdir(parents=True, exist_ok=True)
+        fname = f"{self.NAME}_{self.step}_v001_thumb.png"
+        (wip / fname).write_bytes(b"png")
+        r = cp.resolve_entity_thumbnail(self.project, self.NAME)
+        self.assertEqual(r["source"], "wip")
+        self.assertEqual(r["rel"], f"{self.step}/wip/{fname}")
+
+    def test_wip_picks_latest_version(self):
+        wip = self.edir / self.step / "wip"
+        wip.mkdir(parents=True, exist_ok=True)
+        for v in (1, 2, 3):
+            (wip / f"{self.NAME}_{self.step}_v{v:03d}_thumb.png").write_bytes(b"png")
+        r = cp.resolve_entity_thumbnail(self.project, self.NAME)
+        self.assertEqual(r["source"], "wip")
+        self.assertTrue(r["rel"].endswith("_v003_thumb.png"))
+
+    def test_missing_entity_is_none_not_raise(self):
+        r = cp.resolve_entity_thumbnail(self.project, "NOPE_Absent_Default")
+        self.assertEqual(r, {"rel": None, "path": None, "source": "none"})
+
+
 if __name__ == "__main__":
     unittest.main()

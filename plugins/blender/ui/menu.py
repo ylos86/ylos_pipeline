@@ -30,6 +30,33 @@ class YLOS_OT_OpenProjectBrowser(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _purge_addon_modules(package: str) -> int:
+    """Purge le package de l'addon ET tous ses sous-modules de sys.modules.
+
+    BUG REEL, cause racine d'une classe entiere de faux diagnostics : addon_disable +
+    addon_enable NE RECHARGE PAS le code de l'addon. Blender ne fait que rappeler
+    unregister()/register() sur le module deja en memoire ; `from . import core` etc. ont
+    deja tourne au premier import, donc les sous-modules restent ceux de sys.modules —
+    y compris un .pyc plus ancien que le .py. Symptome observe en conditions reelles : un
+    fix ecrit sur disque (le sun light de thumbnails.py), verifiable par inspect.getsource()
+    (qui lit le FICHIER, pas le bytecode charge), et pourtant jamais execute — donc jamais
+    efficace, session apres session, sans le moindre message d'erreur.
+
+    Verification cote code, si un doute revient : comparer le bytecode reellement charge au
+    fichier, jamais la source.
+        f.__code__.co_consts  ->  ce qui tourne
+        inspect.getsource(f)  ->  ce qu'il y a sur le disque (peut mentir)
+
+    Appele APRES addon_disable (unregister() est termine, plus aucune classe enregistree ne
+    reference ces modules) et AVANT addon_enable (qui re-importera tout a neuf depuis le
+    disque). Retourne le nombre de modules purges."""
+    doomed = [m for m in sys.modules
+              if m == package or m.startswith(package + ".")]
+    for name in doomed:
+        del sys.modules[name]
+    return len(doomed)
+
+
 class YLOS_OT_ReloadPipeline(bpy.types.Operator):
     bl_idname = "ylos.reload_pipeline"
     bl_label = "Reload Pipeline"
@@ -37,14 +64,32 @@ class YLOS_OT_ReloadPipeline(bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
+        # Garde-fou (crash Blender reel observe, cf. CLAUDE.md) : addon_disable desenregistre
+        # states.YLOS_PG_ExportState pendant qu'une CollectionProperty non vide de ce type peut
+        # encore etre affichee par un UIList (State Manager - panel N-panel ou popup) - assez
+        # pour faire planter Blender (RNA invalidee sous une instance/un widget encore vivant).
+        # On refuse le reload tant qu'un export state existe QUELQUE PART (toutes les scenes du
+        # .blend, pas seulement la scene active) plutot que de risquer un crash silencieux : un
+        # redemarrage complet de Blender charge le meme code sans ce risque, lui.
+        dirty = [s.name for s in bpy.data.scenes if len(s.ylos_export_states) > 0]
+        if dirty:
+            self.report(
+                {"ERROR"},
+                "Reload refuse : export state(s) present dans " + ", ".join(dirty) + " - "
+                "vide le State Manager (bouton '-') avant de reload, ou redemarre Blender "
+                "pour charger le code modifie sans risque de crash.",
+            )
+            return {"CANCELLED"}
+
         module_name = __package__.split(".")[0]
         try:
             bpy.ops.preferences.addon_disable(module=module_name)
+            purged = _purge_addon_modules(module_name)
             bpy.ops.preferences.addon_enable(module=module_name)
         except Exception as e:
             self.report({"ERROR"}, f"Reload failed: {e}")
             return {"CANCELLED"}
-        self.report({"INFO"}, "Ylos Pipeline reloaded.")
+        self.report({"INFO"}, f"Ylos Pipeline reloaded ({purged} modules rechargés).")
         return {"FINISHED"}
 
 
@@ -96,6 +141,8 @@ class YLOS_MT_TopbarMenu(bpy.types.Menu):
         layout.operator("ylos.open_io", text="Import / Export…", icon="IMPORT")
         layout.operator("ylos.publish", text="Quick Publish (current step)…", icon="EXPORT")
         layout.operator("ylos.run_scene_check", text="Check Scene", icon="VIEWZOOM")
+        layout.operator("ylos.capture_preview", text="Capture Preview (viewport)",
+                        icon="RESTRICT_RENDER_OFF")
         layout.separator()
         layout.operator("ylos.reload_pipeline", text="Reload Pipeline", icon="FILE_REFRESH")
         layout.operator("ylos.about", text="About", icon="INFO")
