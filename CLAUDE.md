@@ -135,8 +135,11 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
 - **I/O & concurrence** : écritures atomiques (`_atomic_write_text/json`, tmp + `os.replace`)
   pour tout manifeste/root. `acquire_lock()` (fcntl.flock) = **seul** point de verrou — advisory,
   non réentrant (jamais imbriqué), POSIX-only, non fiable sur NFS/SMB (OK car stockage local).
-- **Langue** : communication **français** ; code, identifiants, noms de fichiers **anglais**.
-  `pathlib` partout, jamais de concaténation manuelle de chemins.
+- **Langue** : communication **français** ; **tout le code en anglais** — identifiants,
+  noms de fichiers, **commentaires et docstrings compris** (règle durcie 2026-09-09 :
+  l'ancienne formule autorisait des commentaires FR ; désormais aucun FR dans le code).
+  La doc (`docs/`, ce fichier) reste en français. `pathlib` partout, jamais de concaténation
+  manuelle de chemins.
 
 ## Gotchas DCC (durables — vérifiés en live)
 **Houdini — LOP HDA** (cf. `tools/houdini/build_publish_hda.py`) :
