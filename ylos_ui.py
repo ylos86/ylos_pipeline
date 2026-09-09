@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
 """
-ylos_ui.py — Serveur HTTP local stdlib-only pour l'UI Ylos Prod.
+ylos_ui.py — Local stdlib-only HTTP server for the Ylos Prod UI.
 
-Gère le projet actif via ~/.ylos/active_project (chemin absolu, une ligne).
+Manages the active project via ~/.ylos/active_project (absolute path, one line).
 
-Politique d'origine (anti drive-by localhost) : toute requête portant un header Origin
-non listé dans YlosHandler.allowed_origins (127.0.0.1/localhost sur le port actif) est
-rejetée en 403 AVANT tout traitement — CORS seul ne suffit pas, une "simple request"
-(GET, POST text/plain) déclenche ses effets de bord serveur même si le navigateur bloque
-la lecture de la réponse. 'Origin: null' (file://, mais aussi iframe sandboxée d'un site
-hostile) est rejeté : app.html se consomme via http://127.0.0.1:<port>/, plus en file://.
-Les requêtes SANS Origin (curl, navigation directe) passent — ce ne sont pas des
-requêtes cross-site émises par un navigateur.
+Origin policy (anti drive-by localhost): any request carrying an Origin header
+not listed in YlosHandler.allowed_origins (127.0.0.1/localhost on the active port) is
+rejected with 403 BEFORE any processing — CORS alone is not enough, a "simple request"
+(GET, POST text/plain) triggers its server side effects even if the browser blocks
+reading the response. 'Origin: null' (file://, but also a sandboxed iframe of a
+hostile site) is rejected: app.html is served via http://127.0.0.1:<port>/, no longer via file://.
+Requests WITHOUT an Origin (curl, direct navigation) pass — they are not
+cross-site requests emitted by a browser.
 
 Usage:
-    python3 ylos_ui.py [--project /chemin] [--port 8765]
+    python3 ylos_ui.py [--project /path] [--port 8765]
 
 Endpoints:
-    GET  /api/project          retourne project.json du projet actif
-    GET  /api/config           types/steps par famille (source unique : create_project.py,
-                               steps surchargés par le pipeline du projet actif)
-    GET  /api/assets           liste assets/* sets/* shots/* (manifest + dernière version + thumb)
-    GET  /api/asset/<name>     détail + toutes les versions par step + scenefiles (WIP,
-                               commentaire/user/date du sidecar '<wip>.blend.json')
-    POST /api/open-blender     {entity, step?} ouvre la scène (WIP-first) OU
-                               {entity, step, version} importe un publish précis —
-                               résolu côté serveur (create_project), jamais de chemin
-                               envoyé par le client (non-bloquant)
-    POST /api/set-project      {path} définit le projet actif
-    POST /api/set-web-target   {target_dir} persiste project.json["web"]["target_dir"]
-    GET  /api/web-pins         pins courants + publishes GLB disponibles par asset
-    POST /api/pin-asset        {name, step, version} pinne un GLB publié (validé)
-    POST /api/unpin-asset      {name} retire le pin (idempotent)
-    POST /api/sync-web         sync_web_assets() vers web.target_dir (assets pinnés)
-    POST /api/set-frame-range  {entity, start, end, fps?} plage d'images d'un shot (schéma 2.1)
-    GET  /thumb/<asset>/<rest> fichier statique depuis <step>/publish/ (LOP ou deux-phases)
+    GET  /api/project          returns project.json of the active project
+    GET  /api/config           types/steps per family (single source: create_project.py,
+                               steps overridden by the active project's pipeline)
+    GET  /api/assets           lists assets/* sets/* shots/* (manifest + latest version + thumb)
+    GET  /api/asset/<name>     detail + all versions per step + scenefiles (WIP,
+                               comment/user/date from the sidecar '<wip>.blend.json')
+    POST /api/open-blender     {entity, step?} opens the scene (WIP-first) OR
+                               {entity, step, version} imports a specific publish —
+                               resolved server-side (create_project), never a path
+                               sent by the client (non-blocking)
+    POST /api/set-project      {path} sets the active project
+    POST /api/set-web-target   {target_dir} persists project.json["web"]["target_dir"]
+    GET  /api/web-pins         current pins + available GLB publishes per asset
+    POST /api/pin-asset        {name, step, version} pins a published GLB (validated)
+    POST /api/unpin-asset      {name} removes the pin (idempotent)
+    POST /api/sync-web         sync_web_assets() to web.target_dir (pinned assets)
+    POST /api/set-frame-range  {entity, start, end, fps?} frame range of a shot (schema 2.1)
+    GET  /thumb/<asset>/<rest> static file from <step>/publish/ (LOP or two-phase)
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-# create_project importé depuis le même dossier — logique unique, jamais dupliquée.
+# create_project imported from the same folder — single logic, never duplicated.
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -64,30 +64,30 @@ YLOS_DIR = Path.home() / ".ylos"
 ACTIVE_FILE = YLOS_DIR / "active_project"
 RECENT_FILE = YLOS_DIR / "recent_projects"
 DEFAULT_PORT = 8765
-# Binaire Blender : surchargeable par $YLOS_BLENDER (autres OS / installations non standard).
+# Blender binary: overridable via $YLOS_BLENDER (other OSes / non-standard installs).
 BLENDER_APP = Path(os.environ.get("YLOS_BLENDER")
                    or "/Applications/Blender.app/Contents/MacOS/Blender")
 THUMB_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
-# Launcher versionne : TOUT lancement DCC passe par lui (cf. CLAUDE.md, fin des --python-expr).
+# Versioned launcher: EVERY DCC launch goes through it (see CLAUDE.md, end of --python-expr).
 LAUNCHER = _HERE / "tools" / "blender" / "launch_context.py"
-# Sortie du process Blender lance (append) - fini le DEVNULL silencieux (lecon CC#1b/#1d).
+# Output of the launched Blender process (append) - no more silent DEVNULL (lesson CC#1b/#1d).
 SERVER_LOG = YLOS_DIR / "launch-server.log"
 
 # -------------------------------------------------------------------------------------
-# Utilitaires
+# Utilities
 # -------------------------------------------------------------------------------------
 
 def _allowed_origins(port: int) -> frozenset[str]:
-    """Origines de confiance = le serveur lui-même. app.html::BASE pointe sur 127.0.0.1 ;
-    'localhost' couvre le cas où la page est ouverte via http://localhost:<port>/ (origine
-    différente de 127.0.0.1 pour le navigateur, même serveur en pratique)."""
+    """Trusted origins = the server itself. app.html::BASE points to 127.0.0.1;
+    'localhost' covers the case where the page is opened via http://localhost:<port>/ (a
+    different origin from 127.0.0.1 for the browser, the same server in practice)."""
     return frozenset({f"http://127.0.0.1:{port}", f"http://localhost:{port}"})
 
 
 def _cors(handler: BaseHTTPRequestHandler) -> None:
-    """Headers CORS uniquement pour une origine de confiance, écho de l'origine exacte
-    (jamais '*'). Sans Origin ou origine inconnue : aucun header CORS — le refus effectif
-    (403) est fait en amont par _origin_ok(), ceci n'est que la moitié 'lecture navigateur'."""
+    """CORS headers only for a trusted origin, echoing the exact origin
+    (never '*'). Without an Origin or with an unknown origin: no CORS header — the actual
+    refusal (403) is done upstream by _origin_ok(), this is only the 'browser read' half."""
     origin = handler.headers.get("Origin")
     if origin and origin in handler.allowed_origins:
         handler.send_header("Access-Control-Allow-Origin", origin)
@@ -107,8 +107,8 @@ def _json(handler: BaseHTTPRequestHandler, code: int, data: object) -> None:
 
 
 def _read_active() -> Path | None:
-    # Lecteur unique du contrat ~/.ylos/active_project (partage avec le module Houdini).
-    # ACTIVE_FILE passe en parametre : les tests redirigent cette constante vers un tmpdir.
+    # Single reader of the ~/.ylos/active_project contract (shared with the Houdini module).
+    # ACTIVE_FILE passed as a parameter: tests redirect this constant to a tmpdir.
     return create_project.read_active_project(ACTIVE_FILE)
 
 
@@ -144,25 +144,25 @@ def _read_asset_manifest(asset_dir: Path) -> dict | None:
 
 
 def _find_thumb(project_dir: Path, asset_name: str) -> tuple[str | None, str]:
-    """Adaptateur MINCE vers create_project.resolve_entity_thumbnail (point unique, principe 5
-    — la cascade custom/publish/legacy/wip vit dans l'orchestrateur, partagée avec le panel
-    Blender ; la dupliquer ici garantirait la dérive). Retourne
-    ('<asset_name>/<rel>', source) pour construire l'URL /thumb/<asset>/<rest>, ou (None, 'none')."""
+    """THIN adapter to create_project.resolve_entity_thumbnail (single point, principle 5
+    — the custom/publish/legacy/wip cascade lives in the orchestrator, shared with the Blender
+    panel; duplicating it here would guarantee drift). Returns
+    ('<asset_name>/<rel>', source) to build the /thumb/<asset>/<rest> URL, or (None, 'none')."""
     info = create_project.resolve_entity_thumbnail(project_dir, asset_name)
     rel = info.get("rel")
     return (f"{asset_name}/{rel}" if rel else None), info.get("source", "none")
 
 
 def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict:
-    """Dernier publish 'complete' par step - donnees CANONIQUES uniquement (numero de
-    version, extension, URL de vignette), JAMAIS un chemin de fichier ou un chemin relatif :
-    le client ne reconstruit plus jamais 'project_root + rel' pour ouvrir/importer (cause
-    exacte du bug corrige, cf. INC-3 - le rel d'un publish deux-phases est relatif a
-    l'ENTITE, pas au projet ; la concatenation naive sautait le segment 'assets/<entite>').
-    Resolu via l'ORCHESTRATEUR (create_project.latest_publish_artifact) : deux-phases niche +
-    fichiers plats legacy fusionnes, entree 'complete' de version max. L'ouverture/import
-    passe par POST /api/open-blender {entity, step[, version]}, resolu cote serveur au moment
-    du clic (jamais a la construction de cette liste)."""
+    """Latest 'complete' publish per step - CANONICAL data only (version number,
+    extension, thumbnail URL), NEVER a file path or a relative path:
+    the client no longer reconstructs 'project_root + rel' to open/import (the exact
+    cause of the fixed bug, see INC-3 - a two-phase publish's rel is relative to
+    the ENTITY, not the project; naive concatenation skipped the 'assets/<entity>' segment).
+    Resolved via the ORCHESTRATOR (create_project.latest_publish_artifact): nested two-phase +
+    legacy flat files merged, max-version 'complete' entry. Opening/import
+    goes through POST /api/open-blender {entity, step[, version]}, resolved server-side at
+    click time (never when building this list)."""
     steps = set(manifest.get("step_publishes", {})) | set(manifest.get("publishes", {}))
     result: dict = {}
     for step in steps:
@@ -182,11 +182,11 @@ _WIP_VER_RE = re.compile(r"_v(\d{3})\.blend$")
 
 
 def _list_scenefiles(asset_dir: Path, steps: list) -> dict:
-    """{step: [{version, filename, comment, user, date, blender_version}]} — scan disque de
-    <asset_dir>/<step>/wip/*.blend (lecture seule, jamais de manifeste : un WIP n'est pas une
-    donnée versionnée du pipeline, cf. CLAUDE.md). Sidecar '<wip>.blend.json' (écrit par
-    ylos.save_wip, INC-4) fusionné quand présent — absent/illisible -> champs vides, jamais
-    d'exception (même tolérance que le reste du module)."""
+    """{step: [{version, filename, comment, user, date, blender_version}]} — disk scan of
+    <asset_dir>/<step>/wip/*.blend (read-only, never a manifest: a WIP is not a
+    versioned pipeline datum, see CLAUDE.md). Sidecar '<wip>.blend.json' (written by
+    ylos.save_wip, INC-4) merged when present — absent/unreadable -> empty fields, never
+    an exception (same tolerance as the rest of the module)."""
     result: dict = {}
     for step in steps:
         wip_dir = asset_dir / step / "wip"
@@ -230,14 +230,14 @@ def _list_assets(project_dir: Path) -> list[dict]:
                 continue
             manifest = _read_asset_manifest(asset_dir)
             if manifest is None:
-                # Entite ORPHELINE : un dossier existe sous assets/sets/shots mais sans
-                # manifest.json — donc jamais passee par create_asset() (nommage non valide,
-                # steps non declares, jamais publiable). Cas reel observe : un WIP sauve sur
-                # un nom d'entite tape a la main cree l'arborescence a la volee.
-                # Elle etait SILENCIEUSEMENT sautee ici : invisible cote web alors que le
-                # panel Blender, lui, la listait (il scanne le disque). Un dossier fantome
-                # que l'outil refuse d'afficher est pire qu'un dossier signale — on la
-                # remonte marquee, l'UI la rend actionnable.
+                # ORPHAN entity: a folder exists under assets/sets/shots but without a
+                # manifest.json — so it never went through create_asset() (invalid naming,
+                # undeclared steps, never publishable). Real case observed: a WIP saved under
+                # a hand-typed entity name creates the tree on the fly.
+                # It was SILENTLY skipped here: invisible on the web side while the
+                # Blender panel listed it (it scans the disk). A ghost folder
+                # the tool refuses to display is worse than a flagged one — we
+                # surface it flagged, the UI makes it actionable.
                 thumb, source = _find_thumb(project_dir, asset_dir.name)
                 result.append({
                     "name": asset_dir.name,
@@ -249,8 +249,8 @@ def _list_assets(project_dir: Path) -> list[dict]:
                     "last_versions": {},
                     "thumb": f"/thumb/{thumb}" if thumb else None,
                     "thumb_source": source,
-                    "broken": "manifest.json manquant — entite jamais creee par le pipeline "
-                              "(create_asset), non publiable en l'etat",
+                    "broken": "manifest.json missing — entity never created by the pipeline "
+                              "(create_asset), not publishable as-is",
                 })
                 continue
             thumb, source = _find_thumb(project_dir, asset_dir.name)
@@ -261,7 +261,7 @@ def _list_assets(project_dir: Path) -> list[dict]:
                 "type": manifest.get("type"),
                 "steps": manifest.get("steps", []),
                 "last_versions": _last_versions(project_dir, asset_dir.name, manifest),
-                "frame_range": manifest.get("frame_range"),  # shots seulement ; None pour asset/set
+                "frame_range": manifest.get("frame_range"),  # shots only; None for asset/set
                 "thumb": f"/thumb/{thumb}" if thumb else None,
                 "thumb_source": source,
                 "broken": None,
@@ -287,7 +287,7 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
             "steps": steps,
             "publishes": manifest.get("publishes", {}),
             "step_publishes": manifest.get("step_publishes", {}),
-            "frame_range": manifest.get("frame_range"),  # shots seulement (schéma 2.1) ; None sinon
+            "frame_range": manifest.get("frame_range"),  # shots only (schema 2.1); None otherwise
             "scenefiles": _list_scenefiles(asset_dir, steps),
             "created_utc": manifest.get("created_utc"),
             "modified_utc": manifest.get("modified_utc"),
@@ -296,9 +296,9 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
 
 
 def _glb_publishes(manifest: dict) -> dict:
-    """{step: [versions triées]} des publishes deux-phases 'complete' dont l'artefact est
-    un .glb — les seuls pinnables pour le web (cf. sync_web_assets, qui résout le GLB via
-    (step, version)). Un publish USD n'apparaît jamais ici."""
+    """{step: [sorted versions]} of 'complete' two-phase publishes whose artifact is
+    a .glb — the only ones pinnable for the web (see sync_web_assets, which resolves the GLB via
+    (step, version)). A USD publish never appears here."""
     out: dict = {}
     for step, entries in manifest.get("step_publishes", {}).items():
         versions = sorted(
@@ -325,23 +325,23 @@ def _is_user_volume(p: Path) -> bool:
 
 
 # -------------------------------------------------------------------------------------
-# Ouverture/import DCC — résolution serveur + construction d'argv (INC-3).
+# DCC open/import — server-side resolution + argv construction (INC-3).
 #
-# Le client n'envoie PLUS JAMAIS de chemin : deux verbes, résolus ici contre
-# l'orchestrateur, jamais par reconstruction 'project_root + rel' (c'est exactement la
-# cause du bug corrigé — un chemin de publish est relatif à l'ENTITÉ, pas au projet ; la
-# concaténation naïve sautait le segment 'assets/<entité>' et pouvait driver de casse du
-# root selon la source du chemin côté client).
-#   - 'Ouvrir la scène'  : {entity, step?}          -> resolve_open_target (WIP-first).
-#   - 'Importer'         : {entity, step, version}  -> version EXACTE (jamais 'latest'),
-#                           via list_publishes (abs_path déjà canonique).
+# The client NEVER sends a path anymore: two verbs, resolved here against
+# the orchestrator, never by reconstructing 'project_root + rel' (that is exactly the
+# cause of the fixed bug — a publish path is relative to the ENTITY, not the project; the
+# naive concatenation skipped the 'assets/<entity>' segment and could break the
+# root depending on the client-side path source).
+#   - 'Open the scene'   : {entity, step?}          -> resolve_open_target (WIP-first).
+#   - 'Import'           : {entity, step, version}  -> EXACT version (never 'latest'),
+#                           via list_publishes (abs_path already canonical).
 # -------------------------------------------------------------------------------------
 
 def _resolve_publish_entry(project_dir: Path, entity: str, step: str, version: int) -> dict | None:
-    """Entrée 'complete' EXACTE (numéro de version demandé, pas la dernière — Importer peut
-    cibler n'importe quelle version passée) pour (entity, step, version). None si introuvable.
-    'abs_path' vient tel quel de create_project.list_publishes (déjà résolu par
-    l'orchestrateur) : aucune concaténation ici."""
+    """EXACT 'complete' entry (the requested version number, not the latest — Import can
+    target any past version) for (entity, step, version). None if not found.
+    'abs_path' comes as-is from create_project.list_publishes (already resolved by
+    the orchestrator): no concatenation here."""
     if not step:
         return None
     for entry in create_project.list_publishes(project_dir, entity, step):
@@ -352,9 +352,9 @@ def _resolve_publish_entry(project_dir: Path, entity: str, step: str, version: i
 
 def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: str, kind: str,
                        entity: str | None = None, step: str | None = None) -> list[str]:
-    """Argv du subprocess Blender — fonction PURE : 'path' est déjà un chemin ABSOLU
-    canonique fourni par l'appelant (resolve_open_target / list_publishes), aucune
-    résolution ni concaténation de chemin ici."""
+    """Argv of the Blender subprocess — PURE function: 'path' is already a canonical
+    ABSOLUTE path provided by the caller (resolve_open_target / list_publishes), no path
+    resolution or concatenation here."""
     argv = [str(blender_app), "--python", str(launcher), "--", "--project", str(project)]
     if entity:
         argv += ["--entity", str(entity)]
@@ -370,22 +370,22 @@ def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: s
 
 class YlosHandler(BaseHTTPRequestHandler):
 
-    # Recalculé dans main() depuis le port réel (--port). Défaut posé ici pour que le
-    # handler reste utilisable importé tel quel (tests, port par défaut).
+    # Recomputed in main() from the real port (--port). Default set here so the
+    # handler stays usable imported as-is (tests, default port).
     allowed_origins = _allowed_origins(DEFAULT_PORT)
 
     def log_message(self, fmt, *args):
         print(f"[ylos] {self.command} {self.path} → {args[1] if len(args) > 1 else ''}")
 
     def _origin_ok(self) -> bool:
-        """Garde anti drive-by : à appeler AVANT tout traitement (GET/POST/OPTIONS).
-        Origin absent = pas une requête cross-site navigateur -> ok. Origin présent :
-        seulement s'il est de confiance ('null' inclus dans le rejet, cf. docstring module)."""
+        """Anti drive-by guard: to call BEFORE any processing (GET/POST/OPTIONS).
+        Origin absent = not a cross-site browser request -> ok. Origin present:
+        only if it is trusted ('null' included in the rejection, see module docstring)."""
         origin = self.headers.get("Origin")
         return origin is None or origin in self.allowed_origins
 
     def _reject_origin(self) -> None:
-        _json(self, 403, {"error": "Origine non autorisée"})
+        _json(self, 403, {"error": "Origin not allowed"})
 
     def do_OPTIONS(self):
         if not self._origin_ok():
@@ -411,10 +411,10 @@ class YlosHandler(BaseHTTPRequestHandler):
         elif p.startswith("/api/asset/"):
             self._get_asset(p[len("/api/asset/"):])
         elif p.startswith("/thumb/"):
-            # urlparse().path AVANT de couper : une vignette est mutable a URL constante,
-            # le client lui accole donc un jeton de cache-bust ('?t=...'). Passer self.path
-            # brut ferait chercher un fichier nomme 'thumb.png?t=1786...' -> 404 sur TOUTES
-            # les vignettes des que le cache-bust existe cote client.
+            # urlparse().path BEFORE slicing: a thumbnail is mutable at a constant URL,
+            # so the client appends a cache-bust token ('?t=...'). Passing raw self.path
+            # would look for a file named 'thumb.png?t=1786...' -> 404 on ALL
+            # thumbnails as soon as the cache-bust exists client-side.
             self._get_thumb(urlparse(p).path[len("/thumb/"):])
         elif p == "/favicon.ico":
             self.send_response(204); self.end_headers()
@@ -425,7 +425,7 @@ class YlosHandler(BaseHTTPRequestHandler):
         elif p == "/api/web-pins":
             self._get_web_pins()
         else:
-            _json(self, 404, {"error": "endpoint introuvable"})
+            _json(self, 404, {"error": "endpoint not found"})
 
     def do_POST(self):
         if not self._origin_ok():
@@ -451,9 +451,9 @@ class YlosHandler(BaseHTTPRequestHandler):
         elif p == "/api/set-frame-range":
             self._post_set_frame_range()
         else:
-            _json(self, 404, {"error": "endpoint introuvable"})
+            _json(self, 404, {"error": "endpoint not found"})
 
-    # --- utilitaires de requête
+    # --- request utilities
 
     def _body(self) -> dict | None:
         length = int(self.headers.get("Content-Length", 0))
@@ -474,7 +474,7 @@ class YlosHandler(BaseHTTPRequestHandler):
         try:
             data = f.read_bytes()
         except OSError:
-            _json(self, 404, {"error": "app.html introuvable"}); return
+            _json(self, 404, {"error": "app.html not found"}); return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -482,12 +482,12 @@ class YlosHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _get_config(self):
-        """Types et steps par famille, consommés par app.html (remplace son ancien
-        FAMILY_CONFIG codé en dur — logique unique, cf. CLAUDE.md principe 5). Les types
-        viennent du module (seule source que la validation connaît) ; les steps du
-        pipeline du projet actif si lisible, sinon des défauts du module — même
-        résolution que create_project._project_steps, donc le modal 'nouvel asset'
-        propose exactement ce que create_asset() fera."""
+        """Types and steps per family, consumed by app.html (replaces its old
+        hard-coded FAMILY_CONFIG — single logic, see CLAUDE.md principle 5). Types
+        come from the module (the only source validation knows); steps from the
+        active project's pipeline if readable, otherwise from the module defaults — same
+        resolution as create_project._project_steps, so the 'new asset' modal
+        proposes exactly what create_asset() will do."""
         families = {
             "asset": {"types": list(create_project.ASSET_TYPES),
                       "steps": list(create_project.DEFAULT_ASSET_STEPS)},
@@ -512,24 +512,24 @@ class YlosHandler(BaseHTTPRequestHandler):
     def _get_project(self):
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif — POST /api/set-project d'abord"})
+            _json(self, 404, {"error": "No active project — POST /api/set-project first"})
             return
         try:
             manifest = create_project.read_manifest(project_dir)
             manifest["_project_path"] = str(project_dir)
-            # Resolu (jamais le champ brut, absent/stale sur un vieux projet) - la carte
-            # d'asset en tire le badge cible (web -> .glb / offline -> .usd).
+            # Resolved (never the raw field, absent/stale on an old project) - the
+            # asset card derives the target badge from it (web -> .glb / offline -> .usd).
             manifest["pipeline_target"] = create_project.get_pipeline_target(project_dir)
             _json(self, 200, manifest)
         except FileNotFoundError:
-            _json(self, 404, {"error": f"project.json introuvable dans {project_dir}/_pipeline/"})
+            _json(self, 404, {"error": f"project.json not found in {project_dir}/_pipeline/"})
         except (json.JSONDecodeError, ValueError) as e:
             _json(self, 500, {"error": str(e)})
 
     def _get_assets(self):
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         try:
             assets = _list_assets(project_dir)
@@ -539,15 +539,15 @@ class YlosHandler(BaseHTTPRequestHandler):
 
     def _get_asset(self, name: str):
         if not name:
-            _json(self, 400, {"error": "Nom d'asset manquant dans l'URL"})
+            _json(self, 400, {"error": "Missing asset name in the URL"})
             return
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         detail = _asset_detail(project_dir, name)
         if detail is None:
-            _json(self, 404, {"error": f"Asset introuvable : {name!r}"})
+            _json(self, 404, {"error": f"Asset not found: {name!r}"})
         else:
             _json(self, 200, detail)
 
@@ -557,15 +557,15 @@ class YlosHandler(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers()
             return
 
-        # rel = "<asset>/<chemin relatif depuis asset_dir>" - le second segment peut
-        # maintenant contenir des '/' (publishes deux-phases en dossier par version, ex
-        # 'modeling/publish/Asset_modeling_v003/thumb.png'), pas seulement un nom de
-        # fichier plat (ancien contrat). La garde de securite est ".." + containment
-        # (resolve().relative_to()) ci-dessous, pas l'absence de '/'.
+        # rel = "<asset>/<path relative to asset_dir>" - the second segment can
+        # now contain '/' (two-phase publishes as a per-version folder, e.g.
+        # 'modeling/publish/Asset_modeling_v003/thumb.png'), not only a flat file
+        # name (old contract). The security guard is ".." + containment
+        # (resolve().relative_to()) below, not the absence of '/'.
         rel = rel.lstrip("/")
-        # '..' interdit sur TOUT le chemin (asset_name compris : '/thumb/../_pipeline/...'
-        # resterait dans le projet grâce au containment, mais servirait des fichiers hors
-        # contrat thumb — manifestes, etc.).
+        # '..' forbidden on the WHOLE path (asset_name included: '/thumb/../_pipeline/...'
+        # would stay in the project thanks to containment, but would serve files outside
+        # the thumb contract — manifests, etc.).
         if ".." in Path(rel).parts or "\\" in rel:
             self.send_response(400); self.end_headers()
             return
@@ -596,11 +596,11 @@ class YlosHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime or "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
-        # Une vignette est MUTABLE a URL constante : republier un step reecrit thumb.png au
-        # meme chemin. Sans en-tete explicite le navigateur applique son heuristique de cache
-        # et peut resservir l'ancienne image apres un publish — un bug de fraicheur qui se
-        # lit comme "le thumbnail ne se met pas a jour". 'no-cache' = revalidation obligatoire
-        # (pas 'no-store' : avec l'ETag, un 304 evite quand meme de renvoyer les octets).
+        # A thumbnail is MUTABLE at a constant URL: republishing a step rewrites thumb.png at
+        # the same path. Without an explicit header the browser applies its cache heuristic
+        # and may re-serve the old image after a publish — a freshness bug that reads
+        # as "the thumbnail does not update". 'no-cache' = mandatory revalidation
+        # (not 'no-store': with the ETag, a 304 still avoids resending the bytes).
         try:
             st = file_path.stat()
             self.send_header("ETag", f'"{int(st.st_mtime)}-{st.st_size}"')
@@ -634,12 +634,12 @@ class YlosHandler(BaseHTTPRequestHandler):
 
         target = Path(raw).expanduser().resolve()
         if not target.exists() or not target.is_dir():
-            _json(self, 400, {"error": f"Dossier introuvable : {target}"})
+            _json(self, 400, {"error": f"Folder not found: {target}"})
             return
         try:
             entries = sorted(target.iterdir(), key=lambda p: p.name.lower())
         except PermissionError:
-            _json(self, 403, {"error": f"Permission refusée : {target}"})
+            _json(self, 403, {"error": f"Permission denied: {target}"})
             return
 
         dirs = []
@@ -657,12 +657,12 @@ class YlosHandler(BaseHTTPRequestHandler):
         _json(self, 200, recent)
 
     def _get_web_pins(self):
-        """État du pinning web : pins courants (project.json['web']) + publishes GLB
-        disponibles par entité ({name: {step: [versions]}}) — ce que le modal Sync Web
-        propose dans ses selects. Une entité sans publish GLB n'apparaît pas."""
+        """Web pinning state: current pins (project.json['web']) + available GLB
+        publishes per entity ({name: {step: [versions]}}) — what the Sync Web modal
+        proposes in its selects. An entity with no GLB publish does not appear."""
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         try:
             manifest = create_project.read_manifest(project_dir)
@@ -693,17 +693,17 @@ class YlosHandler(BaseHTTPRequestHandler):
     # --- POST handlers
 
     def _post_open_blender(self):
-        """POST /api/open-blender - deux verbes selon le body, JAMAIS de chemin envoye par
-        le client (cf. INC-3) :
-          - {entity, step?}          -> 'Ouvrir la scene' (WIP-first, resolve_open_target).
-          - {entity, step, version}  -> 'Importer' une version PRECISE (list_publishes).
-        Le launcher versionne (tools/blender/launch_context.py) porte TOUTE l'ouverture DCC :
-        contexte pipeline pose + ops differees au 1er tick timer (contexte pret) +
-        journalisation. Le SERVEUR resout un chemin ABSOLU canonique avant de construire
-        l'argv (_build_launch_argv, fonction pure) - aucune reconstruction manuelle."""
+        """POST /api/open-blender - two verbs depending on the body, NEVER a path sent by
+        the client (see INC-3):
+          - {entity, step?}          -> 'Open the scene' (WIP-first, resolve_open_target).
+          - {entity, step, version}  -> 'Import' a SPECIFIC version (list_publishes).
+        The versioned launcher (tools/blender/launch_context.py) carries ALL DCC opening:
+        pipeline context set + ops deferred to the first timer tick (context ready) +
+        logging. The SERVER resolves a canonical ABSOLUTE path before building
+        the argv (_build_launch_argv, pure function) - no manual reconstruction."""
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
 
         entity = body.get("entity")
@@ -712,7 +712,7 @@ class YlosHandler(BaseHTTPRequestHandler):
         project = body.get("project")
 
         if not entity:
-            _json(self, 400, {"error": "Champ 'entity' manquant"})
+            _json(self, 400, {"error": "Missing 'entity' field"})
             return
 
         if project:
@@ -721,35 +721,35 @@ class YlosHandler(BaseHTTPRequestHandler):
             active = self._active()
             project_dir = active.resolve() if active is not None else None
         if not project_dir:
-            _json(self, 400, {"error": "Aucun projet : fournir 'project' ou definir le "
-                                       "projet actif"})
+            _json(self, 400, {"error": "No project: provide 'project' or set the "
+                                       "active project"})
             return
 
-        # Binaire Blender requis (surchargeable par $YLOS_BLENDER). Introuvable -> erreur
-        # HTTP explicite, jamais de no-op silencieux (cf. lecon d'observabilite CC#1b).
+        # Blender binary required (overridable via $YLOS_BLENDER). Not found -> explicit
+        # HTTP error, never a silent no-op (see observability lesson CC#1b).
         if not BLENDER_APP.is_file():
             _json(self, 500, {
-                "error": f"Binaire Blender introuvable : {BLENDER_APP}. "
-                         f"Definir $YLOS_BLENDER vers l'executable Blender.",
+                "error": f"Blender binary not found: {BLENDER_APP}. "
+                         f"Set $YLOS_BLENDER to the Blender executable.",
             })
             return
         if not LAUNCHER.is_file():
-            _json(self, 500, {"error": f"Launcher introuvable : {LAUNCHER}"})
+            _json(self, 500, {"error": f"Launcher not found: {LAUNCHER}"})
             return
 
         if version is not None:
             try:
                 version = int(version)
             except (TypeError, ValueError):
-                _json(self, 400, {"error": f"'version' invalide : {version!r}"})
+                _json(self, 400, {"error": f"invalid 'version': {version!r}"})
                 return
             if not step:
-                _json(self, 400, {"error": "Champ 'step' requis avec 'version' (Importer)"})
+                _json(self, 400, {"error": "Field 'step' required with 'version' (Import)"})
                 return
             entry = _resolve_publish_entry(project_dir, entity, step, version)
             if entry is None or not entry.get("abs_path"):
                 _json(self, 404, {
-                    "error": f"Publish introuvable : {entity}/{step} v{version:03d}",
+                    "error": f"Publish not found: {entity}/{step} v{version:03d}",
                 })
                 return
             path, kind, resolved_step = entry["abs_path"], "publish", step
@@ -759,7 +759,7 @@ class YlosHandler(BaseHTTPRequestHandler):
             )
             if not target.get("exists"):
                 _json(self, 404, {
-                    "error": target.get("reason") or f"Rien a ouvrir pour {entity!r}",
+                    "error": target.get("reason") or f"Nothing to open for {entity!r}",
                 })
                 return
             path, kind = target["path"], target["kind"]
@@ -770,35 +770,35 @@ class YlosHandler(BaseHTTPRequestHandler):
 
         try:
             YLOS_DIR.mkdir(parents=True, exist_ok=True)
-            with open(SERVER_LOG, "a", encoding="utf-8") as log_fh:  # herite par l'enfant, fini DEVNULL
+            with open(SERVER_LOG, "a", encoding="utf-8") as log_fh:  # inherited by the child, no more DEVNULL
                 subprocess.Popen(args, stdout=log_fh, stderr=log_fh)
             _json(self, 200, {"ok": True, "path": path, "kind": kind,
                               "project": str(project_dir), "entity": entity,
                               "step": resolved_step, "argv": args})
         except OSError as e:
-            _json(self, 500, {"error": f"Impossible de lancer Blender : {e}"})
+            _json(self, 500, {"error": f"Cannot launch Blender: {e}"})
 
     def _post_set_project(self):
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         path = body.get("path")
         if not path:
-            _json(self, 400, {"error": "Champ 'path' manquant"})
+            _json(self, 400, {"error": "Missing 'path' field"})
             return
 
         project_dir = Path(path).expanduser().resolve()
         if not project_dir.is_dir():
-            _json(self, 400, {"error": f"Dossier introuvable : {project_dir}"})
+            _json(self, 400, {"error": f"Folder not found: {project_dir}"})
             return
         try:
             create_project.read_manifest(project_dir)
         except FileNotFoundError:
-            _json(self, 400, {"error": f"Pas de project.json dans {project_dir}/_pipeline/"})
+            _json(self, 400, {"error": f"No project.json in {project_dir}/_pipeline/"})
             return
         except (json.JSONDecodeError, ValueError) as e:
-            _json(self, 400, {"error": f"project.json invalide : {e}"})
+            _json(self, 400, {"error": f"project.json invalid: {e}"})
             return
 
         _write_active(str(project_dir))
@@ -808,11 +808,11 @@ class YlosHandler(BaseHTTPRequestHandler):
     def _post_create_project(self):
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         name = body.get("name", "").strip()
         if not name:
-            _json(self, 400, {"error": "Champ 'name' manquant"})
+            _json(self, 400, {"error": "Missing 'name' field"})
             return
         prod_type = body.get("prod_type", "FILM")
         root = body.get("root") or None
@@ -835,15 +835,15 @@ class YlosHandler(BaseHTTPRequestHandler):
     def _post_create_asset(self):
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         name = body.get("name", "").strip()
         if not name:
-            _json(self, 400, {"error": "Champ 'name' manquant"})
+            _json(self, 400, {"error": "Missing 'name' field"})
             return
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         entity_type = body.get("entity_type", "asset")
         asset_type  = body.get("asset_type", "OTHER")
@@ -867,20 +867,20 @@ class YlosHandler(BaseHTTPRequestHandler):
             first_step = used_steps[0] if used_steps else None
         except (OSError, json.JSONDecodeError):
             first_step = None
-        # Pas de chemin construit ici (cf. INC-3) : le client rouvre via
-        # POST /api/open-blender {entity: name, step: first_step}, resolu canoniquement
-        # (resolve_open_target degrade proprement sur une entite fraiche sans WIP -> ouvre
-        # scene_default, le stub asset_root/shot_root deja ecrit par create_asset()).
+        # No path built here (see INC-3): the client reopens via
+        # POST /api/open-blender {entity: name, step: first_step}, resolved canonically
+        # (resolve_open_target degrades cleanly on a fresh entity without a WIP -> opens
+        # scene_default, the asset_root/shot_root stub already written by create_asset()).
         _json(self, 200, {"ok": True, "asset_path": info["path"], "first_step": first_step})
 
     def _post_set_web_target(self):
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         try:
             result = create_project.set_web_target(project_dir, body.get("target_dir") or "")
@@ -890,17 +890,17 @@ class YlosHandler(BaseHTTPRequestHandler):
         _json(self, 200, {"ok": True, "target_dir": result["target_dir"]})
 
     def _post_pin_asset(self):
-        """Pinne un GLB publié : {name, step, version}. Adaptateur mince — la validation
-        (publish GLB 'complete' réel) et l'écriture atomique vivent dans l'orchestrateur
-        (create_project.pin_web_asset, principe 5). Un pin refusé → 400 avec la liste de ce
-        qui existe (jamais d'exception métier remontée du module)."""
+        """Pin a published GLB: {name, step, version}. Thin adapter — validation
+        (real 'complete' GLB publish) and atomic write live in the orchestrator
+        (create_project.pin_web_asset, principle 5). A refused pin → 400 with the list of what
+        exists (never a business exception surfaced from the module)."""
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         try:
             result = create_project.pin_web_asset(
@@ -909,25 +909,25 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 500, {"error": str(e)})
             return
         if not result.get("ok"):
-            _json(self, 400, {"error": result.get("error", "pin refusé")})
+            _json(self, 400, {"error": result.get("error", "pin refused")})
             return
         _json(self, 200, {"ok": True, "name": result["asset"],
                           "step": result["step"], "version": result["version"]})
 
     def _post_unpin_asset(self):
-        """Retire le pin d'un asset. Idempotent. Adaptateur mince vers
-        create_project.unpin_web_asset (dé-pinner un asset non pinné reste un ok)."""
+        """Remove an asset's pin. Idempotent. Thin adapter to
+        create_project.unpin_web_asset (un-pinning an unpinned asset stays an ok)."""
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         name = (body.get("name") or "").strip()
         if not name:
-            _json(self, 400, {"error": "Champ 'name' manquant"})
+            _json(self, 400, {"error": "Missing 'name' field"})
             return
         try:
             result = create_project.unpin_web_asset(project_dir, name)
@@ -939,7 +939,7 @@ class YlosHandler(BaseHTTPRequestHandler):
     def _post_sync_web(self):
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         try:
             manifest = create_project.read_manifest(project_dir)
@@ -948,7 +948,7 @@ class YlosHandler(BaseHTTPRequestHandler):
             return
         target_dir = manifest.get("web", {}).get("target_dir")
         if not target_dir:
-            _json(self, 400, {"error": "web.target_dir non configure - POST /api/set-web-target d'abord"})
+            _json(self, 400, {"error": "web.target_dir not configured - POST /api/set-web-target first"})
             return
         try:
             result = create_project.sync_web_assets(project_dir, target_dir)
@@ -958,32 +958,32 @@ class YlosHandler(BaseHTTPRequestHandler):
         _json(self, 200, {"ok": True, **result})
 
     def _post_set_frame_range(self):
-        """POST /api/set-frame-range {entity, start, end, fps?} — pose la plage d'images d'un
-        SHOT. Adaptateur mince → create_project.set_frame_range (validation start<end + entité
-        = shot + écriture atomique sous lock + recompo shot_root.usda, principe 5).
-        set_frame_range LÈVE pour un cas métier (range invalide, pas un shot, entité absente)
-        → 400 (entrée client), jamais 500."""
+        """POST /api/set-frame-range {entity, start, end, fps?} — sets a SHOT's frame
+        range. Thin adapter → create_project.set_frame_range (validation start<end + entity
+        = shot + atomic write under lock + shot_root.usda recomposition, principle 5).
+        set_frame_range RAISES for a business case (invalid range, not a shot, entity absent)
+        → 400 (client input), never 500."""
         body = self._body()
         if body is None:
-            _json(self, 400, {"error": "JSON invalide dans le body"})
+            _json(self, 400, {"error": "Invalid JSON in the body"})
             return
         project_dir = self._active()
         if project_dir is None:
-            _json(self, 404, {"error": "Aucun projet actif"})
+            _json(self, 404, {"error": "No active project"})
             return
         name = (body.get("entity") or "").strip()
         if not name:
-            _json(self, 400, {"error": "Champ 'entity' manquant"})
+            _json(self, 400, {"error": "Missing 'entity' field"})
             return
         if body.get("start") is None or body.get("end") is None:
-            _json(self, 400, {"error": "Champs 'start' et 'end' requis"})
+            _json(self, 400, {"error": "Fields 'start' and 'end' required"})
             return
         try:
             start, end = int(body["start"]), int(body["end"])
             fps = body.get("fps")
             fps = float(fps) if fps not in (None, "") else None
         except (TypeError, ValueError):
-            _json(self, 400, {"error": "start/end doivent être des entiers, fps un nombre"})
+            _json(self, 400, {"error": "start/end must be integers, fps a number"})
             return
         try:
             frame_range = create_project.set_frame_range(project_dir, name, start, end, fps)
@@ -997,18 +997,18 @@ class YlosHandler(BaseHTTPRequestHandler):
 
 
 # -------------------------------------------------------------------------------------
-# Entrée
+# Entry point
 # -------------------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Serveur HTTP local stdlib-only — pipeline Ylos Prod.",
+        description="Local stdlib-only HTTP server — Ylos Prod pipeline.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--project", metavar="PATH",
-                        help="Projet actif (écrit dans ~/.ylos/active_project)")
+                        help="Active project (written to ~/.ylos/active_project)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help="Port d'écoute")
+                        help="Listening port")
     args = parser.parse_args()
 
     YLOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1016,19 +1016,19 @@ def main() -> None:
     if args.project:
         project_dir = Path(args.project).expanduser().resolve()
         _write_active(str(project_dir))
-        print(f"[ylos] projet actif : {project_dir}")
+        print(f"[ylos] active project: {project_dir}")
 
     active = _read_active()
     if active:
-        print(f"[ylos] projet courant : {active}")
+        print(f"[ylos] current project: {active}")
 
     YlosHandler.allowed_origins = _allowed_origins(args.port)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), YlosHandler)
-    print(f"[ylos] http://127.0.0.1:{args.port}  (Ctrl-C pour arrêter)")
+    print(f"[ylos] http://127.0.0.1:{args.port}  (Ctrl-C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n[ylos] arrêt")
+        print("\n[ylos] stopping")
         server.shutdown()
 
 
