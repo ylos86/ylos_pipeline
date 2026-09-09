@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Vignettes d'entites pour l'UI Blender - cache d'icones de preview.
+"""Entity thumbnails for the Blender UI - preview icon cache.
 
-Pourquoi un cache : un draw() de panel est rappele a CHAQUE redraw (survol, zoom viewport,
-frame change...). Resoudre la vignette de chaque entite a chaque passe voudrait dire scanner
-le disque des dizaines de fois par seconde. Meme pattern que op_scene_check /
-op_update_imports / op_io._product_cache : on calcule hors draw, on invalide explicitement.
+Why a cache: a panel draw() is called back on EVERY redraw (hover, viewport zoom,
+frame change...). Resolving each entity's thumbnail on every pass would mean scanning
+the disk dozens of times per second. Same pattern as op_scene_check /
+op_update_imports / op_io._product_cache: compute outside draw, invalidate explicitly.
 
-La RESOLUTION elle-meme n'est pas ici : elle vit dans create_project.resolve_entity_thumbnail
-(point unique, principe 5 - partagee avec la web UI). Ce module ne fait que la memoiser et la
-transformer en icon_id Blender.
+The RESOLUTION itself is not here: it lives in create_project.resolve_entity_thumbnail
+(single point, principle 5 - shared with the web UI). This module only memoizes it and
+turns it into a Blender icon_id.
 """
 
 import os
@@ -32,9 +32,9 @@ def _cp():
 
 
 def invalidate(project_path: str = None):
-    """Purge le cache (tout, ou seulement les entrees d'un projet). A appeler apres tout
-    geste qui peut changer une vignette : save WIP, publish, capture de preview, refresh
-    manuel de la liste d'assets."""
+    """Purge the cache (all, or only a project's entries). To call after any
+    gesture that may change a thumbnail: save WIP, publish, preview capture, manual
+    refresh of the asset list."""
     global _cache
     if project_path is None:
         _cache = {}
@@ -45,10 +45,10 @@ def invalidate(project_path: str = None):
 
 def get_entity_thumbs(project_path: str, entity_names, ctx_type: str = "asset",
                       force: bool = False) -> dict:
-    """{entity_name: (icon_id, source)} - icon_id 0 quand aucune vignette n'existe (convention
-    de load_icon, jamais d'exception). 'source' vaut custom|publish|legacy|wip|none, expose
-    tel quel par l'orchestrateur : l'UI peut dire qu'une vignette vient d'un WIP plutot que de
-    laisser croire a un publish."""
+    """{entity_name: (icon_id, source)} - icon_id 0 when no thumbnail exists (load_icon
+    convention, never an exception). 'source' is custom|publish|legacy|wip|none, exposed
+    as-is by the orchestrator: the UI can say a thumbnail comes from a WIP rather than
+    letting it pass for a publish."""
     key = (project_path or "", ctx_type)
     hit = _cache.get(key)
     if hit and not force and (time.time() - hit["ts"]) < _TTL:

@@ -53,10 +53,10 @@ DELIVERY_TARGETS = {
     "VR": ["usd", "gltf"],
 }
 
-# Valeurs derivees de vocab.STEP_ITEMS (donc de create_project.DEFAULT_*_STEPS, seule
-# source - cf. CLAUDE.md principe 5). Avant : listes recopiees a la main ici, driftees vs
-# vocab (ex SHOT_STEPS incluait 'layout'/'render'/'composite', absents de
-# DEFAULT_SHOT_STEPS ; SET_STEPS avait 'modeling' au lieu de 'layout') - purge INC-2.
+# Values derived from vocab.STEP_ITEMS (hence from create_project.DEFAULT_*_STEPS, the only
+# source - see CLAUDE.md principle 5). Before: lists copied by hand here, drifted vs
+# vocab (e.g. SHOT_STEPS included 'layout'/'render'/'composite', absent from
+# DEFAULT_SHOT_STEPS; SET_STEPS had 'modeling' instead of 'layout') - purged in INC-2.
 ASSET_STEPS = vocab.values(vocab.STEP_ITEMS["ASSET"])
 SHOT_STEPS  = vocab.values(vocab.STEP_ITEMS["SHOT"])
 SET_STEPS   = vocab.values(vocab.STEP_ITEMS["SET"])
@@ -115,20 +115,20 @@ def find_project_root(start_path: str) -> str | None:
     return None
 
 
-# Chaine de repli EEVEE, du plus recent au plus universel. BLENDER_EEVEE_NEXT n'existe
-# qu'en Blender 4.2-4.4 (retire en 5.x, ou EEVEE Next reprend l'identifiant BLENDER_EEVEE) ;
-# BLENDER_EEVEE couvre 5.x ; BLENDER_WORKBENCH est le dernier recours. Meme raisonnement que
-# thumbnails._pick_render_engine (cf. CLAUDE.md, bugs empiriques Blender #1).
+# EEVEE fallback chain, newest to most universal. BLENDER_EEVEE_NEXT exists
+# only in Blender 4.2-4.4 (removed in 5.x, where EEVEE Next takes over the BLENDER_EEVEE id);
+# BLENDER_EEVEE covers 5.x; BLENDER_WORKBENCH is the last resort. Same reasoning as
+# thumbnails._pick_render_engine (see CLAUDE.md, Blender empirical bugs #1).
 _EEVEE_FALLBACKS = ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE", "BLENDER_WORKBENCH")
 
 
 def _resolve_render_engine(scene: bpy.types.Scene, desired: str) -> str:
-    """Affecte 'desired' a scene.render.engine ; si l'identifiant n'existe pas dans cette
-    version de Blender (ex BLENDER_EEVEE_NEXT sous 5.x -> TypeError), retombe sur la chaine
-    EEVEE-compatible. L'affectation est le probe fiable : l'enum des moteurs est dynamique
-    entre versions, l'introspection RNA ne suffit pas. Retourne le moteur retenu (inchange
-    si aucun candidat n'est affectable, cas improbable). Un moteur non-EEVEE (CYCLES) est
-    affecte tel quel."""
+    """Assign 'desired' to scene.render.engine; if the identifier does not exist in this
+    Blender version (e.g. BLENDER_EEVEE_NEXT under 5.x -> TypeError), fall back to the
+    EEVEE-compatible chain. Assignment is the reliable probe: the engines enum is dynamic
+    across versions, RNA introspection is not enough. Returns the chosen engine (unchanged
+    if no candidate is assignable, an unlikely case). A non-EEVEE engine (CYCLES) is
+    assigned as-is."""
     candidates = [desired]
     if desired in _EEVEE_FALLBACKS:
         candidates += [e for e in _EEVEE_FALLBACKS if e != desired]
@@ -213,11 +213,11 @@ def _find_layer_collection(layer_col, name: str):
 
 
 # ---------------------------------------------------------------------------
-# Collection hierarchy - partagee entre op_new_asset.py (creation) et
-# op_import_product.py (import d'un product publie, INC-5) : les deux doivent ranger
-# une entite au MEME endroit selon son type, une seule fois (principe 5). Deplace ici
-# (etait duplique dans op_new_asset.py) car ce module possede deja la logique de
-# collections de scene (setup_scene_collections/_find_layer_collection ci-dessus).
+# Collection hierarchy - shared between op_new_asset.py (creation) and
+# op_import_product.py (import of a published product, INC-5): both must place
+# an entity in the SAME location according to its type, once (principle 5). Moved here
+# (was duplicated in op_new_asset.py) because this module already owns the scene
+# collection logic (setup_scene_collections/_find_layer_collection above).
 # ---------------------------------------------------------------------------
 
 def get_or_create_collection(name: str):
@@ -233,12 +233,12 @@ def link_collection(child, parent) -> None:
 
 
 def resolve_parent_collection(asset_type: str, context_type: str, scene: bpy.types.Scene):
-    """Collection parent adaptee au type d'entite (COL_CHAR/COL_ENV_Props pour un asset
-    selon ASSET_TYPE_PARENT_COL, COL_SHOTS pour un shot, COL_ENV/COL_SETS pour un set) -
-    meme convention que la creation (op_new_asset.py) et l'import (op_import_product.py).
-    Retourne (collection, libelle_affichage). Import paresseux de core.asset : core/asset.py
-    importe deja depuis ce module au niveau module (ASSET_STEPS...), un import top-level
-    dans l'autre sens serait circulaire."""
+    """Parent collection suited to the entity type (COL_CHAR/COL_ENV_Props for an asset
+    per ASSET_TYPE_PARENT_COL, COL_SHOTS for a shot, COL_ENV/COL_SETS for a set) -
+    same convention as creation (op_new_asset.py) and import (op_import_product.py).
+    Returns (collection, display_label). Lazy import of core.asset: core/asset.py
+    already imports from this module at module level (ASSET_STEPS...), a top-level import
+    the other way would be circular."""
     from .asset import ASSET_TYPE_PARENT_COL
     root = scene.collection
 
@@ -282,11 +282,11 @@ def collection_target_label(asset_type: str, context_type: str) -> str:
 
 
 def set_active_collection(context, collection):
-    """Bascule active_layer_collection du view_layer courant sur 'collection' - les
-    operateurs d'import (usd_import/import_scene.gltf) lient toujours leurs objets a la
-    collection active, jamais a une collection passee en parametre. Retourne la
-    layer_collection PRECEDENTE (a restaurer par l'appelant : ne jamais laisser un import
-    changer l'etat actif de facon permanente et surprenante pour l'utilisateur)."""
+    """Switch the current view_layer's active_layer_collection to 'collection' - the
+    import operators (usd_import/import_scene.gltf) always link their objects to the
+    active collection, never to a collection passed as a parameter. Returns the
+    PREVIOUS layer_collection (to be restored by the caller: never let an import
+    change the active state permanently and surprisingly for the user)."""
     view_layer = context.view_layer
     previous = view_layer.active_layer_collection
     target = _find_layer_collection(view_layer.layer_collection, collection.name)
@@ -307,8 +307,8 @@ def register_properties():
         description="Active Ylos project name",
         default="",
     )
-    # Vocabulaire (valeurs) = create_project via core/vocab.py, seul home. Les tuples
-    # *_ITEMS sont module-level (piege GC bpy, cf. vocab.py). Defauts inchanges.
+    # Vocabulary (values) = create_project via core/vocab.py, the only home. The
+    # *_ITEMS tuples are module-level (bpy GC trap, see vocab.py). Defaults unchanged.
     bpy.types.Scene.ylos_prod_type = bpy.props.EnumProperty(
         name="Prod Type",
         items=vocab.PROD_TYPE_ITEMS,
@@ -318,10 +318,10 @@ def register_properties():
         name="Current Asset",
         default="",
     )
-    # ylos_current_step : propriete Scene sans context d'operateur -> vocabulaire
-    # complet (STEP_ITEMS_ALL, union ordonnee des steps de toutes les familles). Les
-    # enums step des operateurs round-trip avec cette propriete (cf. op_publish,
-    # op_switch_context, op_save_wip) : ils utilisent le meme STEP_ITEMS_ALL.
+    # ylos_current_step: Scene property with no operator context -> full
+    # vocabulary (STEP_ITEMS_ALL, ordered union of the steps of all families). The
+    # operators' step enums round-trip with this property (see op_publish,
+    # op_switch_context, op_save_wip): they use the same STEP_ITEMS_ALL.
     bpy.types.Scene.ylos_current_step = bpy.props.EnumProperty(
         name="Current Step",
         items=vocab.STEP_ITEMS_ALL,
@@ -337,18 +337,18 @@ def register_properties():
         items=vocab.ASSET_TYPE_ITEMS,
         default="PROP",
     )
-    # Prepare pour INC-4 (op_save_wip n'ecrit rien avec ceci pour l'instant - le champ
-    # panel.py est affiche desactive tant que ce n'est pas cable).
+    # Prepared for INC-4 (op_save_wip writes nothing with this for now - the
+    # panel.py field is shown disabled until it is wired).
     bpy.types.Scene.ylos_wip_comment = bpy.props.StringProperty(
         name="Comment",
         description="Note for the next Save Version - not yet persisted (wired in INC-4)",
         default="",
     )
-    # Filtre du Product Browser (panel Import / Export, ylos.open_io). Sur Scene pour que
-    # draw_io le lise quel que soit le point de montage.
-    # Taille de la preview d'entite dans la section Assets. Un cran 'OFF' existe parce que
-    # le N-panel est etroit : sur un ecran partage, rendre la vignette repliable evite d'avoir
-    # a choisir entre "visuel" et "compact" une fois pour toutes.
+    # Product Browser filter (Import / Export panel, ylos.open_io). On Scene so
+    # draw_io reads it whatever the mount point.
+    # Size of the entity preview in the Assets section. An 'OFF' step exists because
+    # the N-panel is narrow: on a shared screen, making the thumbnail collapsible avoids
+    # having to choose between "visual" and "compact" once and for all.
     bpy.types.Scene.ylos_preview_size = bpy.props.EnumProperty(
         name="Preview",
         description="Size of the active entity preview thumbnail",

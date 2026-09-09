@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-# State Manager (facon Prism) - modele de donnees des "export states".
+# State Manager (Prism-style) - data model of the "export states".
 #
-# Une CollectionProperty sur bpy.types.Scene est sauvee dans le .blend : la recette d'export
-# (quels steps de quelles entites publier) persiste AVEC la scene, comme le State Manager de
-# Prism. Les valeurs de vocabulaire (steps) viennent de vocab.py -> create_project (seule
-# source, cf. CLAUDE.md "Vocabulaire pipeline centralise") - jamais de liste codee en dur.
+# A CollectionProperty on bpy.types.Scene is saved in the .blend: the export recipe
+# (which steps of which entities to publish) persists WITH the scene, like Prism's
+# State Manager. The vocabulary values (steps) come from vocab.py -> create_project (the only
+# source, see CLAUDE.md "Centralized pipeline vocabulary") - never a hard-coded list.
 
 import bpy
 from bpy.props import (
@@ -15,9 +15,9 @@ from . import vocab
 
 
 class YLOS_PG_ExportState(bpy.types.PropertyGroup):
-    """Un export state = une entree de la recette de publish batch. enabled/entity/step
-    pilotent l'execution ; allow_full_scene/comment sont des options ; last_result/
-    last_version sont l'affichage du dernier run (jamais relus par l'execution)."""
+    """An export state = one entry of the batch publish recipe. enabled/entity/step
+    drive execution; allow_full_scene/comment are options; last_result/
+    last_version are the display of the last run (never re-read by execution)."""
 
     enabled: BoolProperty(
         name="Enabled",
@@ -29,9 +29,9 @@ class YLOS_PG_ExportState(bpy.types.PropertyGroup):
         description="Target entity to publish to (asset / set / shot)",
         default="",
     )
-    # Domaine COMPLET (STEP_ITEMS_ALL, tuple module-level - piege GC bpy, cf. vocab.py) : la
-    # validite par famille est verifiee a l'execution par publish_entity_step (meme approche
-    # qu'op_publish, ou is_step_valid_for_context tranche selon la famille de l'entite).
+    # FULL domain (STEP_ITEMS_ALL, module-level tuple - bpy GC trap, see vocab.py): per-family
+    # validity is checked at execution by publish_entity_step (same approach
+    # as op_publish, where is_step_valid_for_context decides by the entity's family).
     step: EnumProperty(
         name="Step",
         description="Pipeline step this state publishes",
@@ -48,14 +48,14 @@ class YLOS_PG_ExportState(bpy.types.PropertyGroup):
         description="Optional note recorded with the publish",
         default="",
     )
-    # Affichage seul : dernier resultat de ylos.publish_states (jamais lu par l'execution).
+    # Display only: last result of ylos.publish_states (never read by execution).
     last_result: StringProperty(default="")
     last_version: IntProperty(default=0)
 
 
 def register_properties():
-    """A appeler APRES bpy.utils.register_class(YLOS_PG_ExportState) : CollectionProperty
-    (type=...) exige que le PropertyGroup soit deja enregistre."""
+    """To call AFTER bpy.utils.register_class(YLOS_PG_ExportState): CollectionProperty
+    (type=...) requires the PropertyGroup to be already registered."""
     bpy.types.Scene.ylos_export_states = CollectionProperty(type=YLOS_PG_ExportState)
     bpy.types.Scene.ylos_export_states_index = IntProperty(
         name="Active Export State", default=0,

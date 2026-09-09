@@ -16,10 +16,10 @@ from .project import (
     load_project,
 )
 
-# create_project.py (racine du repo) porte la logique UNIQUE de lecture des publishes ; cet
-# addon n'en est qu'un consommateur mince. Import paresseux (le repo root est injecte dans
-# sys.path au register() de l'addon, mais ces helpers peuvent etre appeles hors de ce chemin).
-# core/asset.py -> core -> blender -> plugins -> repo = 4 remontees.
+# create_project.py (repo root) holds the SINGLE publish-reading logic; this
+# addon is only a thin consumer of it. Lazy import (the repo root is injected into
+# sys.path at the addon's register(), but these helpers may be called outside that path).
+# core/asset.py -> core -> blender -> plugins -> repo = 4 levels up.
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
 
@@ -105,9 +105,9 @@ VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(
 
 
 def _read_wip_sidecar(blend_path: Path) -> dict:
-    """Sidecar '<wip>.blend.json' (comment/user/date/blender_version, ecrit par
-    ylos.save_wip) - {} si absent ou illisible, jamais d'exception (meme convention
-    tolerante que le reste du module)."""
+    """Sidecar '<wip>.blend.json' (comment/user/date/blender_version, written by
+    ylos.save_wip) - {} if absent or unreadable, never an exception (same tolerant
+    convention as the rest of the module)."""
     sidecar = blend_path.with_name(blend_path.name + ".json")
     if not sidecar.is_file():
         return {}
@@ -151,20 +151,20 @@ _USD_PUBLISH_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
 
 def list_publish_versions(project_path: str, entity_name: str, step: str,
                           entity_type: str = "asset") -> list:
-    """Adaptateur mince sur create_project.list_publishes (logique unique) : publishes USD
-    du step (contrat deux-phases niche + fichiers plats legacy fusionnes), forme historique
-    {version, variant, filename, path} conservee (USD uniquement - un import de produit
-    generique, GLB inclus, passe par resolve_publish_entry ci-dessous, cf. INC-5). Le scan a
-    plat local d'antan (qui rendait invisibles les publishes deux-phases en DOSSIER) est
-    supprime - c'etait la cause du 'No published USD found'."""
+    """Thin adapter over create_project.list_publishes (single logic): USD publishes
+    of the step (nested two-phase contract + legacy flat files merged), historical shape
+    {version, variant, filename, path} kept (USD only - a generic product import,
+    GLB included, goes through resolve_publish_entry below, see INC-5). The old local flat
+    scan (which made two-phase FOLDER publishes invisible) is
+    removed - it was the cause of the 'No published USD found'."""
     results = []
     for e in _cp().list_publishes(project_path, entity_name, step, entity_type):
         artifact = e.get("artifact")
         abs_path = e.get("abs_path")
         if not artifact or not abs_path:
-            continue  # entree 'pending' (pas encore d'artefact)
+            continue  # 'pending' entry (no artifact yet)
         if not str(artifact).lower().endswith(_USD_PUBLISH_EXTS):
-            continue  # cette fonction est USD-only ; un GLB/cache n'y a pas sa place
+            continue  # this function is USD-only; a GLB/cache has no place here
         name = os.path.basename(abs_path)
         m = VERSION_VARIANT_PATTERN.search(name)
         variant = m.group(2) if (m and m.group(2)) else "Default"
@@ -179,8 +179,8 @@ def list_publish_versions(project_path: str, entity_name: str, step: str,
 
 def get_latest_publish_path(project_path: str, entity_name: str, step: str,
                             entity_type: str = "asset"):
-    """Dernier publish USD du step (chemin absolu) ou None - via list_publish_versions
-    ci-dessus (donc via l'orchestrateur). Corrige le Load Latest casse."""
+    """Latest USD publish of the step (absolute path) or None - via list_publish_versions
+    above (hence via the orchestrator). Fixes the broken Load Latest."""
     versions = list_publish_versions(project_path, entity_name, step, entity_type)
     if not versions:
         return None
@@ -208,19 +208,19 @@ def get_latest_wip_version(project_path: str, entity_name: str, step: str,
 
 def get_latest_publish_version(project_path: str, entity_name: str, step: str,
                                entity_type: str = "asset") -> int:
-    """Version max PUBLIEE ('complete', tout type d'artefact + legacy) du step, ou 0 - via
-    create_project.latest_publish_artifact. Avant : le scan a plat ne voyait pas les dossiers
-    deux-phases -> retournait 0 et faussait l'estimation de prochaine version du dialog publish
-    (ainsi que get_asset_step_status). Un artefact non-USD (GLB) compte ici : les versions sont
-    partagees par step (cf. allocate_publish_version)."""
+    """Max PUBLISHED version ('complete', any artifact type + legacy) of the step, or 0 - via
+    create_project.latest_publish_artifact. Before: the flat scan did not see the two-phase
+    folders -> returned 0 and skewed the publish dialog's next-version estimate
+    (as well as get_asset_step_status). A non-USD artifact (GLB) counts here: versions are
+    shared per step (see allocate_publish_version)."""
     latest = _cp().latest_publish_artifact(project_path, entity_name, step, entity_type)
     return latest["version"] if latest else 0
 
 
 def read_entity_manifest(project_path: str, entity_name: str, entity_type: str = "asset") -> dict:
-    """Manifeste brut de l'entite (type/entity_type/steps...) - {} si absent/illisible,
-    jamais d'exception (meme tolerance que le reste du module). Utilise pour connaitre le
-    type reel (PROP/CHARACTER/...) d'un import, cf. core.project.resolve_parent_collection."""
+    """Raw entity manifest (type/entity_type/steps...) - {} if absent/unreadable,
+    never an exception (same tolerance as the rest of the module). Used to know the
+    real type (PROP/CHARACTER/...) of an import, see core.project.resolve_parent_collection."""
     root = _get_entity_root(project_path, entity_name, entity_type)
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file():
@@ -233,11 +233,11 @@ def read_entity_manifest(project_path: str, entity_name: str, entity_type: str =
 
 def resolve_publish_entry(project_path: str, entity_name: str, step: str, version: int = None,
                           entity_type: str = "asset") -> dict | None:
-    """Entree publish 'complete' pour (entity, step[, version]) - INC-5 (import states).
-    version None/0 -> la derniere (create_project.latest_publish_artifact) ; version
-    explicite -> EXACTEMENT celle-la, jamais un repli sur la derniere (via
-    create_project.list_publishes). 'abs_path' est deja fourni par l'orchestrateur - aucune
-    reconstruction de chemin ici (meme discipline que ylos_ui.py, cf. CLAUDE.md)."""
+    """'complete' publish entry for (entity, step[, version]) - INC-5 (import states).
+    version None/0 -> the latest (create_project.latest_publish_artifact); explicit
+    version -> EXACTLY that one, never a fallback to the latest (via
+    create_project.list_publishes). 'abs_path' is already provided by the orchestrator - no
+    path reconstruction here (same discipline as ylos_ui.py, see CLAUDE.md)."""
     cp = _cp()
     if not version:
         return cp.latest_publish_artifact(project_path, entity_name, step, entity_type)
