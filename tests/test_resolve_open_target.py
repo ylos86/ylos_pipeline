@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Tests stdlib de create_project.resolve_open_target().
+"""Stdlib tests for create_project.resolve_open_target().
 
-Place dans tests/ (et non tools/tests/ comme suggere par la tache) pour etre pris par la
-CI : `python -m unittest discover -s tests`, comme toutes les autres suites stdlib du repo.
-Contrat verifie : resolve_open_target NE LEVE JAMAIS pour un cas metier (projet/entite/step
-introuvable, valeur d'enum inconnue au manifeste) - il renvoie un dict exists=False + raison.
+Placed in tests/ (and not tools/tests/ as suggested by the task) so it is picked up by
+the CI: `python -m unittest discover -s tests`, like all the other stdlib suites in the repo.
+Contract checked: resolve_open_target NEVER RAISES for a business case (project/entity/step
+not found, enum value unknown to the manifest) - it returns a dict exists=False + reason.
 """
 import json
 import os
@@ -29,8 +29,8 @@ class ResolveOpenTargetTest(unittest.TestCase):
             prod_type="FILM",
         )
         self.proj = Path(info["source"])
-        # prod_type inconnu injecte dans project.json (valeur legacy/reelle type 'XR') :
-        # resolve ne lit pas ce champ, ca ne doit rien casser.
+        # unknown prod_type injected into project.json (legacy/real value like 'XR'):
+        # resolve does not read this field, it must not break anything.
         pj = self.proj / "_pipeline" / "project.json"
         d = json.loads(pj.read_text(encoding="utf-8"))
         d["prod_type"] = "ZZ_UNKNOWN"
@@ -49,7 +49,7 @@ class ResolveOpenTargetTest(unittest.TestCase):
         self.assertTrue(t["exists"])
         self.assertEqual(t["kind"], "scene_default")
         self.assertTrue(t["path"].endswith("asset_root.usda"))
-        self.assertEqual(t["step"], "modeling")  # premier step declare
+        self.assertEqual(t["step"], "modeling")  # first declared step
 
     def test_latest_wip_wins_and_picks_highest_version(self):
         wip = self.entity_dir / "modeling" / "wip"
@@ -70,7 +70,7 @@ class ResolveOpenTargetTest(unittest.TestCase):
         self.assertIn("reason", t)
 
     def test_unknown_enum_in_manifest_does_not_raise(self):
-        # prod_type ET type inconnus dans le manifeste d'entite : resolve resout quand meme.
+        # unknown prod_type AND type in the entity manifest: resolve resolves anyway.
         mp = self.entity_dir / "manifest.json"
         m = json.loads(mp.read_text(encoding="utf-8"))
         m["prod_type"] = "ZZ_UNKNOWN"
@@ -95,11 +95,11 @@ class ResolveOpenTargetTest(unittest.TestCase):
         self.assertIn("reason", t)
 
     def test_corrupt_manifest_degrades_cleanly(self):
-        # manifeste illisible -> dict vide en interne, fallback sur scene_default si le root
-        # existe (il existe apres create_asset), jamais d'exception.
+        # unreadable manifest -> empty dict internally, fallback to scene_default if the root
+        # exists (it exists after create_asset), never an exception.
         (self.entity_dir / "manifest.json").write_text("{ not json", encoding="utf-8")
         t = cp.resolve_open_target("PROP_Box_Default", "blender", project_root=str(self.proj))
-        # entity_type defaut 'asset' -> asset_root.usda existe
+        # entity_type default 'asset' -> asset_root.usda exists
         self.assertTrue(t["exists"])
         self.assertEqual(t["kind"], "scene_default")
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-tests/test_refresh_entity_root.py — tests stdlib (unittest) pour le composeur unifie
-create_project.refresh_entity_root() (Increment 1 du plan Houdini shots).
+tests/test_refresh_entity_root.py — stdlib tests (unittest) for the unified composer
+create_project.refresh_entity_root() (Increment 1 of the Houdini shots plan).
 
-Un seul composeur, dans create_project.py (principe 5) : asset/set -> asset_root.usda
-(ordre DOWNSTREAM_ORDER), shot -> shot_root.usda (root prim /ROOT, ordre
-SHOT_DOWNSTREAM_ORDER, timecodes depuis frame_range si present). Recompose automatiquement
-a la fin de finalize_publish_version() pour kind != 'lop' (un LOP ne compose jamais).
+A single composer, in create_project.py (principle 5): asset/set -> asset_root.usda
+(DOWNSTREAM_ORDER order), shot -> shot_root.usda (root prim /ROOT, order
+SHOT_DOWNSTREAM_ORDER, timecodes from frame_range if present). Recomposes automatically
+at the end of finalize_publish_version() for kind != 'lop' (a LOP never composes).
 
-Usage : python3 tests/test_refresh_entity_root.py
-     ou : python3 -m unittest tests.test_refresh_entity_root
+Usage: python3 tests/test_refresh_entity_root.py
+    or: python3 -m unittest tests.test_refresh_entity_root
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ import create_project as cp  # noqa: E402
 
 
 class _BaseCase(unittest.TestCase):
-    """Projet 2.0 + un asset (CHARACTER) et un shot (ANIMATION) dans un tmpdir jetable."""
+    """2.0 project + one asset (CHARACTER) and one shot (ANIMATION) in a throwaway tmpdir."""
 
     def setUp(self):
         self._tmp = Path(tempfile.mkdtemp(prefix="ylos_root_")).resolve()
@@ -40,7 +40,7 @@ class _BaseCase(unittest.TestCase):
                         entity_type="shot", asset_type="ANIMATION")
 
     def _publish_step(self, asset_name, step, ext="usda"):
-        """allocate -> ecrit artefact USD + thumb -> finalize (kind=step). Retourne version."""
+        """allocate -> writes USD artifact + thumb -> finalize (kind=step). Returns version."""
         staging, final = cp.allocate_publish_version(self.project, asset_name,
                                                      comment="", kind=step)
         version = cp.publish_version_from_dir(final)
@@ -62,14 +62,14 @@ class _BaseCase(unittest.TestCase):
 
 
 class BuildRootPureTestCase(unittest.TestCase):
-    """Fonctions de composition pures (ordre, root prim, timecodes)."""
+    """Pure composition functions (order, root prim, timecodes)."""
 
     def test_asset_root_order_downstream(self):
         latest = {"modeling": "modeling/publish/m/m.usda",
                   "lookdev": "lookdev/publish/l/l.usda"}
         out = cp.build_asset_root("Lina", latest)
         self.assertIn('defaultPrim = "Lina"', out)
-        # lookdev plus fort que modeling (DOWNSTREAM_ORDER) -> apparait en premier.
+        # lookdev stronger than modeling (DOWNSTREAM_ORDER) -> appears first.
         self.assertLess(out.index("lookdev/publish"), out.index("modeling/publish"))
 
     def test_shot_root_prim_and_order(self):
@@ -78,16 +78,16 @@ class BuildRootPureTestCase(unittest.TestCase):
         out = cp.build_shot_root("Sq010", latest)
         self.assertIn('defaultPrim = "ROOT"', out)
         self.assertIn('def Xform "ROOT"', out)
-        # lighting override l'anim sur un shot (SHOT_DOWNSTREAM_ORDER) -> en premier.
+        # lighting overrides anim on a shot (SHOT_DOWNSTREAM_ORDER) -> first.
         self.assertLess(out.index("lighting/publish"), out.index("animation/publish"))
-        # pas de frame_range -> aucun timecode.
+        # no frame_range -> no timecode.
         self.assertNotIn("startTimeCode", out)
 
     def test_shot_root_timecodes_present(self):
         out = cp.build_shot_root("Sq010", {}, {"start": 1001, "end": 1100, "fps": 24})
         self.assertIn("startTimeCode = 1001", out)
         self.assertIn("endTimeCode = 1100", out)
-        self.assertIn("timeCodesPerSecond = 24", out)  # 24, pas 24.0
+        self.assertIn("timeCodesPerSecond = 24", out)  # 24, not 24.0
 
     def test_latest_by_step_merges_and_prefers_two_phase(self):
         manifest = {
@@ -106,8 +106,8 @@ class BuildRootPureTestCase(unittest.TestCase):
             },
         }
         latest = cp._latest_by_step(manifest)
-        # step_publishes 'complete' prime sur le 'publishes' legacy a step egal ; le pending
-        # v002 est ignore (v001 gagne).
+        # step_publishes 'complete' takes priority over legacy 'publishes' at equal step; the
+        # pending v002 is ignored (v001 wins).
         self.assertEqual(latest["modeling"],
                          "modeling/publish/Lina_modeling_v001/Lina_modeling_v001.usda")
         self.assertEqual(latest["lookdev"],
@@ -119,9 +119,9 @@ class BuildRootPureTestCase(unittest.TestCase):
         self.assertEqual(cp._latest_by_step(manifest), {})
 
     def test_latest_by_step_filters_non_usd_artifacts(self):
-        # Increment 5 : un cache consommable (VDB/bgeo/abc) ou GLB publie en kind=step passe le
-        # deux-phases mais n'entre JAMAIS en composition. Le filtre USD s'applique AVANT le max :
-        # un step avec un VDB plus recent (v002) mais un USD plus ancien (v001) compose l'USD.
+        # Increment 5: a consumable cache (VDB/bgeo/abc) or GLB published as kind=step passes
+        # the two-phase but NEVER enters composition. The USD filter applies BEFORE the max:
+        # a step with a newer VDB (v002) but an older USD (v001) composes the USD.
         manifest = {
             "step_publishes": {
                 "fx": [
@@ -137,9 +137,9 @@ class BuildRootPureTestCase(unittest.TestCase):
             },
         }
         latest = cp._latest_by_step(manifest)
-        # fx : le VDB v002 est filtre, l'USD v001 compose.
+        # fx: the VDB v002 is filtered, the USD v001 composes.
         self.assertEqual(latest["fx"], "fx/publish/S_fx_v001/S_fx_v001.usda")
-        # modeling : GLB seul -> aucun layer USD -> step absent de la composition.
+        # modeling: GLB only -> no USD layer -> step absent from the composition.
         self.assertNotIn("modeling", latest)
 
 
@@ -152,9 +152,9 @@ class AssetRecompositionTestCase(_BaseCase):
         root = self._read(self._asset_dir("CHARACTER_Lina_Default") / cp.ASSET_ROOT_NAME)
         self.assertIn("CHARACTER_Lina_Default_modeling_v001", root)
         self.assertIn("CHARACTER_Lina_Default_lookdev_v001", root)
-        # ordre downstream : lookdev avant modeling.
+        # downstream order: lookdev before modeling.
         self.assertLess(root.index("lookdev/publish"), root.index("modeling/publish"))
-        # chemin de subLayer relatif a l'entite (le root vit a sa racine).
+        # subLayer path relative to the entity (the root lives at its root).
         self.assertIn(
             "@modeling/publish/CHARACTER_Lina_Default_modeling_v001/"
             "CHARACTER_Lina_Default_modeling_v001.usda@", root)
@@ -168,7 +168,7 @@ class AssetRecompositionTestCase(_BaseCase):
 
 
 class ShotRecompositionTestCase(_BaseCase):
-    """finalize_publish_version(kind=step) sur un shot recompose shot_root.usda."""
+    """finalize_publish_version(kind=step) on a shot recomposes shot_root.usda."""
 
     def test_step_publish_creates_shot_root(self):
         self._publish_step("ANIMATION_Sq010_Default", "animation")
@@ -178,14 +178,14 @@ class ShotRecompositionTestCase(_BaseCase):
         out = self._read(shot_root)
         self.assertIn('defaultPrim = "ROOT"', out)
         self.assertLess(out.index("lighting/publish"), out.index("animation/publish"))
-        # depuis schema 2.1 (Increment 2) un shot nait avec un frame_range par defaut
-        # (1001-1100) -> timecodes presents dans le shot_root recompose.
+        # since schema 2.1 (Increment 2) a shot is born with a default frame_range
+        # (1001-1100) -> timecodes present in the recomposed shot_root.
         self.assertIn("startTimeCode = 1001", out)
         self.assertIn("endTimeCode = 1100", out)
 
     def test_refresh_with_frame_range_writes_timecodes(self):
-        # frame_range surcharge a la main (le defaut 2.1 pose 1001-1100@24) :
-        # refresh_entity_root doit consommer la valeur presente au manifeste.
+        # frame_range overridden by hand (the 2.1 default sets 1001-1100@24):
+        # refresh_entity_root must consume the value present in the manifest.
         manifest_path = self._shot_dir("ANIMATION_Sq010_Default") / cp.ASSET_MANIFEST_NAME
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["frame_range"] = {"start": 1010, "end": 1042, "fps": 25}
@@ -199,7 +199,7 @@ class ShotRecompositionTestCase(_BaseCase):
 
 
 class LopLeavesRootIntactTestCase(_BaseCase):
-    """Un publish kind='lop' ne recompose JAMAIS le root (hors taxonomie de steps)."""
+    """A kind='lop' publish NEVER recomposes the root (outside the steps taxonomy)."""
 
     def test_lop_publish_does_not_touch_asset_root(self):
         asset_root = self._asset_dir("CHARACTER_Lina_Default") / cp.ASSET_ROOT_NAME
@@ -213,7 +213,7 @@ class LopLeavesRootIntactTestCase(_BaseCase):
         (staging / cp.LOP_THUMB_NAME).write_bytes(b"x")
         cp.finalize_publish_version(self.project, "CHARACTER_Lina_Default", staging, final,
                                     version, expected_artifacts=[stem, cp.LOP_THUMB_NAME])
-        # root inchange (stub d'origine, subLayers vides) : le LOP n'entre pas en composition.
+        # root unchanged (original stub, empty subLayers): the LOP does not enter composition.
         self.assertEqual(self._read(asset_root), before)
 
 

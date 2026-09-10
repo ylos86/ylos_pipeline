@@ -37,12 +37,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import create_project as cp   # reutilise constantes + validate_manifest (logique unique)
+import create_project as cp   # reuses constants + validate_manifest (single logic)
 
-# Sous-types metier pour les entites dont le 'type' valait 'asset' (a confirmer)
+# Business subtypes for entities whose 'type' was 'asset' (to be confirmed)
 TYPE_OVERRIDES_DEFAULT = {"lecube": "PROP", "montains": "ENVIRONMENT"}
 USD_EXTS = (".usd", ".usda", ".usdc")
-# Ordre pipeline (amont -> aval) pour ranger manifest.steps
+# Pipeline order (upstream -> downstream) to sort manifest.steps
 CANONICAL_STEP_ORDER = ["modeling", "uvs", "rigging", "lookdev", "fx",
                         "layout", "animation", "lighting", "render", "composite"]
 _VER_RE = re.compile(r"_v(\d+)\.")
@@ -54,7 +54,7 @@ def _now():
 
 
 def _iso(value):
-    """Normalise une date legacy ('YYYY-MM-DD' ou datetime) en ISO UTC."""
+    """Normalizes a legacy date ('YYYY-MM-DD' or datetime) to ISO UTC."""
     if not value:
         return _now()
     try:
@@ -67,7 +67,7 @@ def _iso(value):
 
 
 def detect_ext(path):
-    """Extension honnete selon le format reel du fichier USD (magic-byte)."""
+    """Honest extension based on the USD file's real format (magic-byte)."""
     with open(path, "rb") as f:
         head = f.read(8)
     if head.startswith(b"#usda"):
@@ -196,7 +196,7 @@ def recompose_asset_root(entity_dir, name, steps, rename_log, dry):
 
 
 # --------------------------------------------------------------------------------------
-# Entite (asset/set/shot)
+# Entity (asset/set/shot)
 # --------------------------------------------------------------------------------------
 
 def _conform_name(name, sub_type):

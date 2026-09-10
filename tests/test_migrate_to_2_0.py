@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-tests/test_migrate_to_2_0.py — tests stdlib (unittest) pour migrate_to_2.0.py.
+tests/test_migrate_to_2_0.py — stdlib tests (unittest) for migrate_to_2.0.py.
 
-Couvre le renommage a la convention TYPE_Nom_Variant pendant la migration : sans lui,
-une entite legacy migre mais tout publish LOP echoue a validate_publish_asset_name —
-un mur silencieux. Verifie aussi le chemin 'type invalide' (warning actionnable, pas de
-renommage), le dry-run, et la publiabilite LOP effective post-migration (end-to-end).
+Covers the rename to the TYPE_Name_Variant convention during migration: without it,
+a legacy entity migrates but any LOP publish fails validate_publish_asset_name —
+a silent wall. Also checks the 'invalid type' path (actionable warning, no
+rename), the dry-run, and the actual post-migration LOP publishability (end-to-end).
 
-Usage : python3 tests/test_migrate_to_2_0.py
-     ou : python3 -m unittest tests.test_migrate_to_2_0
+Usage: python3 tests/test_migrate_to_2_0.py
+    or: python3 -m unittest tests.test_migrate_to_2_0
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 import create_project as cp  # noqa: E402
 
-# 'migrate_to_2.0.py' contient un point -> non importable par nom, chargement explicite.
+# 'migrate_to_2.0.py' contains a dot -> not importable by name, explicit loading.
 _spec = importlib.util.spec_from_file_location("migrate_to_2_0", _REPO_ROOT / "migrate_to_2.0.py")
 mig = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mig)
@@ -37,11 +37,11 @@ def _write_json(path, data):
 
 
 class LegacyProjectTestCase(unittest.TestCase):
-    """Projet legacy synthetique (pre-schema_version) reconstruit pour chaque test."""
+    """Synthetic legacy project (pre-schema_version) rebuilt for each test."""
 
     def setUp(self):
-        # .resolve() : migrate() resout le chemin projet (macOS : /var -> /private/var),
-        # les chemins du rapport doivent se comparer a la meme forme resolue.
+        # .resolve(): migrate() resolves the project path (macOS: /var -> /private/var),
+        # the report's paths must compare against the same resolved form.
         self._tmp = Path(tempfile.mkdtemp(prefix="ylos_mig_test_")).resolve()
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
         self.project = self._tmp / "LegacyProj"
@@ -70,8 +70,8 @@ class LegacyProjectTestCase(unittest.TestCase):
 
 
 class TestRenameToConvention(LegacyProjectTestCase):
-    """Le coeur du fix : 'lecube' (type legacy 'asset', override PROP) devient
-    PROP_Lecube_Default, publiable."""
+    """The core of the fix: 'lecube' (legacy type 'asset', override PROP) becomes
+    PROP_Lecube_Default, publishable."""
 
     def setUp(self):
         super().setUp()
@@ -88,14 +88,14 @@ class TestRenameToConvention(LegacyProjectTestCase):
         self.assertEqual(manifest["name"], "PROP_Lecube_Default")
         self.assertEqual(manifest["type"], "PROP")
         self.assertEqual(manifest["schema_version"], cp.SCHEMA_VERSION)
-        # La garantie du contrat : le nom migre passe la validation de creation.
+        # The contract guarantee: the migrated name passes creation validation.
         self.assertTrue(cp.validate_entity_name("PROP_Lecube_Default", "asset", "PROP"))
 
     def test_publish_stems_renamed_wip_untouched(self):
         pub = self.new_dir / "modeling" / "publish"
         self.assertTrue((pub / "PROP_Lecube_Default_modeling_v001.usda").is_file())
         self.assertFalse((pub / "lecube_modeling_v001.usda").exists())
-        # wip/ jamais touche : la detection de version Blender est agnostique au nom.
+        # wip/ never touched: Blender's version detection is name-agnostic.
         self.assertTrue((self.new_dir / "modeling" / "wip" / "lecube_modeling_v001.blend").is_file())
 
     def test_manifest_publishes_and_asset_root_point_to_renamed_files(self):
@@ -114,7 +114,7 @@ class TestRenameToConvention(LegacyProjectTestCase):
         self.assertIn(str(self.new_dir), renamed_paths)
 
     def test_migrated_asset_is_lop_publishable(self):
-        # Le test qui prouve que le mur est tombe : allocate LOP passe la validation.
+        # The test that proves the wall is gone: allocate LOP passes validation.
         staging, final = cp.allocate_publish_version(
             self.project, "PROP_Lecube_Default", "PROP", comment="post-migration")
         self.assertTrue(staging.is_dir())
@@ -122,16 +122,16 @@ class TestRenameToConvention(LegacyProjectTestCase):
 
 
 class TestInvalidTypeIsLoud(LegacyProjectTestCase):
-    """Type invalide pour la famille (ex ENVIRONMENT) : jamais un mur silencieux."""
+    """Invalid type for the family (e.g. ENVIRONMENT): never a silent wall."""
 
     def test_warning_actionable_and_no_rename(self):
         self._add_legacy_entity("montains")
-        report = mig.migrate(self.project)  # defauts : montains -> ENVIRONMENT (invalide)
+        report = mig.migrate(self.project)  # defaults: montains -> ENVIRONMENT (invalid)
         self.assertTrue((self.project / "assets" / "montains").is_dir())
         warning = next(w for w in report["warnings"] if "montains" in w)
         self.assertIn("ENVIRONMENT", warning)
         self.assertIn("--type-override", warning)
-        # L'entite est quand meme migree (schema 2.0), juste pas renommee.
+        # The entity is migrated anyway (schema 2.0), just not renamed.
         manifest = json.loads(
             (self.project / "assets" / "montains" / "manifest.json").read_text())
         self.assertEqual(manifest["schema_version"], cp.SCHEMA_VERSION)
@@ -152,7 +152,7 @@ class TestRenameEdgeCases(LegacyProjectTestCase):
         self.assertTrue((self.project / "assets" / "PROP_Tente_Default").is_dir())
         entity = report["entities"][0]
         self.assertNotIn("renamed_from", entity)
-        # Ses publishes gardent leur stem (deja conforme).
+        # Its publishes keep their stem (already conforming).
         pub = self.project / "assets" / "PROP_Tente_Default" / "modeling" / "publish"
         self.assertTrue((pub / "PROP_Tente_Default_modeling_v001.usda").is_file())
 
@@ -174,10 +174,10 @@ class TestRenameEdgeCases(LegacyProjectTestCase):
         entity_dir = self.project / "assets" / "lecube"
         self.assertTrue(entity_dir.is_dir())
         self.assertTrue((entity_dir / "modeling" / "publish" / "lecube_modeling_v001.usda").is_file())
-        # Manifeste non reecrit (toujours legacy, sans schema_version).
+        # Manifest not rewritten (still legacy, without schema_version).
         manifest = json.loads((entity_dir / "manifest.json").read_text())
         self.assertNotIn("schema_version", manifest)
-        # Mais le rapport annonce le renommage projete.
+        # But the report announces the projected rename.
         planned = [r["to"] for r in report["renames"]]
         self.assertIn(str(self.project / "assets" / "PROP_Lecube_Default"), planned)
 
