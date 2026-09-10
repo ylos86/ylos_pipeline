@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-tests/test_ylos_houdini.py — tests stdlib (unittest) pour le bridge Houdini
+tests/test_ylos_houdini.py — stdlib tests (unittest) for the Houdini bridge
 plugins/houdini/python/ylos_houdini.py.
 
-Contrainte CI (cf. docstring du module et CLAUDE.md) : le bridge est importable SANS hou
-ni licence Houdini. On ne teste ici QUE les fonctions pures (hip_extension,
+CI constraint (see the module docstring and CLAUDE.md): the bridge is importable WITHOUT hou
+nor a Houdini license. Here we test ONLY the pure functions (hip_extension,
 parse_wip_context, list_wip_versions, next_wip_path, list_entities, latest_lop_publish,
-env_relative) - aucun appel a une action hou. Le simple import du module verrouille
-l'absence d'`import hou` top-level (une machine CI n'a pas hou installe).
+env_relative) - no call to a hou action. Merely importing the module locks in
+the absence of a top-level `import hou` (a CI machine has no hou installed).
 
-Le dossier plugins/houdini/python n'est pas un package -> import par chemin
-(importlib.util, meme pattern que tests/test_migrate_to_2_0.py).
+The plugins/houdini/python folder is not a package -> import by path
+(importlib.util, same pattern as tests/test_migrate_to_2_0.py).
 
-Usage : python3 tests/test_ylos_houdini.py
-     ou : python3 -m unittest tests.test_ylos_houdini
+Usage: python3 tests/test_ylos_houdini.py
+    or: python3 -m unittest tests.test_ylos_houdini
 """
 from __future__ import annotations
 
@@ -31,27 +31,27 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 import create_project as cp  # noqa: E402
 
-# plugins/houdini/python n'est pas un package -> chargement explicite par chemin.
+# plugins/houdini/python is not a package -> explicit loading by path.
 _MODULE_PATH = _REPO_ROOT / "plugins" / "houdini" / "python" / "ylos_houdini.py"
 _spec = importlib.util.spec_from_file_location("ylos_houdini", _MODULE_PATH)
 yh = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(yh)  # leve si un `import hou` top-level existait -> garde CI
+_spec.loader.exec_module(yh)  # raises if a top-level `import hou` existed -> CI guard
 
 
 class ImportableWithoutHouTestCase(unittest.TestCase):
-    """Le bridge doit se charger sans hou (contrainte CI) - le module s'est deja importe
-    au niveau fichier ; on verrouille explicitement qu'aucun hou n'a ete tire."""
+    """The bridge must load without hou (CI constraint) - the module has already imported
+    at file level; we explicitly lock in that no hou was pulled."""
 
-    def test_import_ne_tire_pas_hou(self):
-        # exec_module ci-dessus a reussi ; s'il avait fait `import hou` top-level, il aurait
-        # leve ModuleNotFoundError sur une machine sans Houdini (la CI).
+    def test_import_does_not_pull_hou(self):
+        # exec_module above succeeded; had it done a top-level `import hou`, it would have
+        # raised ModuleNotFoundError on a machine without Houdini (the CI).
         self.assertFalse("hou" in sys.modules,
-                         "ylos_houdini ne doit jamais importer hou au niveau module")
+                         "ylos_houdini must never import hou at module level")
         self.assertTrue(hasattr(yh, "hip_extension"))
 
 
 class HipExtensionTestCase(unittest.TestCase):
-    """Extension de save selon la licence, injectee (jamais lue de hou dans les tests)."""
+    """Save extension based on the license, injected (never read from hou in the tests)."""
 
     def test_commercial(self):
         self.assertEqual(yh.hip_extension("Commercial"), ".hip")
@@ -59,14 +59,14 @@ class HipExtensionTestCase(unittest.TestCase):
     def test_indie(self):
         self.assertEqual(yh.hip_extension("Indie"), ".hiplc")
 
-    def test_apprentice_et_inconnu_tombent_sur_hipnc(self):
+    def test_apprentice_and_unknown_fall_back_to_hipnc(self):
         self.assertEqual(yh.hip_extension("Apprentice"), ".hipnc")
         self.assertEqual(yh.hip_extension("Education"), ".hipnc")
-        self.assertEqual(yh.hip_extension("QuelqueChoseInconnu"), ".hipnc")
+        self.assertEqual(yh.hip_extension("SomethingUnknown"), ".hipnc")
 
 
 class EnvRelativeTestCase(unittest.TestCase):
-    """$PROJ_ROOT/<relatif> quand le chemin vit sous $PROJ_ROOT, absolu sinon."""
+    """$PROJ_ROOT/<relative> when the path lives under $PROJ_ROOT, absolute otherwise."""
 
     def setUp(self):
         self._tmp = Path(tempfile.mkdtemp(prefix="ylos_hou_env_")).resolve()
@@ -80,54 +80,54 @@ class EnvRelativeTestCase(unittest.TestCase):
         else:
             os.environ[cp.ENV_ROOT] = self._saved_env
 
-    def test_sous_proj_root_devient_variable(self):
+    def test_under_proj_root_becomes_variable(self):
         os.environ[cp.ENV_ROOT] = str(self._tmp)
         target = self._tmp / "assets" / "CHARACTER_Lina_Default" / "asset_root.usda"
         self.assertEqual(yh.env_relative(target),
                          "$PROJ_ROOT/assets/CHARACTER_Lina_Default/asset_root.usda")
 
-    def test_sans_proj_root_reste_absolu(self):
+    def test_without_proj_root_stays_absolute(self):
         os.environ.pop(cp.ENV_ROOT, None)
         target = self._tmp / "x.usda"
         self.assertEqual(yh.env_relative(target), str(target))
 
-    def test_hors_proj_root_reste_absolu(self):
+    def test_outside_proj_root_stays_absolute(self):
         os.environ[cp.ENV_ROOT] = str(self._tmp / "somewhere")
-        other = self._tmp / "ailleurs" / "y.usda"
+        other = self._tmp / "elsewhere" / "y.usda"
         self.assertEqual(yh.env_relative(other), str(other))
 
 
 class CacheDirExpressionTestCase(unittest.TestCase):
-    """Increment 5 : expression litterale $PROJ_CACHE/<projet>/houdini/<entite>/<step>/ posee
-    sur le basedir d'un filecache (relocalisable, variable non resolue). Pure, sans hou."""
+    """Increment 5: literal expression $PROJ_CACHE/<project>/houdini/<entity>/<step>/ set
+    on a filecache's basedir (relocatable, variable unresolved). Pure, without hou."""
 
-    def test_expression_litterale_relocalisable(self):
+    def test_literal_expression_relocatable(self):
         expr = yh.cache_dir_expression("/vol/ext/MyProj", "FX_Sq010_Default", "fx")
         self.assertEqual(expr, "$PROJ_CACHE/MyProj/houdini/FX_Sq010_Default/fx/")
-        # la variable reste litterale : aucun chemin absolu resolu ne fuit dans l'expression.
+        # the variable stays literal: no resolved absolute path leaks into the expression.
         self.assertNotIn("/vol/ext", expr)
 
 
 class RenderOutputExpressionTestCase(unittest.TestCase):
-    """Increment 6 : expression litterale du fichier EXR de sortie ($PROJ_CACHE + $F4),
-    posee sur 'outputimage' du usdrender_rop (relocalisable, variable non resolue). Pure."""
+    """Increment 6: literal expression of the output EXR file ($PROJ_CACHE + $F4),
+    set on 'outputimage' of the usdrender_rop (relocatable, variable unresolved). Pure."""
 
-    def test_expression_litterale_avec_f4(self):
+    def test_literal_expression_with_f4(self):
         expr = yh.render_output_expression("/vol/ext/MyProj", "SHOT_Sq010_Default",
                                            "lighting", 3)
         self.assertEqual(
             expr,
             "$PROJ_CACHE/MyProj/render/SHOT_Sq010_Default/lighting/v003/"
             "SHOT_Sq010_Default_lighting_v003.$F4.exr")
-        # ni le chemin absolu resolu ni un numero de frame en dur ne fuient dans l'expression.
+        # neither the resolved absolute path nor a hard-coded frame number leaks into the expression.
         self.assertNotIn("/vol/ext", expr)
         self.assertIn("$F4", expr)
 
 
 class RenderCacheTestCase(unittest.TestCase):
-    """Increment 6 : next_render_version (scan disque du tier cache, +1) et deliver_render
-    (copie explicite vers delivery/, refus si vide). Le tier cache est resolu via
-    create_project.resolve_cache -> $PROJ_CACHE doit etre pose (comme en prod)."""
+    """Increment 6: next_render_version (disk scan of the cache tier, +1) and deliver_render
+    (explicit copy to delivery/, refusal if empty). The cache tier is resolved via
+    create_project.resolve_cache -> $PROJ_CACHE must be set (as in prod)."""
 
     def setUp(self):
         self._tmp = Path(tempfile.mkdtemp(prefix="ylos_hou_render_")).resolve()
@@ -152,29 +152,29 @@ class RenderCacheTestCase(unittest.TestCase):
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def test_next_render_version_aucun_rendu(self):
+    def test_next_render_version_no_render(self):
         self.assertEqual(
             yh.next_render_version(self.project, "ANIMATION_Sq010_Default", "lighting"), 1)
 
-    def test_next_render_version_incremente_max_disque(self):
+    def test_next_render_version_increments_disk_max(self):
         self._render_version_dir("lighting", 1)
-        self._render_version_dir("lighting", 3)  # trou : max+1, pas count+1
+        self._render_version_dir("lighting", 3)  # gap: max+1, not count+1
         (self._render_version_dir("lighting", 3)
          / "img.0001.exr").write_text("", encoding="utf-8")
         self.assertEqual(
             yh.next_render_version(self.project, "ANIMATION_Sq010_Default", "lighting"), 4)
-        # un autre step est independant.
+        # another step is independent.
         self.assertEqual(
             yh.next_render_version(self.project, "ANIMATION_Sq010_Default", "fx"), 1)
 
-    def test_list_render_versions_ignore_non_vNNN(self):
+    def test_list_render_versions_ignores_non_vNNN(self):
         self._render_version_dir("lighting", 2)
         (yh.render_dir(self.project, "ANIMATION_Sq010_Default", "lighting")
-         / "notes").mkdir(parents=True, exist_ok=True)  # pas v<NNN> -> ignore
+         / "notes").mkdir(parents=True, exist_ok=True)  # not v<NNN> -> ignored
         self.assertEqual(
             yh.list_render_versions(self.project, "ANIMATION_Sq010_Default", "lighting"), [2])
 
-    def test_deliver_render_copie_vers_delivery(self):
+    def test_deliver_render_copies_to_delivery(self):
         vdir = self._render_version_dir("lighting", 2)
         (vdir / "SHOT_lighting_v002.0001.exr").write_text("exr", encoding="utf-8")
         (vdir / "SHOT_lighting_v002.0002.exr").write_text("exr", encoding="utf-8")
@@ -185,9 +185,9 @@ class RenderCacheTestCase(unittest.TestCase):
         self.assertTrue((expected / "SHOT_lighting_v002.0001.exr").is_file())
         self.assertTrue((expected / "SHOT_lighting_v002.0002.exr").is_file())
 
-    def test_deliver_render_steps_ne_fusionnent_pas(self):
-        # deux steps a la meme version -> chemins de livraison distincts (le <step> les
-        # separe), aucun ecrasement silencieux via copytree dirs_exist_ok.
+    def test_deliver_render_steps_do_not_merge(self):
+        # two steps at the same version -> distinct delivery paths (the <step> separates
+        # them), no silent overwrite via copytree dirs_exist_ok.
         for step in ("lighting", "fx"):
             vdir = self._render_version_dir(step, 1)
             (vdir / f"{step}.0001.exr").write_text(step, encoding="utf-8")
@@ -197,19 +197,19 @@ class RenderCacheTestCase(unittest.TestCase):
         self.assertTrue((Path(d_light) / "lighting.0001.exr").is_file())
         self.assertTrue((Path(d_fx) / "fx.0001.exr").is_file())
 
-    def test_deliver_render_refuse_source_absente(self):
+    def test_deliver_render_refuses_missing_source(self):
         with self.assertRaises(FileNotFoundError):
             yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "lighting", 9)
 
-    def test_deliver_render_refuse_source_vide(self):
-        self._render_version_dir("lighting", 1)  # dossier v001 cree mais vide
+    def test_deliver_render_refuses_empty_source(self):
+        self._render_version_dir("lighting", 1)  # v001 folder created but empty
         with self.assertRaises(FileNotFoundError):
             yh.deliver_render(self.project, "ANIMATION_Sq010_Default", "lighting", 1)
 
 
 class RealProjectTestCase(unittest.TestCase):
-    """Projet + entites reels (create()/create_asset()) - pour tout ce qui lit un
-    project.json / manifest.json sur disque : parse_wip_context, list_wip_versions,
+    """Real project + entities (create()/create_asset()) - for everything that reads a
+    project.json / manifest.json on disk: parse_wip_context, list_wip_versions,
     next_wip_path, list_entities, latest_lop_publish."""
 
     def setUp(self):
@@ -217,7 +217,7 @@ class RealProjectTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
         info = cp.create("Proj", root=self._tmp / "src", cache=self._tmp / "cache")
         self.project = Path(info["source"])
-        # un asset (steps modeling/rigging/lookdev/fx) et un shot (animation/fx/lighting/comp)
+        # one asset (steps modeling/rigging/lookdev/fx) and one shot (animation/fx/lighting/comp)
         cp.create_asset(self.project, "CHARACTER_Lina_Default",
                         entity_type="asset", asset_type="CHARACTER")
         cp.create_asset(self.project, "ANIMATION_Sq010_Default",
@@ -225,7 +225,7 @@ class RealProjectTestCase(unittest.TestCase):
 
     # -- parse_wip_context --------------------------------------------------------------
 
-    def test_parse_wip_context_chemin_conforme(self):
+    def test_parse_wip_context_conforming_path(self):
         hip = (self.project / "shots" / "ANIMATION_Sq010_Default" / "animation" / "wip"
                / "ANIMATION_Sq010_Default_animation_v001.hipnc")
         ctx = yh.parse_wip_context(hip)
@@ -235,18 +235,18 @@ class RealProjectTestCase(unittest.TestCase):
         self.assertEqual(entity_name, "ANIMATION_Sq010_Default")
         self.assertEqual(step, "animation")
 
-    def test_parse_wip_context_hors_projet(self):
-        # bonne forme lexicale mais aucun _pipeline/project.json a la racine deduite.
+    def test_parse_wip_context_outside_project(self):
+        # good lexical form but no _pipeline/project.json at the deduced root.
         hip = (self._tmp / "assets" / "CHARACTER_Lina_Default" / "modeling" / "wip"
                / "x_v001.hipnc")
         self.assertIsNone(yh.parse_wip_context(hip))
 
-    def test_parse_wip_context_famille_inconnue(self):
+    def test_parse_wip_context_unknown_family(self):
         hip = (self.project / "foobar" / "CHARACTER_Lina_Default" / "modeling" / "wip"
                / "x_v001.hipnc")
         self.assertIsNone(yh.parse_wip_context(hip))
 
-    def test_parse_wip_context_pas_dans_wip(self):
+    def test_parse_wip_context_not_in_wip(self):
         hip = (self.project / "assets" / "CHARACTER_Lina_Default" / "modeling"
                / "publish" / "x_v001.hipnc")
         self.assertIsNone(yh.parse_wip_context(hip))
@@ -258,20 +258,20 @@ class RealProjectTestCase(unittest.TestCase):
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def test_list_wip_versions_extensions_melangees(self):
+    def test_list_wip_versions_mixed_extensions(self):
         wip = self._wip_dir("assets", "CHARACTER_Lina_Default", "modeling")
         (wip / "CHARACTER_Lina_Default_modeling_v001.hip").write_text("", encoding="utf-8")
         (wip / "CHARACTER_Lina_Default_modeling_v002.hiplc").write_text("", encoding="utf-8")
         (wip / "CHARACTER_Lina_Default_modeling_v003.hipnc").write_text("", encoding="utf-8")
-        (wip / "notes.txt").write_text("", encoding="utf-8")  # ignore (pas de _vNNN.hip*)
+        (wip / "notes.txt").write_text("", encoding="utf-8")  # ignored (no _vNNN.hip*)
         versions = yh.list_wip_versions(self.project, "CHARACTER_Lina_Default", "modeling")
         self.assertEqual([v["version"] for v in versions], [1, 2, 3])
 
-    def test_list_wip_versions_vide(self):
+    def test_list_wip_versions_empty(self):
         self.assertEqual(
             yh.list_wip_versions(self.project, "CHARACTER_Lina_Default", "modeling"), [])
 
-    def test_next_wip_path_incremente_max_disque(self):
+    def test_next_wip_path_increments_disk_max(self):
         wip = self._wip_dir("assets", "CHARACTER_Lina_Default", "modeling")
         (wip / "CHARACTER_Lina_Default_modeling_v001.hip").write_text("", encoding="utf-8")
         (wip / "CHARACTER_Lina_Default_modeling_v002.hipnc").write_text("", encoding="utf-8")
@@ -281,14 +281,14 @@ class RealProjectTestCase(unittest.TestCase):
         self.assertEqual(Path(path).name, "CHARACTER_Lina_Default_modeling_v003.hip")
         self.assertEqual(Path(path).parent, wip)
 
-    def test_next_wip_path_premiere_version(self):
+    def test_next_wip_path_first_version(self):
         _, version = yh.next_wip_path(self.project, "ANIMATION_Sq010_Default", "animation",
                                       license_category="Apprentice")
         self.assertEqual(version, 1)
 
-    def test_next_wip_path_step_invalide(self):
+    def test_next_wip_path_invalid_step(self):
         with self.assertRaises(ValueError):
-            yh.next_wip_path(self.project, "CHARACTER_Lina_Default", "step_bidon",
+            yh.next_wip_path(self.project, "CHARACTER_Lina_Default", "bogus_step",
                              license_category="Commercial")
 
     # -- list_entities ------------------------------------------------------------------
@@ -310,7 +310,7 @@ class RealProjectTestCase(unittest.TestCase):
         manifest[cp.LOP_PUBLISHES_KEY] = entries
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    def test_latest_lop_publish_ignore_pending(self):
+    def test_latest_lop_publish_ignores_pending(self):
         self._set_lop_publishes("CHARACTER_Lina_Default", [
             {"version": 1, "status": "complete", "layer": "lop/publish/v001/lina_v001.usdnc"},
             {"version": 2, "status": "complete", "layer": "lop/publish/v002/lina_v002.usdnc"},
@@ -321,7 +321,7 @@ class RealProjectTestCase(unittest.TestCase):
                     / "lop/publish/v002/lina_v002.usdnc")
         self.assertEqual(Path(got), expected)
 
-    def test_latest_lop_publish_aucun(self):
+    def test_latest_lop_publish_none(self):
         self.assertIsNone(
             yh.latest_lop_publish(self.project, "CHARACTER_Lina_Default"))
 
@@ -333,7 +333,7 @@ class RealProjectTestCase(unittest.TestCase):
         manifest[cp.STEP_PUBLISHES_KEY] = step_publishes
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    def test_latest_step_publish_ignore_pending(self):
+    def test_latest_step_publish_ignores_pending(self):
         self._set_step_publishes("shots", "ANIMATION_Sq010_Default", {
             "animation": [
                 {"version": 1, "status": "complete",
@@ -349,11 +349,11 @@ class RealProjectTestCase(unittest.TestCase):
                     / "animation/publish/v002/anim_v002.usdnc")
         self.assertEqual(Path(got), expected)
 
-    def test_latest_step_publish_aucun_et_step_absent(self):
-        # step jamais publie -> None
+    def test_latest_step_publish_none_and_step_absent(self):
+        # step never published -> None
         self.assertIsNone(
             yh.latest_step_publish(self.project, "ANIMATION_Sq010_Default", "animation"))
-        # step present mais que des 'pending' -> None aussi
+        # step present but only 'pending' ones -> None too
         self._set_step_publishes("shots", "ANIMATION_Sq010_Default", {
             "lighting": [
                 {"version": 1, "status": "pending",
@@ -365,7 +365,7 @@ class RealProjectTestCase(unittest.TestCase):
 
     # -- shot_root_path -----------------------------------------------------------------
 
-    def test_shot_root_path_absent_leve(self):
+    def test_shot_root_path_absent_raises(self):
         with self.assertRaises(FileNotFoundError):
             yh.shot_root_path(self.project, "ANIMATION_Sq010_Default")
 

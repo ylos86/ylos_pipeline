@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-tests/test_ylos_ui.py — tests stdlib (unittest) pour ylos_ui.py.
+tests/test_ylos_ui.py — stdlib tests (unittest) for ylos_ui.py.
 
-Couvre :
-  - la garde d'origine (anti drive-by localhost) : tout Origin hors allowed_origins
-    rejete en 403 AVANT tout traitement — y compris 'Origin: null' (file:// mais aussi
-    iframe sandboxee hostile). Sans Origin (curl, navigation directe) : passe.
-  - /api/config : source unique types/steps (create_project.py), steps surcharges par
-    le pipeline du projet actif.
-  - /thumb/ : garde anti path-traversal ('..' interdit sur tout le chemin, asset_name
-    compris), chemin legitime deux-phases servi.
-  - _build_launch_argv : fonction pure de construction d'argv (INC-3).
-  - POST /api/open-blender : resolution 100% serveur (create_project), jamais de chemin
-    envoye par le client — regression du bug (segment 'assets/<entite>' manquant sur une
-    concatenation naive project_root + rel) et verification qu'Importer cible la version
-    EXACTE demandee, jamais 'latest'.
+Covers:
+  - the origin gate (anti localhost drive-by): any Origin outside allowed_origins
+    rejected with 403 BEFORE any processing — including 'Origin: null' (file:// but also
+    a hostile sandboxed iframe). Without an Origin (curl, direct navigation): passes.
+  - /api/config: single source for types/steps (create_project.py), steps overridden by
+    the active project's pipeline.
+  - /thumb/: anti path-traversal gate ('..' forbidden across the whole path, asset_name
+    included), legitimate two-phase path served.
+  - _build_launch_argv: pure argv-building function (INC-3).
+  - POST /api/open-blender: 100% server-side resolution (create_project), never a path
+    sent by the client — regression of the bug (missing 'assets/<entity>' segment on a
+    naive project_root + rel concatenation) and verification that Import targets the
+    EXACT requested version, never 'latest'.
 
-Usage : python3 tests/test_ylos_ui.py
-     ou : python3 -m unittest tests.test_ylos_ui
+Usage: python3 tests/test_ylos_ui.py
+    or: python3 -m unittest tests.test_ylos_ui
 """
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ import ylos_ui  # noqa: E402
 
 
 class ServerTestCase(unittest.TestCase):
-    """Serveur réel sur port éphémère ; état ~/.ylos (actif + récents) redirigé vers un
-    tmpdir pour ne jamais toucher l'état utilisateur réel."""
+    """Real server on an ephemeral port; ~/.ylos state (active + recent) redirected to a
+    tmpdir so it never touches the real user state."""
 
     @classmethod
     def setUpClass(cls):
@@ -52,7 +52,7 @@ class ServerTestCase(unittest.TestCase):
                       ylos_ui.YlosHandler.allowed_origins, ylos_ui.YlosHandler.log_message)
         ylos_ui.RECENT_FILE = cls._tmp / "recent_projects"
         ylos_ui.ACTIVE_FILE = cls._tmp / "active_project"
-        ylos_ui.YlosHandler.log_message = lambda *a, **kw: None  # silence pendant les tests
+        ylos_ui.YlosHandler.log_message = lambda *a, **kw: None  # silence during the tests
 
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), ylos_ui.YlosHandler)
         cls.port = cls.server.server_address[1]
@@ -78,8 +78,8 @@ class ServerTestCase(unittest.TestCase):
             ylos_ui.ACTIVE_FILE.unlink()
 
     def _request(self, path, method="GET", origin=None, body=None):
-        """Retourne (status, headers, body_bytes) — les erreurs HTTP sont des réponses,
-        pas des exceptions."""
+        """Returns (status, headers, body_bytes) — HTTP errors are responses,
+        not exceptions."""
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}",
             data=json.dumps(body).encode("utf-8") if body is not None else None,
@@ -96,8 +96,8 @@ class ServerTestCase(unittest.TestCase):
             return e.code, dict(e.headers), e.read()
 
     def _raw_request(self, path):
-        """GET avec le chemin envoyé TEL QUEL (http.client) — urllib normalise les '..'
-        avant envoi, ce qui rendrait les tests de traversal inoffensifs côté client."""
+        """GET with the path sent AS-IS (http.client) — urllib normalizes the '..'
+        before sending, which would make the traversal tests harmless on the client side."""
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
             conn.request("GET", path)
@@ -117,7 +117,7 @@ class TestOriginGate(ServerTestCase):
         origin = f"http://127.0.0.1:{self.port}"
         status, headers, _ = self._request("/api/recent-projects", origin=origin)
         self.assertEqual(status, 200)
-        # Écho de l'origine exacte, jamais '*'.
+        # Echo the exact origin, never '*'.
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), origin)
         self.assertEqual(headers.get("Vary"), "Origin")
 
@@ -133,7 +133,7 @@ class TestOriginGate(ServerTestCase):
         self.assertNotIn("Access-Control-Allow-Origin", headers)
 
     def test_null_origin_rejected(self):
-        # 'null' = file:// mais aussi iframe sandboxée hostile : jamais de confiance.
+        # 'null' = file:// but also a hostile sandboxed iframe: never trusted.
         status, _, _ = self._request("/api/recent-projects", origin="null")
         self.assertEqual(status, 403)
 
@@ -150,18 +150,18 @@ class TestOriginGate(ServerTestCase):
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), origin)
 
     def test_post_untrusted_origin_gated_before_handler(self):
-        # Une 'simple request' cross-site exécuterait ses effets de bord malgré CORS :
-        # la garde doit répondre 403 (et non 400 'dossier introuvable', qui prouverait
-        # que le handler a tourné).
+        # A cross-site 'simple request' would run its side effects despite CORS:
+        # the gate must respond 403 (and not 400 'folder not found', which would prove
+        # the handler ran).
         status, _, _ = self._request("/api/set-project", origin="https://evil.example",
                                      body={"path": "/nonexistent_ylos_test_dir"})
         self.assertEqual(status, 403)
 
 
 class TestApiConfig(ServerTestCase):
-    """/api/config : types depuis create_project.py (source unique, consommée par
-    app.html::loadConfig à la place de son ancien FAMILY_CONFIG codé en dur), steps
-    surchargés par le pipeline du projet actif."""
+    """/api/config: types from create_project.py (single source, consumed by
+    app.html::loadConfig instead of its old hard-coded FAMILY_CONFIG), steps
+    overridden by the active project's pipeline."""
 
     def tearDown(self):
         self._clear_active()
@@ -188,16 +188,16 @@ class TestApiConfig(ServerTestCase):
         self.assertEqual(status, 200)
         families = json.loads(body)["families"]
         self.assertEqual(families["asset"]["steps"], ["modeling", "uvs", "lookdev"])
-        # Les types ne sont jamais surchargés : c'est le contrat de validation.
+        # Types are never overridden: that's the validation contract.
         self.assertEqual(families["asset"]["types"], cp.ASSET_TYPES)
-        # Clés set/shot non déclarées dans ce manifeste modifié : défauts du module.
+        # set/shot keys not declared in this modified manifest: module defaults.
         self.assertEqual(families["set"]["steps"], cp.DEFAULT_SET_STEPS)
 
 
 class TestAssetScenefiles(ServerTestCase):
-    """/api/asset/<name> expose 'scenefiles' (historique WIP + commentaire/user du sidecar
-    '<wip>.blend.json' écrit par ylos.save_wip, INC-4) — lecture seule, tolérante à un
-    sidecar absent/corrompu."""
+    """/api/asset/<name> exposes 'scenefiles' (WIP history + comment/user from the
+    '<wip>.blend.json' sidecar written by ylos.save_wip, INC-4) — read-only, tolerant of an
+    absent/corrupt sidecar."""
 
     @classmethod
     def setUpClass(cls):
@@ -210,14 +210,14 @@ class TestAssetScenefiles(ServerTestCase):
         wip_dir = cls.project / "assets" / "PROP_Tente_Default" / "modeling" / "wip"
         wip_dir.mkdir(parents=True, exist_ok=True)
 
-        # v001 : sidecar conforme.
+        # v001: conforming sidecar.
         (wip_dir / "PROP_Tente_Default_modeling_v001.blend").write_bytes(b"blend")
         (wip_dir / "PROP_Tente_Default_modeling_v001.blend.json").write_text(
             json.dumps({"comment": "blocking pass", "user": "seb",
                        "date": "2026-07-15T00:00:00+00:00", "blender_version": "5.1.1"}),
             encoding="utf-8")
 
-        # v002 : PAS de sidecar (WIP legacy, avant INC-4) - ne doit jamais lever.
+        # v002: NO sidecar (legacy WIP, before INC-4) - must never raise.
         (wip_dir / "PROP_Tente_Default_modeling_v002.blend").write_bytes(b"blend")
 
         cls._set_active(cls.project)
@@ -241,11 +241,11 @@ class TestAssetScenefiles(ServerTestCase):
     def test_scenefiles_absent_for_unknown_step(self):
         status, _, body = self._request("/api/asset/PROP_Tente_Default")
         data = json.loads(body)
-        self.assertNotIn("lookdev", data["scenefiles"])  # aucun WIP -> pas de cle
+        self.assertNotIn("lookdev", data["scenefiles"])  # no WIP -> no key
 
 
 class TestThumbSecurity(ServerTestCase):
-    """Garde anti path-traversal de /thumb/ + service d'un thumb deux-phases légitime."""
+    """/thumb/ anti path-traversal gate + serving a legitimate two-phase thumb."""
 
     @classmethod
     def setUpClass(cls):
@@ -276,8 +276,8 @@ class TestThumbSecurity(ServerTestCase):
         self.assertEqual(status, 400)
 
     def test_dotdot_as_asset_name_rejected(self):
-        # Régression : '..' en asset_name restait DANS le projet (containment ok) mais
-        # servait des fichiers hors contrat thumb (project.json...).
+        # Regression: '..' as asset_name stayed INSIDE the project (containment ok) but
+        # served files outside the thumb contract (project.json...).
         status, _, _ = self._raw_request("/thumb/../_pipeline/project.json")
         self.assertEqual(status, 400)
 
@@ -288,9 +288,9 @@ class TestThumbSecurity(ServerTestCase):
 
 
 class TestWebPins(ServerTestCase):
-    """Pinning web via l'API : /api/web-pins (état + disponibles), /api/pin-asset
-    (validé contre les publishes GLB réels), /api/unpin-asset (idempotent), et le
-    circuit complet pin -> set-web-target -> sync-web."""
+    """Web pinning via the API: /api/web-pins (state + available), /api/pin-asset
+    (validated against the real GLB publishes), /api/unpin-asset (idempotent), and the
+    full circuit pin -> set-web-target -> sync-web."""
 
     @classmethod
     def _publish(cls, asset_name, step, ext):
@@ -313,7 +313,7 @@ class TestWebPins(ServerTestCase):
         cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
         cls._publish("PROP_Tente_Default", "lookdev", "glb")   # v1
         cls._publish("PROP_Tente_Default", "lookdev", "glb")   # v2
-        cls._publish("PROP_Tente_Default", "modeling", "usd")  # USD : jamais pinnable
+        cls._publish("PROP_Tente_Default", "modeling", "usd")  # USD: never pinnable
         cls._set_active(cls.project)
 
     def _pins_state(self):
@@ -324,7 +324,7 @@ class TestWebPins(ServerTestCase):
     def test_available_lists_glb_only(self):
         state = self._pins_state()
         self.assertEqual(state["available"],
-                         {"PROP_Tente_Default": {"lookdev": [1, 2]}})  # pas de modeling (USD)
+                         {"PROP_Tente_Default": {"lookdev": [1, 2]}})  # no modeling (USD)
 
     def test_pin_unpin_roundtrip(self):
         status, _, _ = self._request("/api/pin-asset", method="POST",
@@ -333,7 +333,7 @@ class TestWebPins(ServerTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(self._pins_state()["pins"],
                          {"PROP_Tente_Default": {"step": "lookdev", "version": 2}})
-        # Persisté dans project.json (le contrat que sync_web_assets lit).
+        # Persisted in project.json (the contract sync_web_assets reads).
         manifest = cp.read_manifest(self.project)
         self.assertEqual(manifest["web"]["pinned_assets"]["PROP_Tente_Default"]["version"], 2)
 
@@ -341,7 +341,7 @@ class TestWebPins(ServerTestCase):
                                      body={"name": "PROP_Tente_Default"})
         self.assertEqual(status, 200)
         self.assertEqual(self._pins_state()["pins"], {})
-        # Idempotent : dé-pinner à nouveau reste un ok.
+        # Idempotent: un-pinning again stays an ok.
         status, _, _ = self._request("/api/unpin-asset", method="POST",
                                      body={"name": "PROP_Tente_Default"})
         self.assertEqual(status, 200)
@@ -351,7 +351,7 @@ class TestWebPins(ServerTestCase):
                                         body={"name": "PROP_Tente_Default",
                                               "step": "lookdev", "version": 99})
         self.assertEqual(status, 400)
-        self.assertIn("lookdev", json.loads(body)["error"])  # message liste les disponibles
+        self.assertIn("lookdev", json.loads(body)["error"])  # message lists the available ones
 
     def test_pin_usd_step_rejected(self):
         status, _, _ = self._request("/api/pin-asset", method="POST",
@@ -366,7 +366,7 @@ class TestWebPins(ServerTestCase):
         self.assertEqual(status, 400)
 
     def test_full_pin_sync_cycle(self):
-        # Le circuit complet tel que le modal l'exécute : pin -> target -> sync.
+        # The full circuit as the modal runs it: pin -> target -> sync.
         for path, payload in (
             ("/api/pin-asset", {"name": "PROP_Tente_Default", "step": "lookdev", "version": 1}),
             ("/api/set-web-target", {"target_dir": str(self._tmp / "webproj")}),
@@ -382,8 +382,8 @@ class TestWebPins(ServerTestCase):
 
 
 class TestBuildLaunchArgv(unittest.TestCase):
-    """_build_launch_argv est une fonction PURE (INC-3) : 'path' est déjà résolu par
-    l'appelant, aucune reconstruction/concaténation de chemin ici."""
+    """_build_launch_argv is a PURE function (INC-3): 'path' is already resolved by
+    the caller, no path reconstruction/concatenation here."""
 
     def test_argv_includes_project_path_kind_entity_step(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -421,10 +421,10 @@ class TestBuildLaunchArgv(unittest.TestCase):
 
 
 class TestOpenBlenderResolution(ServerTestCase):
-    """POST /api/open-blender — résolution 100% serveur (create_project), jamais de chemin
-    envoyé par le client (cf. INC-3). subprocess.Popen mocké : on vérifie le chemin RÉSOLU
-    (canonique, absolu, incluant le segment 'assets/<entité>' — c'était la cause du bug),
-    jamais une vraie instance Blender lancée pendant les tests."""
+    """POST /api/open-blender — 100% server-side resolution (create_project), never a path
+    sent by the client (see INC-3). subprocess.Popen mocked: we check the RESOLVED path
+    (canonical, absolute, including the 'assets/<entity>' segment — that was the cause of the
+    bug), never a real Blender instance launched during the tests."""
 
     @classmethod
     def _publish(cls, step, ext):
@@ -446,13 +446,13 @@ class TestOpenBlenderResolution(ServerTestCase):
         cls.project = Path(info["source"])
         cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
 
-        # WIP réel pour 'Ouvrir la scène' (kind='wip', ordre de résolution #1).
+        # Real WIP for 'Open scene' (kind='wip', resolution order #1).
         wip_dir = cls.project / "assets" / "PROP_Tente_Default" / "modeling" / "wip"
         wip_dir.mkdir(parents=True, exist_ok=True)
         cls.wip_file = wip_dir / "PROP_Tente_Default_modeling_v001.blend"
         cls.wip_file.write_bytes(b"fake blend")
 
-        # Deux versions publiées (lookdev) pour 'Importer' une version PRÉCISE (pas latest).
+        # Two published versions (lookdev) for 'Import' of a SPECIFIC version (not latest).
         cls.pub_v1 = cls._publish("lookdev", "usd")
         cls.pub_v2 = cls._publish("lookdev", "usd")
 
@@ -464,10 +464,10 @@ class TestOpenBlenderResolution(ServerTestCase):
         cls._fake_launcher.write_bytes(b"")
 
     def setUp(self):
-        # Jamais de vraie instance Blender lancee pendant les tests : Popen mocke, binaire/
-        # launcher pointes sur des fichiers factices (seul '.is_file()' compte ici). YLOS_DIR/
-        # SERVER_LOG rediriges vers le tmpdir - jamais toucher ~/.ylos reel (meme discipline
-        # que ServerTestCase pour RECENT_FILE/ACTIVE_FILE).
+        # Never a real Blender instance launched during the tests: Popen mocked, binary/
+        # launcher pointed at dummy files (only '.is_file()' matters here). YLOS_DIR/
+        # SERVER_LOG redirected to the tmpdir - never touch the real ~/.ylos (same discipline
+        # as ServerTestCase for RECENT_FILE/ACTIVE_FILE).
         self._patches = [
             patch.object(ylos_ui, "BLENDER_APP", self._fake_blender),
             patch.object(ylos_ui, "LAUNCHER", self._fake_launcher),
@@ -489,8 +489,8 @@ class TestOpenBlenderResolution(ServerTestCase):
         self.assertEqual(status, 200)
         data = json.loads(body)
         self.assertEqual(data["kind"], "wip")
-        # Régression du bug : le chemin résolu DOIT être le fichier WIP réel, segment
-        # 'assets/<entité>' inclus (une concaténation naïve project_root + rel le sautait).
+        # Regression of the bug: the resolved path MUST be the real WIP file, 'assets/<entity>'
+        # segment included (a naive project_root + rel concatenation skipped it).
         self.assertEqual(Path(data["path"]), self.wip_file)
         norm = data["path"].replace("\\", "/")
         self.assertIn("assets/PROP_Tente_Default/modeling/wip", norm)
@@ -528,11 +528,11 @@ class TestOpenBlenderResolution(ServerTestCase):
 
 
 class TestSetFrameRange(ServerTestCase):
-    """POST /api/set-frame-range : adaptateur mince vers create_project.set_frame_range
-    (validation start<end + entité=shot + écriture atomique + recompo shot_root, principe 5).
-    set_frame_range LÈVE pour un cas métier (range invalide, entité != shot, absente) → le
-    serveur mappe en 400 (entrée client), jamais 500. frame_range exposé sur /api/asset pour
-    que la web UI préremplisse son modal."""
+    """POST /api/set-frame-range: thin adapter to create_project.set_frame_range
+    (start<end validation + entity=shot + atomic write + shot_root recompo, principle 5).
+    set_frame_range RAISES for a business case (invalid range, entity != shot, absent) → the
+    server maps it to 400 (client input), never 500. frame_range exposed on /api/asset so
+    the web UI can prefill its modal."""
 
     @classmethod
     def setUpClass(cls):
@@ -542,7 +542,7 @@ class TestSetFrameRange(ServerTestCase):
         cls.project = info["source"]
         cp.create_asset(cls.project, "ANIMATION_Sh010_Default",
                         entity_type="shot", asset_type="ANIMATION")
-        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")  # pas un shot
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")  # not a shot
         cls._set_active(cls.project)
 
     def test_set_valid_persists_and_exposes(self):
@@ -552,10 +552,10 @@ class TestSetFrameRange(ServerTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["frame_range"],
                          {"start": 1010, "end": 1200, "fps": 25})
-        # Persisté dans le manifeste (source de vérité, principe 3).
+        # Persisted in the manifest (source of truth, principle 3).
         manifest = cp.resolve_entity(self.project, "ANIMATION_Sh010_Default")["manifest"]
         self.assertEqual(manifest["frame_range"], {"start": 1010, "end": 1200, "fps": 25})
-        # Exposé sur /api/asset pour préremplir le modal côté web UI.
+        # Exposed on /api/asset to prefill the modal on the web UI side.
         _, _, detail = self._request("/api/asset/ANIMATION_Sh010_Default")
         self.assertEqual(json.loads(detail)["frame_range"],
                          {"start": 1010, "end": 1200, "fps": 25})
@@ -582,7 +582,7 @@ class TestSetFrameRange(ServerTestCase):
     def test_missing_field_400(self):
         status, _, _ = self._request(
             "/api/set-frame-range", method="POST",
-            body={"entity": "ANIMATION_Sh010_Default", "start": 1001})  # 'end' manquant
+            body={"entity": "ANIMATION_Sh010_Default", "start": 1001})  # 'end' missing
         self.assertEqual(status, 400)
 
 
