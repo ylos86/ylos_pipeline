@@ -990,6 +990,117 @@ def _project_steps(project_dir, entity_type):
 
 
 # --------------------------------------------------------------------------------------
+# Scene Creator (Phase 1) - starter spec
+# --------------------------------------------------------------------------------------
+# Per-department starter rules (plan-usable-v1 Phase 1.2). Single source of truth for
+# WHAT a fresh authoring scene contains; the DCC only REALIZES the returned spec. Steps
+# are the orchestrator's own vocabulary (DEFAULT_*_STEPS); adding a step here is the only
+# edit needed to give it a starter behaviour.
+#
+# reference the entity's built assembly (shot_root/asset_root USD) for the steps that
+# CONSUME the model rather than author it (modeling/rigging build it, so no reference):
+_STARTER_ASSEMBLY_STEPS = {
+    "shot":  {"layout", "animation", "lighting", "fx", "comp"},
+    "set":   {"lookdev", "surfacing", "lighting"},
+    "asset": {"lookdev", "surfacing", "lighting"},
+}
+# a camera is created when absent for the steps that lay a shot out / animate it:
+_STARTER_CAMERA_STEPS = {"layout", "animation"}
+# a minimal lighting/turntable hint for look steps:
+_STARTER_LIGHTING_STEPS = {"lookdev", "surfacing", "lighting"}
+
+
+def scene_starter_spec(entity_name, step, dcc="blender", project_root=None):
+    """PURE, serializable description of a NEW authoring scene for entity+step in a DCC
+    (plan-usable-v1 Phase 1). The orchestrator decides WHAT the starter contains; the DCC
+    (op_create_scene in Blender, ylos_houdini in Houdini) REALIZES it. Never returns bpy/hou.
+
+    NEVER raises for a business case: returns {"ok": False, "reason": ...} for an unknown
+    entity, an unreadable manifest, or a step not declared for the entity.
+
+    On success returns {"ok": True, ...} with:
+      entity, family ('asset'|'set'|'shot'), entity_type (sub-type), step, dcc
+      wip:        {"dir", "version", "stem"[, "filename", "path" for blender]} - the next
+                  free WIP version (v001 if none): a starter is a versioned, non-destructive
+                  authoring file, never an overwrite.
+      prod_type:  read from project.json, for the DCC's scene preset (apply_scene_preset).
+      frame_range:{"start","end","fps"}|None - shots only (schema 2.1 manifest).
+      references: [{"path","rel","kind":"usd","role":"assembly","mode":"import"}] - the
+                  built assembly to pull in (empty until it exists on disk).
+      camera:     bool - create one if the scene has none (layout/animation).
+      lighting:   bool - minimal light/turntable hint (look steps).
+      context:    scene-context props for the DCC to stamp (project/entity/step/type).
+    """
+    if project_root is None:
+        return {"ok": False, "reason": "project_root is required"}
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return {"ok": False, "reason": f"entity {entity_name!r} not found (no manifest.json)"}
+
+    family      = resolved["family"]          # 'asset' | 'set' | 'shot'
+    entity_type = resolved["entity_type"]     # sub-type (CHARACTER/PROP/...)
+    entity_dir  = Path(resolved["dir"])
+    manifest    = resolved["manifest"]
+
+    declared = manifest.get("steps") or []
+    if declared and step not in declared:
+        return {"ok": False,
+                "reason": (f"step {step!r} not declared for {entity_name!r} "
+                           f"(manifest steps: {', '.join(declared)})")}
+
+    # Next free WIP version (never overwrite an existing authoring file).
+    _wip, latest_ver = _latest_wip(entity_dir, step)
+    version = latest_ver + 1
+    stem = f"{entity_name}_{step}_v{version:03d}"
+    wip = {"dir": str(entity_dir / step / "wip"), "version": version, "stem": stem}
+    if dcc == "blender":
+        wip["filename"] = stem + ".blend"
+        wip["path"] = str(entity_dir / step / "wip" / (stem + ".blend"))
+
+    # Prod type (scene preset key) - tolerant read, never fatal.
+    try:
+        prod_type = read_manifest(project_root).get("prod_type", "FILM")
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        prod_type = "FILM"
+
+    # Assembly reference: the built root USD of the entity, for steps that consume it.
+    references = []
+    if step in _STARTER_ASSEMBLY_STEPS.get(family, set()):
+        root_name = SHOT_ROOT_NAME if family == "shot" else ASSET_ROOT_NAME
+        root_path = entity_dir / root_name
+        if root_path.is_file():
+            references.append({
+                "path": str(root_path), "rel": root_name, "kind": "usd",
+                "role": "assembly", "mode": "import",
+            })
+
+    frame_range = manifest.get("frame_range") if family == "shot" else None
+
+    return {
+        "ok": True,
+        "entity": entity_name,
+        "family": family,
+        "entity_type": entity_type,
+        "step": step,
+        "dcc": dcc,
+        "wip": wip,
+        "prod_type": prod_type,
+        "frame_range": frame_range,
+        "references": references,
+        "camera": step in _STARTER_CAMERA_STEPS and family == "shot",
+        "lighting": step in _STARTER_LIGHTING_STEPS,
+        "context": {
+            "project_root": str(project_root),
+            "entity": entity_name,
+            "step": step,
+            "context_type": family.upper(),   # ASSET | SET | SHOT
+            "asset_type": entity_type,        # sub-type (CHARACTER/PROP/...)
+            "prod_type": prod_type,
+        },
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Creation - project
 # --------------------------------------------------------------------------------------
 

@@ -166,6 +166,13 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
         ver.alignment = "RIGHT"
         ver.label(text=f"v{latest_wip:03d}" if latest_wip else "none yet")
 
+        # Scene Builder — a fresh, department-contextualized authoring scene in one click.
+        # Emphasised when nothing is saved yet: this is what removes the "you must Save
+        # Version before anything exists" gap.
+        new_row = layout.row(align=True)
+        new_row.scale_y = 1.2 if not latest_wip else 1.0
+        new_row.operator("ylos.create_scene", text="New Scene", icon="FILE_NEW")
+
         if latest_wip:
             versions = list_wip_versions(
                 scene.ylos_project_path, scene.ylos_current_asset,

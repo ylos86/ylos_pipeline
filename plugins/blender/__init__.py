@@ -34,7 +34,7 @@ from . import core
 from .core import states
 from .ui import panel, panel_asset_list, menu
 from .operators import (
-    op_new_project, op_new_asset, op_save_wip, op_publish,
+    op_new_project, op_new_asset, op_save_wip, op_create_scene, op_publish,
     op_open_context, op_open_wip, op_switch_context,
     op_import_product, op_update_imports, op_asset_list, op_scene_check,
     op_state_manager, op_io, op_preview,
@@ -48,6 +48,7 @@ _classes = (
     states.YLOS_PG_ExportState,
     op_new_asset.YLOS_OT_NewAsset,
     op_save_wip.YLOS_OT_SaveWip,
+    op_create_scene.YLOS_OT_CreateScene,
     op_publish.YLOS_OT_Publish,
     op_open_context.YLOS_OT_OpenContext,
     op_open_context.YLOS_OT_OpenFolder,
