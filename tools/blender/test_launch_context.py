@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Test e2e du launcher versionne tools/blender/launch_context.py.
+"""e2e test of the versioned launcher tools/blender/launch_context.py.
 
-Ce script tourne en python3 ordinaire (stdlib + create_project) : il monte une fixture
-sur disque puis invoque REELLEMENT Blender en subprocess sur le launcher, une fois par
-mode d'ouverture, et verifie exit code + marqueur de succes + peuplement de la scene
-(objects=N loggue par le launcher AVANT de sortir).
+This script runs in plain python3 (stdlib + create_project): it builds a fixture on
+disk then ACTUALLY invokes Blender in a subprocess on the launcher, once per opening
+mode, and checks the exit code + success marker + scene population
+(objects=N logged by the launcher BEFORE exiting).
 
-Lancer :
+Run:
   BLENDER=$(which blender || echo "/Applications/Blender.app/Contents/MacOS/Blender")
   YLOS_BLENDER="$BLENDER" python3 tools/blender/test_launch_context.py
 
-Exit code != 0 en cas d'echec (assert / exception), 0 si tout passe.
+Exit code != 0 on failure (assert / exception), 0 if everything passes.
 """
 import json
 import os
@@ -28,7 +28,7 @@ if REPO_ROOT not in sys.path:
 
 LAUNCHER = os.path.join(REPO_ROOT, "tools", "blender", "launch_context.py")
 
-# Cube USD minimal ecrit a la main (un prim Mesh suffit a peupler bpy.data.objects).
+# Minimal USD cube written by hand (a single Mesh prim is enough to populate bpy.data.objects).
 CUBE_USDA = """#usda 1.0
 (
     defaultPrim = "Cube"
@@ -60,7 +60,7 @@ def _blender_bin():
 
 
 def _run_launcher(blender, log_path, extra_args):
-    """Invoque Blender --background --python launcher -- <args>. Retourne (returncode, log)."""
+    """Invokes Blender --background --python launcher -- <args>. Returns (returncode, log)."""
     cmd = [blender, "--background", "--factory-startup",
            "--python", LAUNCHER, "--"] + extra_args
     env = {**os.environ, "YLOS_LAUNCH_LOG": log_path}
@@ -80,13 +80,13 @@ def _assert_success(rc, log, label):
     if rc != 0:
         _fail(f"{label}: exit code {rc} != 0")
     if "LAUNCH SUCCESS" not in log:
-        _fail(f"{label}: marqueur 'LAUNCH SUCCESS' absent du log:\n{log}")
+        _fail(f"{label}: 'LAUNCH SUCCESS' marker missing from the log:\n{log}")
     m = re.search(r"objects=(\d+)", log)
     if not m:
-        _fail(f"{label}: aucun 'objects=N' dans le log:\n{log}")
+        _fail(f"{label}: no 'objects=N' in the log:\n{log}")
     n = int(m.group(1))
     if n <= 0:
-        _fail(f"{label}: scene vide (objects={n}) - l'import n'a rien peuple")
+        _fail(f"{label}: empty scene (objects={n}) - the import populated nothing")
     print(f"ok  {label}: exit 0, LAUNCH SUCCESS, objects={n}")
 
 
@@ -120,10 +120,10 @@ with open({out_json!r}, "w") as fh:
 
 
 def _publish_glb_fixture(blender, project_dir, entity, step, work):
-    """Genere un VRAI .glb (pipeline_target='web') via le pipeline de publish reel (bpy.ops.
-    ylos.publish, meme chemin que le bouton Publish), pas un fichier ecrit a la main - le GLB
-    est un format binaire, contrairement au cube USDA en dur utilise pour les autres
-    invocations. Retourne le chemin absolu de l'artefact publie."""
+    """Generates a REAL .glb (pipeline_target='web') via the real publish pipeline (bpy.ops.
+    ylos.publish, same path as the Publish button), not a hand-written file - the GLB is a
+    binary format, unlike the hard-coded USDA cube used for the other invocations. Returns
+    the absolute path of the published artifact."""
     script_path = os.path.join(work, "publish_glb_fixture.py")
     out_json = os.path.join(work, "glb_fixture.json")
     with open(script_path, "w", encoding="utf-8") as fh:
@@ -136,7 +136,7 @@ def _publish_glb_fixture(blender, project_dir, entity, step, work):
     if proc.returncode != 0 or not os.path.isfile(out_json):
         print("--- STDOUT ---\n", proc.stdout)
         print("--- STDERR ---\n", proc.stderr)
-        _fail(f"fixture GLB : publish reel a echoue (exit {proc.returncode})")
+        _fail(f"GLB fixture: real publish failed (exit {proc.returncode})")
     with open(out_json, encoding="utf-8") as fh:
         return json.load(fh)["glb_path"]
 
@@ -146,7 +146,7 @@ def main():
 
     blender = _blender_bin()
     if not os.path.isfile(blender):
-        _fail(f"binaire Blender introuvable : {blender} (definir $YLOS_BLENDER)")
+        _fail(f"Blender binary not found: {blender} (set $YLOS_BLENDER)")
 
     work = tempfile.mkdtemp(prefix="ylos_launch_test_")
     try:
@@ -155,7 +155,7 @@ def main():
         os.makedirs(root)
         os.makedirs(cache)
 
-        # 1. Fixture : projet + entite via l'orchestrateur (logique unique).
+        # 1. Fixture: project + entity via the orchestrator (single logic).
         proj = cp.create("LaunchTest", root=root, cache=cache, prod_type="FILM")
         project_dir = str(proj["source"])
         entity = "PROP_Cube_Default"
@@ -166,7 +166,7 @@ def main():
             ent_manifest = json.load(fh)
         step = ent_manifest["steps"][0]
 
-        # 2a. Publish niche contenant un .usda cube (contrat deux-phases : dossier par version).
+        # 2a. Nested publish containing a .usda cube (two-phase contract: one folder per version).
         versioned = f"{entity}_{step}_v001"
         pub_dir = os.path.join(project_dir, "assets", entity, step, "publish", versioned)
         os.makedirs(pub_dir)
@@ -174,45 +174,45 @@ def main():
         with open(cube_pub, "w", encoding="utf-8") as fh:
             fh.write(CUBE_USDA)
 
-        # 2b. asset_root.usda (stub ecrit par create_asset) remplace par le cube : la scene
-        #     par defaut resolue (scene_default) peuple alors reellement la scene.
+        # 2b. asset_root.usda (stub written by create_asset) replaced by the cube: the
+        #     resolved default scene (scene_default) then actually populates the scene.
         with open(os.path.join(project_dir, "assets", entity, cp.ASSET_ROOT_NAME),
                   "w", encoding="utf-8") as fh:
             fh.write(CUBE_USDA)
 
-        # 3. Invocation A - chemin explicite (--path sur le publish niche).
+        # 3. Invocation A - explicit path (--path on the nested publish).
         logA = os.path.join(work, "launchA.log")
         rc, log = _run_launcher(blender, logA, [
             "--project", project_dir, "--entity", entity, "--step", step,
             "--path", cube_pub, "--kind", "publish"])
-        _assert_success(rc, log, "invocation A (--path publish niche)")
+        _assert_success(rc, log, "invocation A (--path nested publish)")
 
-        # 4. Invocation B - sans --path : resolution via resolve_open_target (scene_default).
+        # 4. Invocation B - without --path: resolution via resolve_open_target (scene_default).
         logB = os.path.join(work, "launchB.log")
         rc, log = _run_launcher(blender, logB, [
             "--project", project_dir, "--entity", entity, "--step", step])
         _assert_success(rc, log, "invocation B (resolve scene_default)")
         if "resolve:" not in log or "scene_default" not in log:
-            _fail(f"invocation B: la resolution scene_default n'apparait pas dans le log:\n{log}")
-        print("ok  invocation B: resolve_open_target -> scene_default trace dans le log")
+            _fail(f"invocation B: the scene_default resolution does not appear in the log:\n{log}")
+        print("ok  invocation B: resolve_open_target -> scene_default traced in the log")
 
-        # 5. Contexte pose : l'addon s'enregistre (--factory-startup ne l'active pas) et les
-        #    enums gardes sont appliques. Verrouille aussi le check de registration : un guard
-        #    casse (re-register en GUI / jamais de register en CI) ferait rater ces marqueurs.
+        # 5. Context set: the addon registers (--factory-startup does not enable it) and the
+        #    kept enums are applied. Also locks the registration check: a broken guard
+        #    (re-register in GUI / never register in CI) would miss these markers.
         if "addon: register() OK" not in log:
-            _fail(f"invocation B: addon non enregistre proprement (guard ?):\n{log}")
+            _fail(f"invocation B: addon not registered cleanly (guard?):\n{log}")
         for marker in (f"ylos_current_asset = {entity!r}",
                        "ylos_context_type = 'ASSET'",
                        "ylos_asset_type = 'PROP'"):
             if marker not in log:
-                _fail(f"invocation B: contexte non pose - marqueur absent {marker!r}:\n{log}")
-        print("ok  invocation B: addon enregistre + contexte pipeline pose "
+                _fail(f"invocation B: context not set - marker missing {marker!r}:\n{log}")
+        print("ok  invocation B: addon registered + pipeline context set "
               "(asset/context_type/asset_type)")
 
-        # 6. Invocation C - projet web (GLB) : publish REEL puis import_scene.gltf via le
-        #    launcher (regression du bug INC-3 - le launcher ouvrait un .glb en open_mainfile,
-        #    faute de routage par extension ; acceptance : 'Importer' une version importe le
-        #    GLB dans une session contextualisee).
+        # 6. Invocation C - web project (GLB): REAL publish then import_scene.gltf via the
+        #    launcher (regression of the INC-3 bug - the launcher opened a .glb with
+        #    open_mainfile, for lack of routing by extension; acceptance: 'Import' a version
+        #    imports the GLB into a contextualized session).
         web_root = os.path.join(work, "web_src")
         web_cache = os.path.join(work, "web_cache")
         os.makedirs(web_root)
@@ -227,19 +227,19 @@ def main():
 
         glb_path = _publish_glb_fixture(blender, web_project_dir, web_entity, web_step, work)
         if not glb_path.lower().endswith(".glb"):
-            _fail(f"fixture GLB : extension inattendue : {glb_path}")
+            _fail(f"GLB fixture: unexpected extension: {glb_path}")
 
         logC = os.path.join(work, "launchC.log")
         rc, log = _run_launcher(blender, logC, [
             "--project", web_project_dir, "--entity", web_entity, "--step", web_step,
             "--path", glb_path, "--kind", "publish"])
-        _assert_success(rc, log, "invocation C (--path GLB publish reel)")
+        _assert_success(rc, log, "invocation C (--path real GLB publish)")
         if "gltf_import" not in log:
-            _fail(f"invocation C: mode 'gltf_import' absent du log (routage extension "
-                  f"casse ?):\n{log}")
-        print("ok  invocation C: routage GLB -> import_scene.gltf trace dans le log")
+            _fail(f"invocation C: 'gltf_import' mode missing from the log (extension routing "
+                  f"broken?):\n{log}")
+        print("ok  invocation C: GLB routing -> import_scene.gltf traced in the log")
 
-        print("\nPASS: launcher contextualise e2e OK")
+        print("\nPASS: contextualized launcher e2e OK")
         sys.exit(0)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -251,4 +251,4 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        _fail("exception inattendue", e)
+        _fail("unexpected exception", e)

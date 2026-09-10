@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Test headless Blender : le thumbnail de publish se rend sur CE Blender (regression du bug
-BLENDER_EEVEE_NEXT retire en 5.x - cf. CLAUDE.md, bugs empiriques Blender #1).
+"""Headless Blender test: the publish thumbnail renders on THIS Blender (regression of the
+BLENDER_EEVEE_NEXT-removed-in-5.x bug - see CLAUDE.md, empirical Blender bugs #1).
 
-Lancer :
+Run:
   BLENDER=$(which blender || echo "/Applications/Blender.app/Contents/MacOS/Blender")
   "$BLENDER" --background --python tools/blender/test_thumbnail_headless.py
 
-Exit code != 0 en cas d'echec (assert / exception), 0 si tout passe.
+Exit code != 0 on failure (assert / exception), 0 if everything passes.
 """
 import os
 import sys
@@ -30,45 +30,45 @@ def _fail(msg, exc=None):
 
 def main():
     import bpy
-    from blender.core import thumbnails  # package plugins/blender importe comme 'blender'
+    from blender.core import thumbnails  # package plugins/blender imported as 'blender'
 
-    # 1. _pick_render_engine retourne un identifiant AFFECTABLE sur ce Blender.
+    # 1. _pick_render_engine returns an ASSIGNABLE identifier on this Blender.
     scene = bpy.context.scene
     engine = thumbnails._pick_render_engine(scene)
     if not engine:
-        _fail("_pick_render_engine a retourne une valeur vide")
+        _fail("_pick_render_engine returned an empty value")
     try:
-        scene.render.engine = engine  # doit etre affectable (pas de TypeError)
+        scene.render.engine = engine  # must be assignable (no TypeError)
     except TypeError as e:
-        _fail(f"moteur retenu {engine!r} non affectable", e)
+        _fail(f"chosen engine {engine!r} not assignable", e)
     if engine == "BLENDER_EEVEE_NEXT":
-        _fail("BLENDER_EEVEE_NEXT retenu : il est cense etre retire en Blender 5.x")
-    print(f"ok  _pick_render_engine -> {engine} (affectable)")
+        _fail("BLENDER_EEVEE_NEXT chosen: it is supposed to be removed in Blender 5.x")
+    print(f"ok  _pick_render_engine -> {engine} (assignable)")
 
-    # 2. Scene minimale + cube -> render_publish_thumbnail produit un thumb.png non vide.
+    # 2. Minimal scene + cube -> render_publish_thumbnail produces a non-empty thumb.png.
     bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0, 0, 0))
     cube = bpy.context.active_object
     if cube is None:
-        _fail("impossible de creer le cube de test")
+        _fail("could not create the test cube")
 
     tmpdir = tempfile.mkdtemp(prefix="ylos_thumb_")
     result = thumbnails.render_publish_thumbnail([cube], tmpdir)
     if not result:
-        _fail(f"render_publish_thumbnail a echoue - LAST_ERROR={thumbnails.LAST_ERROR!r}")
+        _fail(f"render_publish_thumbnail failed - LAST_ERROR={thumbnails.LAST_ERROR!r}")
 
     thumb = os.path.join(tmpdir, "thumb.png")
     if not os.path.isfile(thumb):
-        _fail(f"thumb.png absent a {thumb}")
+        _fail(f"thumb.png missing at {thumb}")
     size = os.path.getsize(thumb)
     if size <= 0:
-        _fail(f"thumb.png vide ({size} octets)")
-    print(f"ok  render_publish_thumbnail -> {thumb} ({size} octets)")
+        _fail(f"thumb.png empty ({size} bytes)")
+    print(f"ok  render_publish_thumbnail -> {thumb} ({size} bytes)")
 
-    # --- Helper : ecart-type des pixels. Un thumbnail "plat" (fond uni, sujet absent ou
-    # noir sur noir) a un ecart-type quasi nul. C'est la SEULE mesure qui distingue un rendu
-    # reussi d'un rendu qui n'a leve aucune erreur mais ne montre rien : les trois bugs
-    # historiques (eclairage, clipping, hide_render) produisaient tous un fichier PNG valide
-    # et non vide. Verifier "le fichier existe" ne les aurait jamais attrapes.
+    # --- Helper: pixel standard deviation. A "flat" thumbnail (solid background, subject
+    # absent or black on black) has a near-zero standard deviation. It's the ONLY measure
+    # that tells a successful render apart from one that raised no error but shows nothing:
+    # the three historical bugs (lighting, clipping, hide_render) all produced a valid,
+    # non-empty PNG file. Checking "the file exists" would never have caught them.
     def _std(path):
         img = bpy.data.images.load(path)
         try:
@@ -83,69 +83,69 @@ def main():
 
     std = _std(thumb)
     if std < FLAT:
-        _fail(f"thumbnail du cube PLAT (std={std:.4f}) : rendu sans contenu visible")
-    print(f"ok  cube non plat (std={std:.4f})")
+        _fail(f"cube thumbnail FLAT (std={std:.4f}): render with no visible content")
+    print(f"ok  cube not flat (std={std:.4f})")
 
-    # 3. REGRESSION clipping (bug reel) : une camera neuve a clip_end=1000 en dur. Un sujet
-    #    de plusieurs centaines d'unites est cadre a une distance SUPERIEURE a ce far plane
-    #    -> l'image ne contenait que le fond du world, sans la moindre erreur remontee.
+    # 3. clipping REGRESSION (real bug): a fresh camera has clip_end=1000 hard-coded. A
+    #    subject several hundred units across is framed at a distance GREATER than that far
+    #    plane -> the image contained only the world background, with no error raised.
     cube.scale = (250.0, 250.0, 250.0)
     bpy.context.view_layer.update()
     big_dir = tempfile.mkdtemp(prefix="ylos_thumb_big_")
     big = thumbnails.render_publish_thumbnail([cube], big_dir)
     if not big:
-        _fail(f"rendu d'un sujet de 500 unites echoue - LAST_ERROR={thumbnails.LAST_ERROR!r}")
+        _fail(f"render of a 500-unit subject failed - LAST_ERROR={thumbnails.LAST_ERROR!r}")
     big_std = _std(big)
     if big_std < FLAT:
-        _fail(f"sujet de 500 unites PLAT (std={big_std:.4f}) : regression du clipping camera")
-    print(f"ok  sujet 500 unites non plat (std={big_std:.4f}) - clipping derive du cadrage")
+        _fail(f"500-unit subject FLAT (std={big_std:.4f}): camera clipping regression")
+    print(f"ok  500-unit subject not flat (std={big_std:.4f}) - clipping derived from framing")
     cube.scale = (1.0, 1.0, 1.0)
     bpy.context.view_layer.update()
 
-    # 4. REGRESSION hide_render (bug reel) : les meshes sources d'un scattering sont
-    #    hide_render=True. Incluses dans la bbox, elles reculaient la camera sur du vide.
+    # 4. hide_render REGRESSION (real bug): the source meshes of a scattering are
+    #    hide_render=True. Included in the bbox, they pushed the camera back onto empty space.
     bpy.ops.mesh.primitive_cube_add(size=2.0, location=(400, 400, 0))
     far = bpy.context.active_object
     far.hide_render = True
     framed = thumbnails.renderable_objects([cube, far])
     if far in framed:
-        _fail("renderable_objects() garde un objet hide_render=True")
+        _fail("renderable_objects() keeps a hide_render=True object")
     if cube not in framed:
-        _fail("renderable_objects() a perdu l'objet visible")
-    print("ok  renderable_objects() exclut les objets hide_render")
+        _fail("renderable_objects() lost the visible object")
+    print("ok  renderable_objects() excludes hide_render objects")
 
     mixed = tempfile.mkdtemp(prefix="ylos_thumb_mixed_")
     res_mixed = thumbnails.render_publish_thumbnail([cube, far], mixed)
     if not res_mixed:
-        _fail(f"rendu mixte echoue - LAST_ERROR={thumbnails.LAST_ERROR!r}")
+        _fail(f"mixed render failed - LAST_ERROR={thumbnails.LAST_ERROR!r}")
     mixed_std = _std(res_mixed)
     if mixed_std < FLAT:
-        _fail(f"rendu mixte PLAT (std={mixed_std:.4f}) : le hide_render pollue encore le cadrage")
-    print(f"ok  rendu mixte non plat (std={mixed_std:.4f})")
+        _fail(f"mixed render FLAT (std={mixed_std:.4f}): hide_render still pollutes the framing")
+    print(f"ok  mixed render not flat (std={mixed_std:.4f})")
 
-    # 5. INTEGRITE (trou reel trouve en production) : un publish ne contenant qu'un EMPTY
-    #    (zero geometrie) etait marque 'complete' - _missing_artifacts ne verifie que
-    #    "le fichier existe et n'est pas vide". Le thumbnail doit ECHOUER pour que le
-    #    contrat deux-phases rejette ce publish au lieu de le commiter en silence.
+    # 5. INTEGRITY (real gap found in production): a publish containing only an EMPTY
+    #    (zero geometry) was marked 'complete' - _missing_artifacts only checks that
+    #    "the file exists and is not empty". The thumbnail must FAIL so that the
+    #    two-phase contract rejects this publish instead of silently committing it.
     bpy.ops.object.empty_add(location=(0, 0, 0))
     empty = bpy.context.active_object
     empty_dir = tempfile.mkdtemp(prefix="ylos_thumb_empty_")
     res_empty = thumbnails.render_publish_thumbnail([empty], empty_dir)
     if res_empty:
-        _fail("un publish sans aucune geometrie a produit un thumbnail : "
-              "le garde-fou d'integrite ne se declenche pas")
+        _fail("a publish with no geometry produced a thumbnail: "
+              "the integrity guard does not trigger")
     if "no renderable geometry" not in thumbnails.LAST_ERROR:
-        _fail(f"cause d'echec non remontee a l'appelant : LAST_ERROR={thumbnails.LAST_ERROR!r}")
-    print(f"ok  publish sans geometrie refuse ({thumbnails.LAST_ERROR!r})")
+        _fail(f"failure cause not reported to the caller: LAST_ERROR={thumbnails.LAST_ERROR!r}")
+    print(f"ok  publish with no geometry refused ({thumbnails.LAST_ERROR!r})")
 
-    # 6. Aucun datablock temporaire ne survit (try/finally strict).
+    # 6. No temporary datablock survives (strict try/finally).
     leftovers = ([s.name for s in bpy.data.scenes if s.name.startswith("YLOS_thumb")]
                  + [o.name for o in bpy.data.objects if o.name.startswith("YLOS_thumb")]
                  + [w.name for w in bpy.data.worlds if w.name.startswith("YLOS_thumb")]
                  + [l.name for l in bpy.data.lights if l.name.startswith("YLOS_thumb")])
     if leftovers:
-        _fail(f"datablocks temporaires non purges : {leftovers}")
-    print("ok  aucun datablock YLOS_thumb_* residuel")
+        _fail(f"temporary datablocks not purged: {leftovers}")
+    print("ok  no residual YLOS_thumb_* datablock")
 
     print("\nPASS: thumbnail publish headless OK")
     sys.exit(0)
@@ -157,4 +157,4 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        _fail("exception inattendue", e)
+        _fail("unexpected exception", e)

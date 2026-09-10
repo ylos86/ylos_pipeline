@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Test headless Blender : import states (State-Manager-lite, INC-5) - op_import_product.py
-(absorbe op_load_publish.py) + op_update_imports.py (ylos.check_updates/ylos.update_import).
+"""Headless Blender test: import states (State-Manager-lite, INC-5) - op_import_product.py
+(absorbs op_load_publish.py) + op_update_imports.py (ylos.check_updates/ylos.update_import).
 
-Scenario exact de la spec : publier un cube v1, importer (props taguees posees), publier
-v2 (avec un objet de plus, pour verifier le rapport N objets avant/apres), check_updates
-detecte la mise a jour disponible, update remplace le contenu de la collection.
+Exact scenario from the spec: publish a cube v1, import it (tagged props placed), publish
+v2 (with one more object, to check the N-objects-before/after report), check_updates
+detects the available update, update replaces the collection's content.
 
-Lancer :
+Run:
   BLENDER=$(which blender || echo "/Applications/Blender.app/Contents/MacOS/Blender")
   "$BLENDER" --background --python tools/blender/test_import_states_headless.py
 
-Exit code != 0 en cas d'echec (assert / exception), 0 si tout passe.
+Exit code != 0 on failure (assert / exception), 0 if everything passes.
 """
 import os
 import shutil
@@ -34,9 +34,9 @@ def _fail(msg, exc=None):
 
 
 def _move_to_collection(obj, target_collection):
-    """Deplace 'obj' dans 'target_collection', quelle que soit sa collection d'origine
-    (jamais d'hypothese sur 'scene.collection' specifiquement - la collection active au
-    moment du primitive_add depend de l'etat du view_layer, pas garanti)."""
+    """Moves 'obj' into 'target_collection', whatever its original collection
+    (never any assumption about 'scene.collection' specifically - the active collection at
+    the time of primitive_add depends on the view_layer state, not guaranteed)."""
     for coll in list(obj.users_collection):
         coll.objects.unlink(obj)
     target_collection.objects.link(obj)
@@ -56,7 +56,7 @@ def main():
         os.makedirs(root)
         os.makedirs(cache)
 
-        # Cible web (GLB) - complementaire du parcours USD deja teste ailleurs
+        # Web target (GLB) - complementary to the USD path already tested elsewhere
         # (test_publish_glb_headless / test_launch_context invocation A).
         proj = cp.create("ImportStatesTest", root=root, cache=cache, prod_type="XR")
         project_dir = str(proj["source"])
@@ -66,8 +66,8 @@ def main():
         try:
             addon.register()
         except Exception as e:
-            _fail("addon.register() a leve", e)
-        print("ok  addon.register() sans exception")
+            _fail("addon.register() raised", e)
+        print("ok  addon.register() without exception")
 
         scene = bpy.context.scene
         scene.ylos_project_path  = project_dir
@@ -76,11 +76,11 @@ def main():
         scene.ylos_current_step  = "modeling"
         scene.ylos_context_type  = "ASSET"
 
-        # --- 1. Publier v1 (un seul cube) ---
-        # Les objets a publier vivent dans une collection nommee EXACTEMENT comme l'entite
-        # (cf. core/scene_checker.get_asset_objects_for_publish) : publish reste scope a
-        # cette collection, jamais 'allow_full_scene' - qui balaierait aussi la collection
-        # d'import (nom different, cree a l'etape 2) lors du publish v2.
+        # --- 1. Publish v1 (a single cube) ---
+        # The objects to publish live in a collection named EXACTLY like the entity
+        # (see core/scene_checker.get_asset_objects_for_publish): publish stays scoped to
+        # that collection, never 'allow_full_scene' - which would also sweep up the import
+        # collection (different name, created at step 2) during the v2 publish.
         bpy.ops.object.select_all(action="SELECT")
         bpy.ops.object.delete()
         src_collection = bpy.data.collections.new(entity)
@@ -91,20 +91,20 @@ def main():
 
         res = bpy.ops.ylos.publish('EXEC_DEFAULT', step="modeling", load_after=False)
         if res != {"FINISHED"}:
-            _fail(f"publish v1 a retourne {res}")
-        print("ok  publish v1 (1 objet, collection source scopee)")
+            _fail(f"publish v1 returned {res}")
+        print("ok  publish v1 (1 object, scoped source collection)")
 
-        # --- 2. Importer (props taguees posees) ---
+        # --- 2. Import (tagged props placed) ---
         res = bpy.ops.ylos.import_product(
             'EXEC_DEFAULT', entity=entity, step="modeling", version=0,  # 0 = latest
         )
         if res != {"FINISHED"}:
-            _fail(f"import_product a retourne {res}")
+            _fail(f"import_product returned {res}")
 
         col_name = import_state_collection_name(entity, "modeling")
         collection = bpy.data.collections.get(col_name)
         if collection is None:
-            _fail(f"collection '{col_name}' non creee")
+            _fail(f"collection '{col_name}' not created")
 
         expected_tags = {
             "ylos_import_entity": entity,
@@ -115,75 +115,75 @@ def main():
             if collection.get(key) != val:
                 _fail(f"tag {key!r} : {collection.get(key)!r} != {val!r}")
         if not collection.get("ylos_import_path", "").endswith(".glb"):
-            _fail(f"ylos_import_path inattendu : {collection.get('ylos_import_path')!r}")
+            _fail(f"unexpected ylos_import_path: {collection.get('ylos_import_path')!r}")
         n_v1 = len(collection.objects)
         if n_v1 != 1:
-            _fail(f"collection v1 : {n_v1} objet(s) != 1")
-        print(f"ok  import_product : collection '{col_name}' taguee v001, {n_v1} objet(s)")
+            _fail(f"collection v1: {n_v1} object(s) != 1")
+        print(f"ok  import_product : collection '{col_name}' tagged v001, {n_v1} object(s)")
 
-        # Re-importer le meme entity/step doit echouer (deja importe -> Update Import).
-        # bpy.ops (contrairement a un appel direct de execute()) leve RuntimeError quand
-        # l'operateur reporte {'ERROR'} + retourne {'CANCELLED'} - comportement natif de
-        # l'API, pas une exception a avaler silencieusement.
+        # Re-importing the same entity/step must fail (already imported -> Update Import).
+        # bpy.ops (unlike a direct execute() call) raises RuntimeError when the operator
+        # reports {'ERROR'} + returns {'CANCELLED'} - native API behavior, not an exception
+        # to swallow silently.
         try:
             bpy.ops.ylos.import_product(
                 'EXEC_DEFAULT', entity=entity, step="modeling", version=0,
             )
-            _fail("re-import sur collection existante n'a pas leve (devrait etre refuse)")
+            _fail("re-import on an existing collection did not raise (should be refused)")
         except RuntimeError as e:
             if "already imported" not in str(e):
-                _fail(f"re-import : message inattendu : {e}")
-        print("ok  re-import sur collection existante refuse (utiliser Update Import)")
+                _fail(f"re-import: unexpected message: {e}")
+        print("ok  re-import on an existing collection refused (use Update Import)")
 
-        # --- 3. Publier v2 (deux objets dans la collection source, pour un rapport
-        #        avant/apres non-trivial - la collection d'import cree a l'etape 2 reste
-        #        hors scope, nom different) ---
+        # --- 3. Publish v2 (two objects in the source collection, for a non-trivial
+        #        before/after report - the import collection created at step 2 stays
+        #        out of scope, different name) ---
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=(3, 0, 0))
         _move_to_collection(bpy.context.active_object, src_collection)
 
         res = bpy.ops.ylos.publish('EXEC_DEFAULT', step="modeling", load_after=False)
         if res != {"FINISHED"}:
-            _fail(f"publish v2 a retourne {res}")
-        print("ok  publish v2 (2 objets, collection source scopee)")
+            _fail(f"publish v2 returned {res}")
+        print("ok  publish v2 (2 objects, scoped source collection)")
 
-        # --- 4. check_updates detecte la mise a jour ---
+        # --- 4. check_updates detects the update ---
         res = bpy.ops.ylos.check_updates('EXEC_DEFAULT')
         if res != {"FINISHED"}:
-            _fail(f"check_updates a retourne {res}")
+            _fail(f"check_updates returned {res}")
 
         cache = get_cached_update_results()
         status = cache.get(col_name)
         if status is None:
-            _fail(f"check_updates : '{col_name}' absent du cache : {cache!r}")
+            _fail(f"check_updates: '{col_name}' missing from the cache: {cache!r}")
         if not status["has_update"] or status["current"] != 1 or status["latest"] != 2:
-            _fail(f"check_updates : etat inattendu {status!r}")
+            _fail(f"check_updates: unexpected state {status!r}")
         print(f"ok  check_updates : {status!r}")
 
-        # --- 5. update_import remplace le contenu ---
+        # --- 5. update_import replaces the content ---
         res = bpy.ops.ylos.update_import('EXEC_DEFAULT', collection_name=col_name)
         if res != {"FINISHED"}:
-            _fail(f"update_import a retourne {res}")
+            _fail(f"update_import returned {res}")
 
         if collection.get("ylos_import_version") != 2:
-            _fail(f"apres update, version taguee = {collection.get('ylos_import_version')!r} != 2")
+            _fail(f"after update, tagged version = {collection.get('ylos_import_version')!r} != 2")
         n_v2 = len(collection.objects)
         if n_v2 != 2:
-            _fail(f"collection apres update : {n_v2} objet(s) != 2 (v1 avait {n_v1})")
-        print(f"ok  update_import : v001 -> v002, {n_v1} -> {n_v2} objets")
+            _fail(f"collection after update: {n_v2} object(s) != 2 (v1 had {n_v1})")
+        print(f"ok  update_import : v001 -> v002, {n_v1} -> {n_v2} objects")
 
-        # Update alors qu'on est deja a la derniere version -> no-op FINISHED (pas d'erreur).
+        # Update while already at the latest version -> no-op FINISHED (no error).
         res = bpy.ops.ylos.update_import('EXEC_DEFAULT', collection_name=col_name)
         if res != {"FINISHED"}:
-            _fail(f"update_import (deja a jour) a retourne {res}")
+            _fail(f"update_import (already up to date) returned {res}")
         if len(collection.objects) != 2:
-            _fail("update_import (deja a jour) a modifie la collection")
-        print("ok  update_import (deja a jour) : no-op propre")
+            _fail("update_import (already up to date) modified the collection")
+        print("ok  update_import (already up to date): clean no-op")
 
         try:
             addon.unregister()
         except Exception as e:
-            _fail("addon.unregister() a leve", e)
-        print("ok  addon.unregister() sans exception")
+            _fail("addon.unregister() raised", e)
+        print("ok  addon.unregister() without exception")
 
         print("\nPASS: import states (import_product + check_updates + update_import) headless OK")
         sys.exit(0)
@@ -197,4 +197,4 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        _fail("exception inattendue", e)
+        _fail("unexpected exception", e)

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Test headless Blender : le vocabulaire de plugins/blender/core/vocab.py est bien
-DERIVE de create_project.py (valeurs ET ordre), et l'addon s'active sans exception - y
-compris en lisant un prod_type qui crashait avant (ex 'XR').
+"""Headless Blender test: the vocabulary in plugins/blender/core/vocab.py is DERIVED
+from create_project.py (values AND order), and the addon registers without exception -
+including when reading a prod_type that used to crash (e.g. 'XR').
 
-Lancer :
+Run:
   BLENDER=$(which blender || echo "/Applications/Blender.app/Contents/MacOS/Blender")
   "$BLENDER" --background --python tools/blender/test_vocab_sync.py
 
-Exit code != 0 en cas d'echec (assert / exception), 0 si tout passe.
+Exit code != 0 on failure (assert / exception), 0 if everything passes.
 """
 import os
 import sys
@@ -34,9 +34,9 @@ def _values(items):
 
 def main():
     import create_project as cp
-    from blender.core import vocab  # package plugins/blender importe comme 'blender'
+    from blender.core import vocab  # package plugins/blender imported as 'blender'
 
-    # 1. Chaque *_ITEMS == constante create_project (valeurs ET ordre).
+    # 1. Each *_ITEMS == create_project constant (values AND order).
     checks = [
         ("ASSET_TYPE_ITEMS", _values(vocab.ASSET_TYPE_ITEMS), list(cp.ASSET_TYPES)),
         ("SET_TYPE_ITEMS",   _values(vocab.SET_TYPE_ITEMS),   list(cp.SET_TYPES)),
@@ -48,18 +48,18 @@ def main():
     ]
     for name, got, expected in checks:
         if got != expected:
-            _fail(f"{name}: {got!r} != create_project {expected!r} (valeur/ordre)")
+            _fail(f"{name}: {got!r} != create_project {expected!r} (value/order)")
         print(f"ok  {name} == {expected}")
 
-    # context types DERIVES d'ENTITY_DIR (pas de constante redondante cote create_project).
+    # context types DERIVED from ENTITY_DIR (no redundant constant on the create_project side).
     ctx_expected = [k.upper() for k in cp.ENTITY_DIR]
     if list(vocab.CONTEXT_TYPES) != ctx_expected:
         _fail(f"CONTEXT_TYPES {list(vocab.CONTEXT_TYPES)!r} != ENTITY_DIR {ctx_expected!r}")
     if _values(vocab.CONTEXT_TYPE_ITEMS) != ctx_expected:
         _fail(f"CONTEXT_TYPE_ITEMS values != {ctx_expected!r}")
-    print(f"ok  CONTEXT_TYPES == {ctx_expected} (derives d'ENTITY_DIR)")
+    print(f"ok  CONTEXT_TYPES == {ctx_expected} (derived from ENTITY_DIR)")
 
-    # STEP_ITEMS_ALL == union ordonnee sans doublons des trois familles.
+    # STEP_ITEMS_ALL == ordered, de-duplicated union of the three families.
     union, seen = [], set()
     for lst in (cp.DEFAULT_ASSET_STEPS, cp.DEFAULT_SHOT_STEPS, cp.DEFAULT_SET_STEPS):
         for s in lst:
@@ -70,41 +70,41 @@ def main():
         _fail(f"STEP_ITEMS_ALL {_values(vocab.STEP_ITEMS_ALL)!r} != union {union!r}")
     print(f"ok  STEP_ITEMS_ALL == {union}")
 
-    # 2. L'addon s'active sans exception.
+    # 2. The addon registers without exception.
     import bpy
     import blender as addon
     try:
         addon.register()
     except Exception as e:
-        _fail("addon.register() a leve", e)
-    print("ok  addon.register() sans exception")
+        _fail("addon.register() raised", e)
+    print("ok  addon.register() without exception")
 
-    # 3. La propriete Scene ylos_prod_type accepte desormais une valeur qui crashait avant
-    #    (ex 'XR' d'un projet reel comme Pachamama) : preuve que l'enum est bien la source
-    #    unifiee (PROD_TYPE_ITEMS), plus FILM/AR/VR en dur.
+    # 3. The Scene property ylos_prod_type now accepts a value that used to crash
+    #    (e.g. 'XR' from a real project like Pachamama): proof that the enum is indeed the
+    #    unified source (PROD_TYPE_ITEMS), no longer FILM/AR/VR hard-coded.
     scene = bpy.context.scene
     for val in ("XR", "SERIES", "GAME", "FILM", "AR", "VR"):
         try:
             scene.ylos_prod_type = val
         except Exception as e:
-            _fail(f"scene.ylos_prod_type = {val!r} a leve (enum non unifie ?)", e)
+            _fail(f"scene.ylos_prod_type = {val!r} raised (enum not unified?)", e)
         if scene.ylos_prod_type != val:
-            _fail(f"scene.ylos_prod_type != {val!r} apres affectation")
-    print("ok  scene.ylos_prod_type accepte XR/SERIES/GAME/FILM/AR/VR")
+            _fail(f"scene.ylos_prod_type != {val!r} after assignment")
+    print("ok  scene.ylos_prod_type accepts XR/SERIES/GAME/FILM/AR/VR")
 
-    # ylos_current_step accepte toute valeur de STEP_ITEMS_ALL (dont 'comp', 'layout').
+    # ylos_current_step accepts any value from STEP_ITEMS_ALL (including 'comp', 'layout').
     for val in union:
         try:
             scene.ylos_current_step = val
         except Exception as e:
-            _fail(f"scene.ylos_current_step = {val!r} a leve", e)
-    print("ok  scene.ylos_current_step accepte tous les steps de STEP_ITEMS_ALL")
+            _fail(f"scene.ylos_current_step = {val!r} raised", e)
+    print("ok  scene.ylos_current_step accepts every step in STEP_ITEMS_ALL")
 
     try:
         addon.unregister()
     except Exception as e:
-        _fail("addon.unregister() a leve", e)
-    print("ok  addon.unregister() sans exception")
+        _fail("addon.unregister() raised", e)
+    print("ok  addon.unregister() without exception")
 
     print("\nPASS: vocab sync + addon register/unregister OK")
     sys.exit(0)
@@ -116,4 +116,4 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        _fail("exception inattendue", e)
+        _fail("unexpected exception", e)
