@@ -4,6 +4,7 @@ from . import op_new_asset
 from . import op_save_wip
 from . import op_create_scene
 from . import op_playblast
+from . import op_render
 from . import op_publish
 from . import op_open_context
 from . import op_open_wip

@@ -1164,6 +1164,70 @@ def playblast_spec(entity_name, step, project_root=None):
 
 
 # --------------------------------------------------------------------------------------
+# Render (regenerable cache tier) - versioned output spec
+# --------------------------------------------------------------------------------------
+# A render lives in the CACHE tier, exactly where Houdini writes (ylos_houdini.render_dir):
+# $PROJ_CACHE/<project>/render/<entity>/<step>/v<NNN>/. Single convention, so a Blender and
+# a Houdini render of the same shot/step land side by side and version together. No manifest:
+# a render is regenerable and its tracking is production management, not the technical
+# pipeline (principle 4) - delivery is an explicit, human-validated copy (Houdini
+# deliver_render), never automatic.
+_RENDER_SUBDIR = "render"
+_RENDER_VER_RE = re.compile(r"^v(\d{3,})$")
+
+
+def render_spec(entity_name, step, project_root=None, ext="exr"):
+    """PURE, serializable spec for a versioned RENDER of entity+step, in the cache render
+    tier ($PROJ_CACHE/<project>/render/<entity>/<step>/v<NNN>/). Same split as the other
+    specs: the orchestrator ALLOCATES the next-free version + output path; the DCC RENDERS
+    into it (real engine, unlike the WORKBENCH playblast). NEVER raises for a business case:
+    {"ok": False, "reason": ...} for an unknown entity or an undeclared step.
+
+    On success: {"ok": True, entity, step, family, dir, version_dir, version, stem, ext,
+    output_prefix (frames land as <stem>.####.<ext> - filepath prefix for the DCC),
+    frame_range}. $PROJ_CACHE is resolved via resolve_cache() (same source as the Houdini
+    tier); set the env in tests as production does.
+    """
+    if project_root is None:
+        return {"ok": False, "reason": "project_root is required"}
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return {"ok": False, "reason": f"entity {entity_name!r} not found (no manifest.json)"}
+    declared = resolved["manifest"].get("steps") or []
+    if declared and step not in declared:
+        return {"ok": False,
+                "reason": (f"step {step!r} not declared for {entity_name!r} "
+                           f"(manifest steps: {', '.join(declared)})")}
+
+    rdir = resolve_cache() / Path(project_root).name / _RENDER_SUBDIR / entity_name / step
+    best = 0
+    if rdir.is_dir():
+        for d in rdir.iterdir():
+            if d.is_dir():
+                m = _RENDER_VER_RE.match(d.name)
+                if m:
+                    best = max(best, int(m.group(1)))
+    version = best + 1
+    vdir = rdir / f"v{version:03d}"
+    stem = f"{entity_name}_{step}_v{version:03d}"
+    frame_range = resolved["manifest"].get("frame_range") if resolved["family"] == "shot" else None
+
+    return {
+        "ok": True,
+        "entity": entity_name,
+        "step": step,
+        "family": resolved["family"],
+        "dir": str(rdir),
+        "version_dir": str(vdir),
+        "version": version,
+        "stem": stem,
+        "ext": ext,
+        "output_prefix": str(vdir / (stem + ".")),   # frames: <stem>.####.<ext>
+        "frame_range": frame_range,
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Creation - project
 # --------------------------------------------------------------------------------------
 

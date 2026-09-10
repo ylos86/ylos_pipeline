@@ -193,8 +193,11 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
         save_row.scale_y = 1.2
         save_row.operator("ylos.save_wip", text="Save Version", icon="FILE_TICK")
 
-        # Review media: a versioned viewport playblast over the frame range.
-        layout.operator("ylos.playblast", text="Playblast", icon="RENDER_ANIMATION")
+        # Review / output media over the frame range: a fast viewport playblast, or a
+        # real engine render into the versioned cache tier (same place Houdini renders).
+        media_row = layout.row(align=True)
+        media_row.operator("ylos.playblast", text="Playblast", icon="RENDER_ANIMATION")
+        media_row.operator("ylos.render", text="Render", icon="RENDER_STILL")
 
         layout.separator(factor=0.4)
         open_row = layout.row(align=True)
