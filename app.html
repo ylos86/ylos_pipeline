@@ -33,6 +33,34 @@
       --on-wine:      #f6d7e3;   /* pale rosy text on wine (high contrast, ~11:1) */
       --green:        #34d399;
       --red:          #f87171;
+
+      /* Translucent chrome (header/toolbar) — macOS-style vibrancy over the dark ground.
+         A hair darker than --bg-2 and semi-transparent so content scrolling underneath
+         reads through the blur. */
+      --chrome:       rgba(20, 21, 25, .72);
+
+      /* Motion system (macos-design): one place for easing + duration, so every
+         transition in the app feels like it came from the same hand. */
+      --ease-out:    cubic-bezier(.25, .46, .45, .94);
+      --ease-spring: cubic-bezier(.34, 1.3, .64, 1);
+      --ease-smooth: cubic-bezier(.4, 0, .2, 1);
+      --dur-fast: .15s;
+      --dur:      .24s;
+      --dur-slow: .4s;
+
+      /* Layered shadows — the `0 0 0 .5px` edge is what reads as a crisp hairline
+         without a hard border (the macOS look), stacked with soft spread for depth. */
+      --shadow-card: 0 0 0 .5px rgba(0,0,0,.45), 0 10px 28px -8px rgba(0,0,0,.6);
+      --shadow-pop:  0 0 0 .5px rgba(0,0,0,.55), 0 8px 24px rgba(0,0,0,.5), 0 24px 60px -14px rgba(0,0,0,.45);
+      --ring:        0 0 0 3px var(--accent-glow);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-delay: 0ms !important;
+        transition-duration: .001ms !important;
+      }
     }
 
     body {
@@ -42,20 +70,40 @@
       font-size: 14px;
       line-height: 1.5;
       min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
     }
+
+    /* Thin, self-effacing scrollbars — visible only against the dark ground,
+       matching a native-tool feel rather than the chunky OS default. */
+    * { scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-hi); border-radius: 8px;
+      border: 3px solid transparent; background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: #4a4b59; background-clip: padding-box; }
+    ::-webkit-scrollbar-track { background: transparent; }
 
     /* ── Header ─────────────────────────────────── */
     header {
       position: sticky; top: 0; z-index: 100;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 20px; height: 54px;
-      background: var(--bg-2);
+      background: var(--chrome);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      backdrop-filter: saturate(180%) blur(20px);
       border-bottom: 1px solid var(--border);
+    }
+    /* Solid fallback where backdrop-filter is unsupported — never a see-through bar. */
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      header, .toolbar { background: var(--bg-2); }
     }
     .header-left  { display: flex; align-items: center; gap: 14px; }
     .header-right { display: flex; align-items: center; gap: 10px; }
 
-    .logo { font-size: 15px; font-weight: 700; letter-spacing: -.3px; }
+    .logo { font-size: 15px; font-weight: 700; letter-spacing: -.4px; }
     .logo em { color: var(--accent); font-style: normal; }
 
     .project-pill {
@@ -86,17 +134,34 @@
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 6px;
       padding: 6px 14px; border-radius: 7px; border: none;
-      font-size: 13px; font-weight: 500; cursor: pointer;
-      transition: background .15s, border-color .15s, box-shadow .2s, opacity .15s;
+      font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
+      transition: background var(--dur-fast), border-color var(--dur-fast),
+                  box-shadow var(--dur), transform var(--dur-fast), opacity var(--dur-fast);
     }
-    .btn:active { opacity: .8; }
+    .btn:active { transform: scale(.97); opacity: .9; }
     .btn:disabled { opacity: .4; cursor: default; }
+
+    /* Keyboard-shortcut hint chip (macos-design): every primary action names its key. */
+    .kbd {
+      display: inline-flex; align-items: center; gap: 1px;
+      margin-left: 2px; padding: 1px 5px; border-radius: 4px;
+      font-size: 10.5px; font-weight: 600; line-height: 1.4;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: rgba(255,255,255,.14); color: inherit; opacity: .72;
+    }
+    .btn-secondary .kbd, .search .kbd { background: rgba(255,255,255,.06); }
+    @media (max-width: 520px) { .kbd { display: none; } }
     .btn-primary   { background: var(--accent); color: #fff; box-shadow: 0 1px 12px -4px var(--accent); }
     .btn-primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 2px 16px -4px var(--accent); }
     .btn-secondary { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-hi); }
     .btn-ghost     { background: transparent; color: var(--text-muted); }
     .btn-ghost:hover { color: var(--text); background: var(--bg-3); }
+
+    /* Keyboard focus is visible and on-brand; mouse focus stays quiet (:focus-visible). */
+    :focus-visible { outline: none; box-shadow: var(--ring); }
+    .btn:focus-visible { box-shadow: var(--ring); }
+    .card:focus-visible { box-shadow: var(--ring), var(--shadow-card); border-color: var(--accent); }
 
     /* ── Error banner ────────────────────────────── */
     .error-banner {
@@ -116,14 +181,45 @@
 
     /* ── Toolbar ─────────────────────────────────── */
     .toolbar {
-      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-      padding: 12px 20px;
-      background: var(--bg-2); border-bottom: 1px solid var(--border);
+      position: sticky; top: 54px; z-index: 90;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 11px 20px;
+      background: var(--chrome);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid var(--border);
     }
+    /* Keep each label welded to its own pills so the group never breaks across
+       lines (the old layout orphaned the "Family" label above its pills). */
+    .filter-group { display: flex; align-items: center; gap: 8px; }
     .filter-label {
       font-size: 11px; color: var(--text-dim);
-      text-transform: uppercase; letter-spacing: .7px;
+      text-transform: uppercase; letter-spacing: .7px; white-space: nowrap;
     }
+
+    /* ── Search ──────────────────────────────────── */
+    .search {
+      display: flex; align-items: center; gap: 7px;
+      height: 30px; padding: 0 9px; min-width: 160px;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text-dim);
+      transition: border-color var(--dur-fast), box-shadow var(--dur), background var(--dur-fast);
+    }
+    .search:focus-within { border-color: var(--accent); box-shadow: var(--ring); background: var(--bg); }
+    .search svg { flex-shrink: 0; }
+    .search input {
+      flex: 1; min-width: 0; border: none; background: none; outline: none;
+      color: var(--text); font-size: 13px; padding: 0;
+    }
+    .search input::placeholder { color: var(--text-dim); }
+    .search .kbd { transition: opacity var(--dur-fast); }
+    .search:focus-within .kbd, .search.has-text .kbd { opacity: 0; pointer-events: none; }
+    .search-clear {
+      display: none; flex-shrink: 0; border: none; background: none; cursor: pointer;
+      color: var(--text-dim); padding: 2px; border-radius: 4px; line-height: 0;
+    }
+    .search-clear:hover { color: var(--text); background: var(--bg-hover); }
+    .search.has-text .search-clear { display: inline-flex; }
     .pills { display: flex; gap: 5px; flex-wrap: wrap; }
     .pill {
       padding: 3px 11px; border-radius: 20px;
@@ -137,7 +233,10 @@
     .pill.active:hover { background: var(--wine-hi); color: var(--on-wine); }
 
     .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
-    .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .toolbar-right {
+      margin-left: auto; display: flex; align-items: center; gap: 10px;
+      flex-wrap: wrap; justify-content: flex-end; row-gap: 8px;
+    }
     .asset-count { font-size: 12px; color: var(--text-dim); }
 
     .sort-select {
@@ -180,12 +279,20 @@
     .card {
       background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
       overflow: hidden; display: flex; flex-direction: column;
-      transition: border-color .2s, transform .15s, box-shadow .2s;
+      transition: border-color var(--dur), transform var(--dur-fast), box-shadow var(--dur);
+      /* Entrance stagger — plays only when the grid actually re-renders (a real data
+         or filter change), never on the idle 30s poll. --i is the card's index. */
+      animation: cardIn .34s var(--ease-out) both;
+      animation-delay: calc(var(--i, 0) * 18ms);
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(9px) scale(.985); }
+      to   { opacity: 1; transform: none; }
     }
     .card:hover {
       border-color: var(--border-hi);
-      transform: translateY(-2px);
-      box-shadow: 0 10px 28px -6px rgba(0,0,0,.55), 0 0 0 1px var(--accent-glow);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-card), 0 0 0 1px var(--accent-glow);
     }
 
     /* 4/3 and not 16/9: thumbnails are rendered SQUARE (three-quarter framing on the
@@ -307,12 +414,20 @@
     .modal-overlay:not(.hidden) {
       position: fixed; inset: 0; z-index: 1000;
       pointer-events: auto;
-      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      animation: overlayIn var(--dur) var(--ease-out) both;
     }
     .modal {
       background: var(--bg-2); border: 1px solid var(--border-hi);
       border-radius: 12px; padding: 28px; width: 460px;
       max-width: calc(100vw - 40px);
+      box-shadow: var(--shadow-pop);
+    }
+    .modal-overlay:not(.hidden) .modal { animation: modalIn .28s var(--ease-spring) both; }
+    @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(10px) scale(.97); }
+      to   { opacity: 1; transform: none; }
     }
     .modal h2 { font-size: 16px; margin-bottom: 6px; }
     .modal .subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 22px; }
@@ -379,14 +494,19 @@
     /* ── Toast ───────────────────────────────────── */
     .toast {
       position: fixed; bottom: 22px; right: 22px; z-index: 2000;
-      padding: 11px 18px; border-radius: 8px;
-      background: var(--bg-3); border: 1px solid var(--border-hi);
-      font-size: 13px;
-      opacity: 0; transform: translateY(6px);
-      transition: opacity .2s, transform .2s;
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 16px; border-radius: 10px;
+      background: var(--chrome);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      backdrop-filter: saturate(180%) blur(20px);
+      border: 1px solid var(--border-hi);
+      box-shadow: var(--shadow-pop);
+      font-size: 13px; font-weight: 500;
+      opacity: 0; transform: translateY(10px) scale(.96);
+      transition: opacity var(--dur), transform var(--dur) var(--ease-spring);
       pointer-events: none;
     }
-    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.show { opacity: 1; transform: translateY(0) scale(1); }
     .toast.ok   { border-color: var(--green); color: var(--green); }
     .toast.err  { border-color: var(--red);   color: var(--red);   }
 
@@ -457,12 +577,18 @@
 
     /* ── Recent dropdown ─────────────────────────────── */
     #js-recent-list {
-      position: absolute; top: calc(100% + 4px); left: 0; z-index: 500;
+      position: absolute; top: calc(100% + 6px); left: 0; z-index: 500;
       background: var(--bg-2); border: 1px solid var(--border-hi);
-      border-radius: 8px; list-style: none;
+      border-radius: 10px; list-style: none;
       min-width: 260px; max-width: 440px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.5);
+      box-shadow: var(--shadow-pop);
       overflow: hidden;
+      transform-origin: top left;
+      animation: popIn .18s var(--ease-out) both;
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(-4px) scale(.98); }
+      to   { opacity: 1; transform: none; }
     }
     #js-recent-list li {
       padding: 8px 14px; font-size: 12px; cursor: pointer;
@@ -507,25 +633,37 @@
 
 <!-- ── Toolbar ─────────────────────────────────────── -->
 <div class="toolbar hidden" id="js-toolbar">
-  <span class="filter-label">Type</span>
-  <div class="pills" id="js-pills-type">
-    <span class="pill active" data-type="ALL">All</span>
+  <div class="filter-group">
+    <span class="filter-label">Type</span>
+    <div class="pills" id="js-pills-type">
+      <span class="pill active" data-type="ALL">All</span>
+    </div>
   </div>
 
   <div class="toolbar-sep"></div>
 
-  <span class="filter-label">Family</span>
-  <div class="pills" id="js-pills-family">
-    <span class="pill active" data-fam="ALL">All</span>
-    <span class="pill" data-fam="assets">Assets</span>
-    <span class="pill" data-fam="sets">Sets</span>
-    <span class="pill" data-fam="shots">Shots</span>
+  <div class="filter-group">
+    <span class="filter-label">Family</span>
+    <div class="pills" id="js-pills-family">
+      <span class="pill active" data-fam="ALL">All</span>
+      <span class="pill" data-fam="assets">Assets</span>
+      <span class="pill" data-fam="sets">Sets</span>
+      <span class="pill" data-fam="shots">Shots</span>
+    </div>
   </div>
 
   <div class="toolbar-right">
+    <label class="search" id="js-search-wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="js-search" placeholder="Search" spellcheck="false" autocomplete="off" aria-label="Search assets">
+      <span class="kbd" aria-hidden="true">⌘F</span>
+      <button class="search-clear" id="js-search-clear" type="button" aria-label="Clear search" title="Clear (Esc)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </label>
     <span class="refresh-icon" id="js-refresh-icon"></span>
     <span class="asset-count" id="js-count"></span>
-    <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ New asset</button>
+    <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ New asset<span class="kbd" aria-hidden="true">⌘N</span></button>
     <button class="btn btn-secondary" type="button" id="js-btn-sync-web" style="font-size:12px;padding:5px 12px" onclick="openWebSyncModal()">Sync Web</button>
     <div class="density-group" id="js-density" title="Thumbnail size">
       <button type="button" data-d="s">S</button>
@@ -739,8 +877,13 @@ const S = {
   assets:       [],
   filterType:   'ALL',
   filterFamily: 'ALL',
+  search:       '',
   sort:         'name-asc',
   density:      'm',
+  // Signature of what the grid currently shows. render() skips rebuilding the DOM
+  // when it hasn't changed — so the 30s background poll never wipes hover/scroll
+  // state or replays the card entrance animation; only real changes re-render.
+  _gridSig:     null,
   // Thumbnail cache-bust token. A thumbnail is MUTABLE at a constant URL (republishing
   // a step rewrites thumb.png at the same path): without this token, a manual refresh
   // after a publish may re-serve the cached image. Moved ONLY on explicit refresh —
@@ -765,6 +908,9 @@ const EMPTY        = el('js-empty');
 const EMPTY_REASON = el('js-empty-reason');
 const COUNT        = el('js-count');
 const REFRESH_ICON = el('js-refresh-icon');
+const SEARCH       = el('js-search');
+const SEARCH_WRAP  = el('js-search-wrap');
+const SEARCH_CLEAR = el('js-search-clear');
 const MODAL        = el('js-modal');
 const MODAL_INPUT  = el('js-modal-input');
 const MODAL_ERR    = el('js-modal-err');
@@ -867,6 +1013,8 @@ function filtered() {
   let list = S.assets;
   if (S.filterType   !== 'ALL') list = list.filter(a => (a.type || '') === S.filterType);
   if (S.filterFamily !== 'ALL') list = list.filter(a => a.family === S.filterFamily);
+  const q = S.search.trim().toLowerCase();
+  if (q) list = list.filter(a => a.name.toLowerCase().includes(q));
   return sorted(list);
 }
 
@@ -887,6 +1035,18 @@ function maxVer(asset) {
 }
 
 // ── Render ──────────────────────────────────────────
+// Identity of what the grid shows: names, order, publish state, thumbnails, frame
+// range — plus the thumb cache-bust token (a manual refresh moves it, forcing a
+// re-fetch). If this is unchanged, render() leaves the DOM untouched.
+function gridSignature(list) {
+  return list.map(a =>
+    a.name + '|' + (a.broken ? 'B' : '') + '|' + (a.thumb || '') + '|' + (a.thumb_source || '') + '|' +
+    (a.frame_range ? `${a.frame_range.start}-${a.frame_range.end}-${a.frame_range.fps}` : '') + '|' +
+    Object.entries(a.last_versions || {})
+      .map(([s, v]) => `${s}:${v.version || 0}:${v.ext || ''}:${v.thumb || ''}`).join(',')
+  ).join('||') + '#' + S.thumbToken;
+}
+
 function render() {
   const hasProject = !!(S.project && S.online);
   const visible    = hasProject ? filtered() : [];
@@ -896,18 +1056,26 @@ function render() {
   GRID      .classList.toggle('hidden', !hasProject || visible.length === 0);
   EMPTY     .classList.toggle('hidden', !hasProject || visible.length > 0);
 
-  if (!hasProject) return;
+  if (!hasProject) { S._gridSig = null; return; }
 
   COUNT.textContent = `${visible.length} / ${S.assets.length} asset${S.assets.length !== 1 ? 's' : ''}`;
 
   if (visible.length === 0) {
-    EMPTY_REASON.textContent = (S.filterType !== 'ALL' || S.filterFamily !== 'ALL')
+    const filtering = S.filterType !== 'ALL' || S.filterFamily !== 'ALL' || S.search.trim();
+    EMPTY_REASON.textContent = filtering
       ? 'No asset matches the filters.'
       : 'This project has no assets yet.';
+    S._gridSig = null;
     return;
   }
 
-  GRID.innerHTML = visible.map(cardHTML).join('');
+  // Rebuild only when the visible set actually changed — otherwise the idle poll
+  // would wipe hover/scroll and replay the entrance stagger every 30s.
+  const sig = gridSignature(visible);
+  if (sig === S._gridSig) return;
+  S._gridSig = sig;
+
+  GRID.innerHTML = visible.map((a, i) => cardHTML(a, i)).join('');
 
   // Two verbs, never a path built here (see INC-3): the server resolves
   // {entity, step?} ('Open the scene') or {entity, step, version} ('Import').
@@ -942,7 +1110,7 @@ const THUMB_TAGS = {
   custom: ['custom', 'Preview', 'Manually set thumbnail (preview.png)'],
 };
 
-function cardHTML(asset) {
+function cardHTML(asset, i = 0) {
   const { name, family, type, last_versions = {}, frame_range, thumb, thumb_source, broken } = asset;
   const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
   const color = TYPE_COLORS[type] || '#9c9cc8';  // aligned with --text-muted (contrast fix 2026-08-03)
@@ -994,7 +1162,7 @@ function cardHTML(asset) {
     : '';
 
   return `
-    <div class="card${broken ? ' broken' : ''}">
+    <div class="card${broken ? ' broken' : ''}" style="--i:${i}">
       <div class="card-thumb">${thumbSection}</div>
       <div class="card-body">
         <div class="card-head">
@@ -1225,6 +1393,79 @@ el('js-pills-family').querySelectorAll('.pill').forEach(p =>
     render();
   })
 );
+
+// ── Search ────────────────────────────────────────────
+function applySearch() {
+  S.search = SEARCH.value;
+  SEARCH_WRAP.classList.toggle('has-text', SEARCH.value.length > 0);
+  render();
+}
+function focusSearch() { SEARCH.focus(); SEARCH.select(); }
+function clearSearch() {
+  SEARCH.value = '';
+  S.search = '';
+  SEARCH_WRAP.classList.remove('has-text');
+  render();
+}
+SEARCH.addEventListener('input', applySearch);
+SEARCH.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (S.search) { clearSearch(); e.stopPropagation(); }
+    else SEARCH.blur();
+  }
+});
+SEARCH_CLEAR.addEventListener('click', e => { e.preventDefault(); clearSearch(); SEARCH.focus(); });
+
+// ── Manual refresh (⌘R) ───────────────────────────────
+// Unlike the idle poll, a manual refresh always re-pulls thumbnails: move the
+// cache-bust token and drop the grid signature so the DOM (and images) rebuild.
+async function manualRefresh() {
+  if (!S.online || !S.project) return;
+  S.thumbToken = Date.now();
+  S._gridSig = null;
+  await checkServer();
+  await loadAssets();
+}
+
+// ── Keyboard shortcuts (macos-design: every primary action has a key) ──
+const _anyModalOpen = () => document.querySelector('.modal-overlay:not(.hidden)');
+document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey;
+
+  // Esc — close any open modal; otherwise clear/blur search.
+  if (e.key === 'Escape') {
+    const open = document.querySelectorAll('.modal-overlay:not(.hidden)');
+    if (open.length) { open.forEach(m => m.classList.add('hidden')); return; }
+    if (S.search) { clearSearch(); return; }
+    if (document.activeElement === SEARCH) SEARCH.blur();
+    return;
+  }
+
+  if (!mod || e.altKey) return;
+  const k = e.key.toLowerCase();
+
+  // ⌘F — focus the asset search (replaces the browser find on this local tool).
+  if (k === 'f' && !e.shiftKey) {
+    if (S.project && S.online && !_anyModalOpen()) { e.preventDefault(); focusSearch(); }
+    return;
+  }
+  // ⌘N — New asset · ⌘⇧N — New project.
+  if (k === 'n') {
+    if (_anyModalOpen()) return;
+    e.preventDefault();
+    if (e.shiftKey) openNewProjectModal();
+    else if (S.project && S.online) openNewAssetModal();
+    else openNewProjectModal();
+    return;
+  }
+  // ⌘R — in-app refresh (re-pull assets + thumbnails) instead of a full page reload.
+  if (k === 'r' && !e.shiftKey) {
+    if (_anyModalOpen()) return;
+    e.preventDefault();
+    manualRefresh();
+    return;
+  }
+});
 
 // ── Browse ────────────────────────────────────────────
 function _browsePanelOutside(e) {
