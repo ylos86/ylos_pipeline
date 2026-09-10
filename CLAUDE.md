@@ -53,7 +53,11 @@ create_project.py     ORCHESTRATEUR. Source de vérité UNIQUE, stdlib seule. Co
                       résolution (resolve_entity, resolve_open_target, resolve_entity_thumbnail),
                       lecture publishes (list_publishes, latest_publish_artifact), caches
                       (entity_cache_dir, resolve_cache), pinning web (pin_web_asset, sync_web_assets),
-                      I/O atomique (_atomic_write_*), verrou (acquire_lock), clean_stale_staging.
+                      I/O atomique (_atomic_write_*), verrou (acquire_lock), clean_stale_staging,
+                      scenefiles multi-DCC (list_scenefiles), statut par step 2.2
+                      (get/set_step_status), listing d'entités (list_entities, orphelins flaggés),
+                      specs DCC-agnostiques (scene_starter_spec, playblast_spec, render_spec),
+                      dépendances (build_dependency_index, entity_dependencies).
 ylos_ui.py            Serveur HTTP local + API REST (/api/*). Adaptateur mince → create_project.
 app.html              Web UI (Project Browser). Config via GET /api/config (jamais codée en dur).
 migrate_to_2.0.py     Migration legacy → convention TYPE_Nom_Variant (dispo si vrai projet legacy).
@@ -96,10 +100,22 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
 ```
 
 ## Contrats & conventions
-- **Schéma 2.1.0** (partagé `project.json` + `manifest.json`). Additif sur 2.0 : `frame_range`
-  optionnel du shot. `additionalProperties: true` → aucun manifeste antérieur invalidé. Tout
-  changement de schéma = **migration documentée**, jamais une édition silencieuse. Contrats :
-  `project.schema.json`, `asset.schema.json`, `docs/migration-*.md`.
+- **Schéma 2.2.0** (partagé `project.json` + `manifest.json`). Additif sur 2.0 : `frame_range`
+  optionnel du shot (2.1) ; `step_status` explicite par step + `dependencies` sur les entrées
+  de `step_publishes` (2.2). `additionalProperties: true` → aucun manifeste antérieur invalidé.
+  Tout changement de schéma = **migration documentée**, jamais une édition silencieuse.
+  Contrats : `project.schema.json`, `asset.schema.json`, `docs/migration-*.md`.
+- **Statut par step** : seuls `review`/`approved` sont **persistés** (`set_step_status`, point
+  unique) ; `empty`/`wip`/`published` sont **dérivés** du disque à la lecture
+  (`get_step_status`), jamais écrits. Un step non déclaré est refusé (pas de création implicite).
+- **Dépendances** : `finalize_publish_version(..., dependencies=[{entity, step, version}])`
+  enregistre ce que le DCC avait importé ; `build_dependency_index()` fusionne cette source
+  (manifeste) avec le scan des layers USD **ASCII** (`@…@`, `$PROJ_ROOT` expansé). Jamais de
+  fichier annexe : manifestes + layers sur disque font foi. `.usdc`/`.usdnc` ignorés → côté
+  Houdini, la source manifeste est la seule fiable.
+- **Scenefiles multi-DCC** : `list_scenefiles()` / `_latest_wip(…, dcc)` scannent
+  `SCENEFILE_EXTENSIONS` (`.blend` Blender, `.hip/.hiplc/.hipnc` Houdini) — un consommateur ne
+  re-scanne jamais `wip/` lui-même. `resolve_open_target(dcc="houdini")` résout les WIP `.hip*`.
 - **Convention de nommage `TYPE_Nom_Variant`** validée **à la création** par
   `validate_entity_name(name, entity_type, sub_type)` — point unique, même message d'erreur
   partout (web/Blender/CLI). Une entité sans manifeste ou hors convention est un **fantôme** :

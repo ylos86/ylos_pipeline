@@ -50,10 +50,13 @@ from pathlib import Path
 # Constants - contract
 # --------------------------------------------------------------------------------------
 
-SCHEMA_VERSION = "2.1.0"          # contract version (project.json AND asset manifest).
+SCHEMA_VERSION = "2.2.0"          # contract version (project.json AND asset manifest).
                                   # Bump on EVERY schema change (= migration).
                                   # 2.1.0: added 'frame_range' (shots) - additive, no
                                   # 2.0 manifest invalidated (see docs/migration-2.0-to-2.1.md).
+                                  # 2.2.0: added optional 'step_status' (entity manifest) and
+                                  # optional 'dependencies' on publish entries - additive
+                                  # (see docs/migration-2.1-to-2.2.md).
 MANIFEST_NAME = "project.json"
 ASSET_MANIFEST_NAME = "manifest.json"
 ASSET_ROOT_NAME = "asset_root.usda"   # USD composition of an asset/set (ASCII, see convention)
@@ -151,6 +154,24 @@ LOP_PUBLISHES_KEY = "lop_publishes"
 # distinct from 'publishes' (list of paths, written by the legacy publish_asset()) so the
 # two entry forms are never mixed in the same list.
 STEP_PUBLISHES_KEY = "step_publishes"
+# Schema 2.2 - per-step production status (plan-usable-v1 Phase 2.1). Only the EXPLICIT
+# values are persisted in the manifest (manifest['step_status'][step]); the others are
+# DERIVED from disk at read time (get_step_status) and never written.
+STEP_STATUS_KEY = "step_status"
+STEP_STATUSES = ["empty", "wip", "published", "review", "approved"]   # progression order
+STEP_STATUS_EXPLICIT = ("review", "approved")
+STEP_STATUS_AUTO = "auto"         # sentinel accepted by set_step_status to clear an explicit value
+# Schema 2.2 - dependencies recorded on a publish entry (Prism-style product tracking):
+# [{"entity", "step", "version"}] = the published products this publish was built from.
+DEPENDENCIES_KEY = "dependencies"
+# Versioned DCC scenefiles ("WIPs") per DCC, in <entity>/<step>/wip/. Single source for
+# every consumer (web scenefile list, Houdini panel, resolve_open_target, starter spec).
+SCENEFILE_EXTENSIONS = {
+    "blender": (".blend",),
+    "houdini": (".hip", ".hiplc", ".hipnc"),
+}
+_DCC_BY_SCENEFILE_EXT = {ext: dcc for dcc, exts in SCENEFILE_EXTENSIONS.items() for ext in exts}
+_SCENEFILE_VER_RE = re.compile(r"_v(\d+)\.(?:blend|hip|hiplc|hipnc)$", re.IGNORECASE)
 _DIR_VER_RE = re.compile(r"_v(\d+)$")
 
 # Step strength order for the subLayers stack (strongest / downstream first).
@@ -642,6 +663,199 @@ def set_frame_range(project_root, shot_name, start, end, fps=None):
     return frame_range
 
 
+
+# --------------------------------------------------------------------------------------
+# Scenefiles (DCC WIPs), per-step status (schema 2.2) and entity listing - SINGLE POINT
+# (principle 5): the web server, the Blender panel and the Houdini panel all list the
+# same things; none of them re-implements the scan.
+# --------------------------------------------------------------------------------------
+
+def _scan_scenefiles(wip_dir):
+    """Versioned scenefiles of one wip/ folder (every DCC of SCENEFILE_EXTENSIONS),
+    ascending (version, filename). Sidecar '<file>.json' merged when readable."""
+    wip_dir = Path(wip_dir)
+    if not wip_dir.is_dir():
+        return []
+    rows = []
+    for f in sorted(wip_dir.iterdir()):
+        if not f.is_file():
+            continue
+        m = _SCENEFILE_VER_RE.search(f.name)
+        if not m:
+            continue
+        meta = {}
+        sidecar = f.with_name(f.name + ".json")
+        if sidecar.is_file():
+            try:
+                meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        dcc = _DCC_BY_SCENEFILE_EXT.get(f.suffix.lower(), "unknown")
+        dcc_version = (meta.get("dcc_version") or meta.get(dcc + "_version")
+                       or meta.get("blender_version") or "")
+        rows.append({
+            "version": int(m.group(1)),
+            "filename": f.name,
+            "path": str(f),
+            "dcc": dcc,
+            "comment": meta.get("comment", ""),
+            "user": meta.get("user", ""),
+            "date": meta.get("date", ""),
+            "dcc_version": dcc_version,
+            "blender_version": meta.get("blender_version", ""),   # compat (web readers)
+        })
+    return sorted(rows, key=lambda r: (r["version"], r["filename"]))
+
+
+def list_scenefiles(project_root, entity_name, step=None):
+    """{step: [scenefile, ...]} - versioned DCC scenefiles ("WIPs") of an entity, every
+    known DCC together (SCENEFILE_EXTENSIONS), ascending version. Disk scan of
+    <entity>/<step>/wip/ (read-only, never a manifest: a WIP is not a versioned pipeline
+    datum). The Prism-style sidecar '<file>.json' (comment / user / date / <dcc>_version,
+    written by the DCC save-version operators) is merged when present - absent or
+    unreadable -> empty fields, never an exception. 'step' None -> every step declared in
+    the manifest. NEVER raises for a business case: unknown entity -> {}.
+
+    scenefile = {"version", "filename", "path", "dcc" ('blender'|'houdini'), "comment",
+                 "user", "date", "dcc_version", "blender_version" (compat)}."""
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return {}
+    entity_dir = Path(resolved["dir"])
+    steps = [step] if step else list(resolved["manifest"].get("steps") or [])
+    result = {}
+    for s in steps:
+        rows = _scan_scenefiles(entity_dir / s / "wip")
+        if rows:
+            result[s] = rows
+    return result
+
+
+def _derive_step_status(entity_dir, manifest, step):
+    """'published' (a complete publish with an artifact exists for the step - two-phase or
+    legacy) > 'wip' (at least one versioned scenefile) > 'empty'. Disk + manifest only,
+    the explicit value is not read here."""
+    entries = (manifest.get(STEP_PUBLISHES_KEY) or {}).get(step, [])
+    if any(e.get("status") == "complete" and e.get("artifact") for e in entries):
+        return "published"
+    if (manifest.get("publishes") or {}).get(step):
+        return "published"
+    if _scan_scenefiles(Path(entity_dir) / step / "wip"):
+        return "wip"
+    return "empty"
+
+
+def get_step_status(project_root, entity_name, step=None):
+    """Per-step status of an entity (schema 2.2). The EXPLICIT value of the manifest
+    (manifest['step_status'][step], one of STEP_STATUS_EXPLICIT) wins; otherwise the
+    status is DERIVED from disk (_derive_step_status: empty / wip / published). Returns
+    {step: {"status", "explicit": bool, "derived"}} for every declared step, or the single
+    dict when 'step' is given (None if that step is not declared). NEVER raises for a
+    business case: unknown entity -> {} (None with 'step')."""
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return None if step else {}
+    manifest = resolved["manifest"]
+    entity_dir = Path(resolved["dir"])
+    explicit_map = manifest.get(STEP_STATUS_KEY) or {}
+    if not isinstance(explicit_map, dict):
+        explicit_map = {}
+    result = {}
+    for s in list(manifest.get("steps") or []):
+        derived = _derive_step_status(entity_dir, manifest, s)
+        explicit = explicit_map.get(s)
+        if explicit in STEP_STATUS_EXPLICIT:
+            result[s] = {"status": explicit, "explicit": True, "derived": derived}
+        else:
+            result[s] = {"status": derived, "explicit": False, "derived": derived}
+    if step:
+        return result.get(step)
+    return result
+
+
+def set_step_status(project_root, entity_name, step, status):
+    """Persist an EXPLICIT step status (schema 2.2) in the entity manifest, or clear it
+    (STEP_STATUS_AUTO / None / '' -> the status falls back to the derived value). 'status'
+    must be one of STEP_STATUS_EXPLICIT; 'step' must be declared for the entity. Atomic
+    write under the manifest flock (same pattern as set_frame_range). Returns the
+    resulting get_step_status(...) dict of the step. Raises ValueError (unknown step /
+    status) or FileNotFoundError (unknown entity)."""
+    if status in (None, "", STEP_STATUS_AUTO):
+        status = None
+    elif status not in STEP_STATUS_EXPLICIT:
+        raise ValueError(
+            f"Invalid step status {status!r}: expected one of {list(STEP_STATUS_EXPLICIT)} "
+            f"or {STEP_STATUS_AUTO!r} to clear (the other statuses are derived, never set)."
+        )
+    _entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
+    with acquire_lock(manifest_path):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        declared = manifest.get("steps") or []
+        if step not in declared:
+            raise ValueError(
+                f"Step {step!r} not declared for '{entity_name}' (manifest steps: {declared})."
+            )
+        statuses = manifest.get(STEP_STATUS_KEY)
+        if not isinstance(statuses, dict):
+            statuses = {}
+        if status is None:
+            statuses.pop(step, None)
+        else:
+            statuses[step] = status
+        if statuses:
+            manifest[STEP_STATUS_KEY] = statuses
+        else:
+            manifest.pop(STEP_STATUS_KEY, None)
+        manifest["modified_utc"] = _now()
+        _atomic_write_json(manifest_path, manifest)
+    return get_step_status(project_root, entity_name, step)
+
+
+def list_entities(project_root, family=None):
+    """[{name, family ('asset'|'set'|'shot'), entity_type (sub-type, as resolve_entity),
+    dir, steps, manifest, broken}] - every folder under assets/, sets/, shots/, sorted by
+    family then name. A folder WITHOUT a readable manifest.json is an ORPHAN (never created
+    by create_asset): listed with broken=<reason>, manifest={}, steps = its disk sub-folders
+    - surfaced, never silently skipped (a ghost the tool hides is worse than a flagged one).
+    'family' restricts to one family. Never raises."""
+    project_root = Path(project_root)
+    families = [family] if family else list(ENTITY_DIR)
+    out = []
+    for fam in families:
+        if fam not in ENTITY_DIR:
+            continue
+        fam_dir = project_root / ENTITY_DIR[fam]
+        if not fam_dir.is_dir():
+            continue
+        for d in sorted(fam_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            manifest_path = d / ASSET_MANIFEST_NAME
+            manifest, broken = None, None
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    broken = f"manifest.json unreadable: {exc}"
+            else:
+                broken = ("manifest.json missing - entity never created by the pipeline "
+                          "(create_asset), not publishable as-is")
+            if not isinstance(manifest, dict):
+                manifest = {}
+            if broken:
+                steps = sorted(s.name for s in d.iterdir()
+                               if s.is_dir() and not s.name.startswith("."))
+            else:
+                steps = list(manifest.get("steps") or [])
+            out.append({
+                "name": d.name, "family": fam, "entity_type": manifest.get("type", ""),
+                "dir": str(d), "steps": steps, "manifest": manifest, "broken": broken,
+            })
+    return out
+
+
 # --------------------------------------------------------------------------------------
 # Resolution of the file to OPEN for an entity+step (consumed by the DCC bridges)
 # --------------------------------------------------------------------------------------
@@ -649,18 +863,20 @@ def set_frame_range(project_root, shot_name, start, end, fps=None):
 _WIP_VER_RE = re.compile(r"_v(\d+)\.blend$")
 
 
-def _latest_wip(entity_dir, step):
-    """Latest .blend WIP of a Blender step: entity_dir/<step>/wip/<name>_<step>_vNNN.blend
-    (highest number). Returns (Path, version) or (None, 0). Never raises - an absent
-    folder (unscaffolded step) simply returns (None, 0)."""
+def _latest_wip(entity_dir, step, dcc="blender"):
+    """Latest WIP scenefile of a step for one DCC: entity_dir/<step>/wip/<name>_<step>_vNNN.<ext>
+    (highest number; extensions of SCENEFILE_EXTENSIONS[dcc] - .blend for Blender, .hip/.hiplc/
+    .hipnc together for Houdini). Returns (Path, version) or (None, 0). Never raises - an
+    absent folder (unscaffolded step) or an unknown dcc simply returns (None, 0)."""
     wip_dir = Path(entity_dir) / step / "wip"
-    if not wip_dir.is_dir():
+    exts = SCENEFILE_EXTENSIONS.get(dcc)
+    if not exts or not wip_dir.is_dir():
         return None, 0
     best, best_ver = None, -1
     for f in wip_dir.iterdir():
-        if not f.is_file() or f.suffix.lower() != ".blend":
+        if not f.is_file() or f.suffix.lower() not in exts:
             continue
-        m = _WIP_VER_RE.search(f.name)
+        m = _SCENEFILE_VER_RE.search(f.name)
         if m and int(m.group(1)) > best_ver:
             best, best_ver = f, int(m.group(1))
     return best, (best_ver if best is not None else 0)
@@ -907,7 +1123,8 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
 
     Parameters:
       entity_name  : entity name (asset/set/shot) - located via _find_asset_entity.
-      dcc          : target DCC ('blender' by default). Only 'blender' resolves .blend WIPs.
+      dcc          : target DCC ('blender' by default). 'blender' resolves .blend WIPs,
+                     'houdini' resolves .hip/.hiplc/.hipnc WIPs (SCENEFILE_EXTENSIONS).
       step         : targeted step; None -> first step declared in the manifest (fallback).
       project_root : project root; None -> active project (read_active_project(), contract
                      ~/.ylos/active_project).
@@ -950,9 +1167,9 @@ def resolve_open_target(entity_name, dcc="blender", step=None, project_root=None
     # branches are step-dependent and therefore skipped, but the default scene (assembly
     # root, step-agnostic) stays resolvable -> clean degradation, never an exception.
 
-    # 1. latest WIP (Blender only, step required)
-    if dcc == "blender" and step:
-        wip, _wver = _latest_wip(entity_dir, step)
+    # 1. latest WIP of the DCC (step required; unknown dcc -> no WIP branch)
+    if step and dcc in SCENEFILE_EXTENSIONS:
+        wip, _wver = _latest_wip(entity_dir, step, dcc)
         if wip is not None:
             return {"path": str(wip), "kind": "wip", "step": step, "exists": True}
 
@@ -1049,10 +1266,13 @@ def scene_starter_spec(entity_name, step, dcc="blender", project_root=None):
                            f"(manifest steps: {', '.join(declared)})")}
 
     # Next free WIP version (never overwrite an existing authoring file).
-    _wip, latest_ver = _latest_wip(entity_dir, step)
+    _wip, latest_ver = _latest_wip(entity_dir, step, dcc)
     version = latest_ver + 1
     stem = f"{entity_name}_{step}_v{version:03d}"
-    wip = {"dir": str(entity_dir / step / "wip"), "version": version, "stem": stem}
+    wip = {"dir": str(entity_dir / step / "wip"), "version": version, "stem": stem,
+           # extensions the DCC may pick from (Houdini: license-dependent, see
+           # ylos_houdini.hip_extension) - the numbering above already counted them all.
+           "extensions": list(SCENEFILE_EXTENSIONS.get(dcc, ()))}
     if dcc == "blender":
         wip["filename"] = stem + ".blend"
         wip["path"] = str(entity_dir / step / "wip" / (stem + ".blend"))
@@ -1654,8 +1874,31 @@ def _missing_artifacts(staging_dir, expected_artifacts):
     return missing
 
 
+def _normalize_dependencies(dependencies):
+    """Validate / normalize the 'dependencies' of a publish (schema 2.2): an iterable of
+    {"entity", "step", "version"} (version int, or None = unpinned root reference).
+    Returns a new list of clean dicts; raises ValueError on a malformed entry - checked
+    BEFORE any commit so a bad payload never lands half-way."""
+    out = []
+    for d in dependencies or []:
+        if not isinstance(d, dict) or not d.get("entity") or not d.get("step"):
+            raise ValueError(
+                f"Invalid dependency {d!r}: expected {{'entity', 'step', 'version'}}"
+            )
+        version = d.get("version")
+        if version is not None:
+            try:
+                version = int(version)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"Invalid dependency version {version!r} for {d.get('entity')!r}"
+                )
+        out.append({"entity": str(d["entity"]), "step": str(d["step"]), "version": version})
+    return out
+
+
 def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, version,
-                             expected_artifacts, comment=None):
+                             expected_artifacts, comment=None, dependencies=None):
     """Atomic commit of a publish previously reserved by allocate_publish_version():
     os.replace(staging_dir, final_dir) - single commit point for EVERYTHING the staging
     contains (artifact + thumb.png) - then manifest update under flock (entry
@@ -1674,12 +1917,18 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
     NOT touch staging_dir, does NOT call os.replace, writes NOTHING to the manifest (the
     reservation stays 'pending').
 
+    dependencies (schema 2.2, optional): [{"entity", "step", "version"}] - the published
+    products this publish was built from (what the DCC had imported: Blender import states,
+    Houdini sublayer/reference LOPs). Recorded as-is on the manifest entry ('dependencies')
+    and read by build_dependency_index(). None -> key not written; [] -> recorded empty.
+
     Returns {name, version, final_dir, manifest}.
     """
     project_root = Path(project_root)
     entity_dir, manifest_path = _find_asset_entity(project_root, asset_name)
     staging_dir = Path(staging_dir)
     final_dir = Path(final_dir)
+    deps = _normalize_dependencies(dependencies) if dependencies is not None else None
 
     if not staging_dir.is_dir():
         raise FileNotFoundError(f"staging_dir not found: {staging_dir}")
@@ -1730,6 +1979,8 @@ def finalize_publish_version(project_root, asset_name, staging_dir, final_dir, v
         entry["published_utc"] = _now()
         if comment:
             entry["comment"] = comment
+        if deps is not None:
+            entry[DEPENDENCIES_KEY] = deps
         manifest["modified_utc"] = _now()
         _atomic_write_json(manifest_path, manifest)
 
@@ -2035,6 +2286,212 @@ def sync_web_assets(project_root, web_project_dir):
 # CLI
 # --------------------------------------------------------------------------------------
 
+
+# --------------------------------------------------------------------------------------
+# Dependency tracking (plan-usable-v1 Phase 3) - "this asset is used in which shots/sets".
+# Source of truth = the manifests (dependencies recorded on publish entries, schema 2.2)
+# + the ASCII USD layers on disk (asset paths '@...@' of the composed roots and .usda
+# publishes). Never an annex file to maintain: the index is rebuilt on demand.
+# --------------------------------------------------------------------------------------
+
+_USD_ASSET_PATH_RE = re.compile(r"@([^@\r\n]+)@")
+_USD_ASCII_MAGIC = b"#usda"
+_USD_SCAN_MAX_BYTES = 32 * 1024 * 1024   # bigger ASCII layers are skipped (never parsed)
+_PROJ_ROOT_VAR_RE = re.compile(r"\$\{?PROJ_ROOT\}?")
+_PATH_VER_RE = re.compile(r"_v(\d+)(?:\.|$)")
+
+
+def _expand_proj_root(raw, project_root):
+    """Expand '$PROJ_ROOT' / '${PROJ_ROOT}' the way the DCC bridges write it
+    (ylos_houdini.env_relative): $PROJ_ROOT/<project> == project_root, so the variable is
+    the PARENT of the project folder for THIS project (never the shell's global value,
+    which may point at another disk in a per-session setup)."""
+    return _PROJ_ROOT_VAR_RE.sub(lambda _m: str(Path(project_root).parent), raw)
+
+
+def _classify_project_path(path, project_root):
+    """Map an absolute path inside the project to entity coordinates
+    {"entity", "family", "step", "version"}: step/version None for an assembly root
+    (asset_root.usda / shot_root.usda = unpinned, always-latest reference); step 'lop' for a
+    LOP publish. None if the path is outside assets/, sets/, shots/ or not a known layout."""
+    project_root = Path(project_root).resolve()
+    try:
+        rel = Path(path).resolve().relative_to(project_root)
+    except ValueError:
+        return None
+    parts = rel.parts
+    if len(parts) < 3:
+        return None
+    family = next((k for k, v in ENTITY_DIR.items() if v == parts[0]), None)
+    if family is None:
+        return None
+    entity = parts[1]
+    if len(parts) == 3 and parts[2] in (ASSET_ROOT_NAME, SHOT_ROOT_NAME):
+        return {"entity": entity, "family": family, "step": None, "version": None}
+    if len(parts) >= 5 and parts[3] == LOP_PUBLISH_DIR_NAME:
+        m = _PATH_VER_RE.search(parts[4])
+        version = int(m.group(1)) if m else None
+        return {"entity": entity, "family": family, "step": parts[2], "version": version}
+    return None
+
+
+def _usd_layer_dependencies(layer_path, project_root):
+    """Entity coordinates referenced by an ASCII USD layer (asset paths '@...@'), resolved
+    relative to the layer's folder, '$PROJ_ROOT' expanded, deduplicated. Binary / crate /
+    encrypted layers (no '#usda' magic: .usdc, Apprentice .usdnc) and oversized files are
+    skipped -> []. Never raises."""
+    layer_path = Path(layer_path)
+    try:
+        if not layer_path.is_file() or layer_path.stat().st_size > _USD_SCAN_MAX_BYTES:
+            return []
+        with open(layer_path, "rb") as fh:
+            if not fh.read(len(_USD_ASCII_MAGIC)).startswith(_USD_ASCII_MAGIC):
+                return []
+        text = layer_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    found, seen = [], set()
+    for raw in _USD_ASSET_PATH_RE.findall(text):
+        raw = _expand_proj_root(raw.strip(), project_root)
+        if not raw or raw.startswith("$"):
+            continue   # unexpanded variable (e.g. $PROJ_CACHE): never a source dependency
+        p = Path(raw)
+        if not p.is_absolute():
+            p = layer_path.parent / p
+        coords = _classify_project_path(p, project_root)
+        if coords is None:
+            continue
+        key = (coords["entity"], coords["step"], coords["version"])
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(coords)
+    return found
+
+
+def build_dependency_index(project_root):
+    """Reverse index of product usage across the project (Phase 3.1). Two sources, merged:
+    - 'manifest': the 'dependencies' recorded on each complete publish entry (schema 2.2 -
+      what the DCC had imported when it published);
+    - 'usda': asset paths found in the ASCII USD layers on disk (composed roots and .usda
+      publishes) that point into ANOTHER entity of the project (an entity's own subLayers
+      are its stack, not a dependency).
+    Returns {"edges": [edge...], "used_in": {entity: [edge...]}, "uses": {entity: [edge...]}}.
+    edge = {"consumer":   {"entity", "family", "step", "version", "is_latest"}
+                          (step/version None = the entity's composed root),
+            "dependency": {"entity", "family", "step", "version", "latest_version", "outdated"}
+                          (step/version None = unpinned root reference, never outdated),
+            "source": "manifest"|"usda", "file": consumer layer (entity-relative) or None}
+    'outdated' = pinned to a version older than the latest complete publish of that step.
+    Never raises for a business case (unreadable manifest / layer -> skipped)."""
+    project_root = Path(project_root)
+    entities = {e["name"]: e for e in list_entities(project_root) if not e["broken"]}
+    latest_cache = {}
+
+    def _latest(entity, step):
+        key = (entity, step)
+        if key not in latest_cache:
+            if step is None or step == LOP_DIR_NAME or entity not in entities:
+                latest_cache[key] = None
+            else:
+                entry = latest_publish_artifact(project_root, entity, step)
+                latest_cache[key] = entry.get("version") if entry else None
+        return latest_cache[key]
+
+    def _dep(coords):
+        entity = coords["entity"]
+        ver = coords.get("version")
+        latest = _latest(entity, coords.get("step"))
+        return {
+            "entity": entity,
+            "family": coords.get("family") or entities.get(entity, {}).get("family"),
+            "step": coords.get("step"),
+            "version": ver,
+            "latest_version": latest,
+            "outdated": bool(ver is not None and latest is not None and latest > ver),
+        }
+
+    edges = []
+    for name, ent in entities.items():
+        manifest = ent["manifest"]
+        entity_dir = Path(ent["dir"])
+        step_publishes = manifest.get(STEP_PUBLISHES_KEY) or {}
+        latest_by_step = {}
+        for step, entries in step_publishes.items():
+            complete = [e for e in entries if e.get("status") == "complete"]
+            latest_by_step[step] = max((e.get("version", 0) for e in complete), default=None)
+        # 1. manifest-recorded dependencies (per complete step publish)
+        for step, entries in step_publishes.items():
+            for e in entries:
+                if e.get("status") != "complete":
+                    continue
+                for d in e.get(DEPENDENCIES_KEY) or []:
+                    if not isinstance(d, dict) or not d.get("entity"):
+                        continue
+                    coords = {"entity": d["entity"], "step": d.get("step"),
+                              "version": d.get("version"),
+                              "family": entities.get(d["entity"], {}).get("family")}
+                    edges.append({
+                        "consumer": {"entity": name, "family": ent["family"], "step": step,
+                                     "version": e.get("version"),
+                                     "is_latest": e.get("version") == latest_by_step[step]},
+                        "dependency": _dep(coords),
+                        "source": "manifest",
+                        "file": e.get("artifact"),
+                    })
+        # 2. ASCII USD layers on disk: composed root + complete publishes
+        root_name = SHOT_ROOT_NAME if ent["family"] == "shot" else ASSET_ROOT_NAME
+        layers = [(root_name, None, None, True)]
+        for step, entries in step_publishes.items():
+            for e in entries:
+                if e.get("status") == "complete" and e.get("artifact"):
+                    layers.append((e["artifact"], step, e.get("version"),
+                                   e.get("version") == latest_by_step[step]))
+        for rel, step, version, is_latest in layers:
+            for coords in _usd_layer_dependencies(entity_dir / rel, project_root):
+                if coords["entity"] == name:
+                    continue   # the entity's own stack (subLayers of its root)
+                edges.append({
+                    "consumer": {"entity": name, "family": ent["family"], "step": step,
+                                 "version": version, "is_latest": is_latest},
+                    "dependency": _dep(coords),
+                    "source": "usda",
+                    "file": rel,
+                })
+    used_in, uses = {}, {}
+    for edge in edges:
+        used_in.setdefault(edge["dependency"]["entity"], []).append(edge)
+        uses.setdefault(edge["consumer"]["entity"], []).append(edge)
+    return {"edges": edges, "used_in": used_in, "uses": uses}
+
+
+def _dedupe_edges(edges):
+    """One edge per (consumer step/version, dependency entity/step/version) - the
+    'manifest' source wins over 'usda' when both saw the same link."""
+    best = {}
+    for e in edges:
+        c, d = e["consumer"], e["dependency"]
+        key = (c["entity"], c["step"], c["version"], d["entity"], d["step"], d["version"])
+        if key not in best or (best[key]["source"] != "manifest" and e["source"] == "manifest"):
+            best[key] = e
+    return list(best.values())
+
+
+def entity_dependencies(project_root, entity_name, index=None):
+    """Dependency view of ONE entity (web card, Blender / Houdini panels):
+    {"uses": [edge...], "used_in": [edge...], "outdated": [edge...]} - 'outdated' = the
+    edges of the entity's LATEST consumer publishes (or its root) that pin a version older
+    than the latest complete publish of the dependency, i.e. "update available". Deduped
+    (manifest source preferred). Pass a prebuilt 'index' (build_dependency_index) to avoid
+    rescanning the project per entity."""
+    if index is None:
+        index = build_dependency_index(project_root)
+    uses = _dedupe_edges(index["uses"].get(entity_name, []))
+    used_in = _dedupe_edges(index["used_in"].get(entity_name, []))
+    outdated = [e for e in uses if e["dependency"]["outdated"] and e["consumer"]["is_latest"]]
+    return {"uses": uses, "used_in": used_in, "outdated": outdated}
+
+
 def _cli(argv=None):
     p = argparse.ArgumentParser(description="Project & asset creator - Ylos pipeline.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2083,6 +2540,21 @@ def _cli(argv=None):
     pcs.add_argument("--apply", action="store_true",
                      help="Actually delete (default: dry-run, reports without deleting anything)")
 
+    pss = sub.add_parser("set-step-status",
+                         help="Set a step's EXPLICIT status (schema 2.2: review|approved) or "
+                              "clear it with 'auto' (back to the derived empty|wip|published).")
+    pss.add_argument("project", help="Path of the existing project")
+    pss.add_argument("entity", help="Entity name")
+    pss.add_argument("step", help="Step declared for the entity")
+    pss.add_argument("status", help="|".join(STEP_STATUS_EXPLICIT + (STEP_STATUS_AUTO,)))
+
+    pdp = sub.add_parser("dependencies",
+                         help="Dependency index (who uses what, update available) of a project "
+                              "or of one entity.")
+    pdp.add_argument("project", help="Path of the existing project")
+    pdp.add_argument("--entity", default=None, help="Restrict to one entity (uses / used-in)")
+    pdp.add_argument("--json", action="store_true", help="Print raw JSON")
+
     args = p.parse_args(argv)
 
     try:
@@ -2113,6 +2585,41 @@ def _cli(argv=None):
             fr = set_frame_range(args.project, args.shot, args.start, args.end, fps=args.fps)
             print(f"[ok] frame_range {args.shot} : {fr['start']}-{fr['end']} @ {fr['fps']} fps")
             print("  shot_root.usda recomposed (timecodes)")
+        elif args.cmd == "set-step-status":
+            info = set_step_status(args.project, args.entity, args.step, args.status)
+            print(f"[ok] {args.entity} / {args.step} status = {info['status']} "
+                  f"({'explicit' if info['explicit'] else 'derived'})")
+        elif args.cmd == "dependencies":
+            if args.entity:
+                info = entity_dependencies(args.project, args.entity)
+                if args.json:
+                    print(json.dumps(info, indent=2))
+                else:
+                    print(f"[deps] {args.entity}")
+                    for e in info["uses"]:
+                        d, c = e["dependency"], e["consumer"]
+                        pin = f"v{d['version']:03d}" if d["version"] is not None else "root"
+                        flag = "  <- UPDATE AVAILABLE" if d["outdated"] else ""
+                        print(f"  uses    {d['entity']}/{d['step'] or '-'} {pin} "
+                              f"(via {c['step'] or 'root'}){flag}")
+                    for e in info["used_in"]:
+                        d, c = e["dependency"], e["consumer"]
+                        pin = f"v{d['version']:03d}" if d["version"] is not None else "root"
+                        print(f"  used in {c['entity']}/{c['step'] or 'root'} "
+                              f"(pins {pin}, latest "
+                              f"{d['latest_version'] if d['latest_version'] is not None else '-'})")
+            else:
+                info = build_dependency_index(args.project)
+                if args.json:
+                    print(json.dumps(info, indent=2))
+                else:
+                    print(f"[deps] {len(info['edges'])} edge(s)")
+                    for e in info["edges"]:
+                        d, c = e["dependency"], e["consumer"]
+                        pin = f"v{d['version']:03d}" if d["version"] is not None else "root"
+                        flag = "  <- UPDATE AVAILABLE" if d["outdated"] else ""
+                        print(f"  {c['entity']}/{c['step'] or 'root'} -> "
+                              f"{d['entity']}/{d['step'] or '-'} {pin} [{e['source']}]{flag}")
         else:  # clean-staging
             info = clean_stale_staging(args.project, dry_run=not args.apply)
             verb = "removed" if args.apply else "to remove (dry-run - pass --apply to execute)"

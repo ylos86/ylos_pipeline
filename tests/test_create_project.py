@@ -398,7 +398,7 @@ class TestFrameRange(TempProjectTestCase):
     def test_shot_creation_poses_default_frame_range_and_2_1(self):
         self._create_shot()
         m = self._manifest(self.SHOT)
-        self.assertEqual(m["schema_version"], "2.1.0")
+        self.assertEqual(m["schema_version"], cp.SCHEMA_VERSION)
         self.assertEqual(m["frame_range"],
                          {"start": 1001, "end": 1100, "fps": cp.DEFAULT_SCENE["fps"]})
 
@@ -408,7 +408,7 @@ class TestFrameRange(TempProjectTestCase):
             (Path(self.project) / "assets" / "PROP_Tente_Default" / cp.ASSET_MANIFEST_NAME)
             .read_text(encoding="utf-8"))
         self.assertNotIn("frame_range", m)
-        self.assertEqual(m["schema_version"], "2.1.0")
+        self.assertEqual(m["schema_version"], cp.SCHEMA_VERSION)
 
     def test_set_frame_range_updates_manifest_and_timecodes(self):
         self._create_shot()

@@ -4,7 +4,7 @@ Scaffolder de projet 3D/VFX. `create_project.py` est la **source de vérité uni
 logique de création : importable par les plugins DCC (Houdini, Blender), **stdlib seule**
 (les interpréteurs embarqués hython / Blender ne doivent pas dépendre d'un `pip install`).
 
-## Arborescence créée (schéma 2.1 — asset-centric)
+## Arborescence créée (schéma 2.2 — asset-centric)
 
 ```
 $PROJ_ROOT/<projet>/          # SOURCE — disque externe, permanent, versionné

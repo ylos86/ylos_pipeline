@@ -923,3 +923,45 @@ faire évoluer.
 - **Challenge l'archi.** Si une décision a une implication downstream que je n'ai pas vue,
   nomme-la avant d'exécuter. Réframe une intention mal posée plutôt que de la suivre
   aveuglément.
+
+## Parité Prism — socle orchestrateur : schéma 2.2, scenefiles, dépendances (2026-09-10)
+Branche `feat/prism-parity` (depuis `chore/code-english`). Chantier « niveau Prism » demandé par
+Sébastien : Project Browser cockpit, plugins Blender + Houdini, système USD. Découpage : socle
+orchestrateur d'abord (ce bloc), puis trois fronts en parallèle (web / Blender / Houdini) sur des
+fichiers disjoints, puis QA transverse.
+
+**Schéma 2.1.0 → 2.2.0** (`docs/migration-2.1-to-2.2.md`, additif, aucun fichier à migrer) :
+- `step_status` (manifeste d'entité) : statut **explicite** par step, seules `review`/`approved`
+  persistées ; `empty`/`wip`/`published` **dérivées** du disque à la lecture. API point unique :
+  `get_step_status(project_root, entity, step=None)` → `{step: {status, explicit, derived}}`,
+  `set_step_status(project_root, entity, step, status|"auto")` (flock + écriture atomique, step
+  non déclaré refusé). CLI `set-step-status`.
+- `dependencies` sur les entrées `step_publishes[step]` : `finalize_publish_version(...,
+  dependencies=[{entity, step, version|null}])`, validé **avant** le commit
+  (`_normalize_dependencies`), `version: null` = root non épinglé.
+
+**Index de dépendances** (`build_dependency_index(project_root)` / `entity_dependencies(...)`,
+CLI `dependencies`) : deux sources fusionnées — les `dependencies` des manifestes + le scan des
+layers USD **ASCII** (`_usd_layer_dependencies` : asset paths `@…@` des roots composés et des
+publishes `.usda`, `$PROJ_ROOT` expansé comme `env_relative` l'écrit, chemins relatifs résolus
+depuis le dossier du layer, `.usdc`/`.usdnc` ignorés). Edges `{consumer, dependency, source,
+file}` avec `is_latest` (côté consommateur) et `latest_version`/`outdated` (côté dépendance) ;
+`entity_dependencies` déduplique (source manifeste préférée) et expose `outdated` = « update
+disponible ». Les subLayers d'une entité vers ses propres publishes ne sont **pas** des
+dépendances.
+
+**Scenefiles multi-DCC** : `SCENEFILE_EXTENSIONS` (`blender`: `.blend` ; `houdini`: `.hip`,
+`.hiplc`, `.hipnc`), `list_scenefiles(project_root, entity, step=None)` (scan `wip/` + sidecar
+`<file>.json` fusionné, champ `dcc`), `_latest_wip(entity_dir, step, dcc)`. Conséquences :
+`resolve_open_target(dcc="houdini")` résout les WIP `.hip*` ; `scene_starter_spec` numérote
+par DCC (un `.hipnc` v001 et un `.blend` v003 ne se marchent plus dessus) et expose
+`wip.extensions` (l'adaptateur Houdini choisit l'extension selon la licence).
+
+**`list_entities(project_root, family=None)`** : listing unique assets/sets/shots, orphelins
+(sans manifeste) **flaggés** `broken`, jamais masqués — remplace à terme les trois scans
+dupliqués (`ylos_ui._list_assets`, `ylos_houdini.list_entities`, panel Blender).
+
+Tests : 226 stdlib (188 → +38 : `tests/test_step_status.py`, `tests/test_dependency_index.py`),
+verts sous Python 3.14 local. Note environnement : **hython sans licence** sur la machine
+(`No licenses could be found`) → les e2e Houdini ne peuvent pas tourner dans cette session ;
+Blender 5.2 headless OK.

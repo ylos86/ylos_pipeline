@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ylos.pipeline/asset.schema.json",
   "title": "Ylos Prod - manifeste d'entite (asset/set/shot)",
-  "description": "Manifeste par entite, pose dans <entite>/manifest.json. Source de verite de ses etapes (steps) et de ses publishes versionnes USD. Les dossiers de step sont generes depuis 'steps'. Clarifie l'usage des projets reels ou 'entity_type' (la famille) et 'type' (le sous-type metier) etaient confondus. Tout changement = bump schema_version + migration. additionalProperties=true pour extension par les plugins.",
+  "description": "Manifeste par entite, pose dans <entite>/manifest.json. Source de verite de ses etapes (steps) et de ses publishes versionnes USD. Les dossiers de step sont generes depuis 'steps'. Clarifie l'usage des projets reels ou 'entity_type' (la famille) et 'type' (le sous-type metier) etaient confondus. Tout changement = bump schema_version + migration (2.2 : step_status + dependencies des publishes, additif). additionalProperties=true pour extension par les plugins.",
   "type": "object",
   "required": ["schema_version", "name", "entity_type", "type", "steps"],
   "additionalProperties": true,
@@ -49,6 +49,41 @@
         "start": {"type": "integer", "description": "Premiere image (inclusive)."},
         "end": {"type": "integer", "description": "Derniere image (inclusive)."},
         "fps": {"type": "number", "description": "Images par seconde (timeCodesPerSecond USD)."}
+      }
+    },
+    "step_status": {
+      "type": "object",
+      "description": "Statut EXPLICITE par step (schema 2.2, optionnel). Seules les valeurs 'review' et 'approved' sont persistees ici ; 'empty' / 'wip' / 'published' sont DERIVEES du disque a la lecture (create_project.get_step_status) et jamais ecrites. Cle absente ou step absent -> statut derive ; les consommateurs traitent l'absence par le fallback derive, jamais par un crash. Ecrit uniquement par create_project.set_step_status (point unique).",
+      "additionalProperties": {"type": "string", "enum": ["review", "approved"]}
+    },
+    "step_publishes": {
+      "type": "object",
+      "description": "Contrat deux-phases (allocate_publish_version / finalize_publish_version, kind=<step>) : map step -> liste d'entrees versionnees. Une entree porte 'version', 'status' ('pending' reserve, 'complete' commite), 'artifact' (chemin relatif a l'entite), 'thumb' / 'thumbnail', 'comment', 'published_utc' et, depuis 2.2, 'dependencies' optionnel.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "version": {"type": "integer"},
+            "status": {"type": "string"},
+            "artifact": {"type": ["string", "null"]},
+            "dependencies": {
+              "type": "array",
+              "description": "Schema 2.2, optionnel : produits publies dont ce publish a ete construit (ce que le DCC avait importe - import states Blender, sublayer/reference LOPs Houdini). Lu par create_project.build_dependency_index ; 'version' null = reference de root non epinglee (asset_root / shot_root).",
+              "items": {
+                "type": "object",
+                "required": ["entity", "step"],
+                "additionalProperties": true,
+                "properties": {
+                  "entity": {"type": "string"},
+                  "step": {"type": "string"},
+                  "version": {"type": ["integer", "null"]}
+                }
+              }
+            }
+          }
+        }
       }
     },
     "created_utc": {"type": "string", "format": "date-time"},
