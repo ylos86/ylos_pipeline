@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-tests/test_create_project.py — tests stdlib (unittest) pour create_project.py.
+tests/test_create_project.py — stdlib tests (unittest) for create_project.py.
 
-Couvre : Volet 0 (validation de nommage a la creation), Volet 0bis (ecritures
-atomiques), Volet 1 (contrat deux-phases generalise, kind=lop|step, non-regression
-LOP), Volet 3 (sync_web_assets).
+Covers: Part 0 (naming validation at creation), Part 0bis (atomic writes),
+Part 1 (generalized two-phase contract, kind=lop|step, LOP non-regression),
+Part 3 (sync_web_assets).
 
-Usage : python3 tests/test_create_project.py
-     ou : python3 -m unittest tests.test_create_project
+Usage: python3 tests/test_create_project.py
+    or: python3 -m unittest tests.test_create_project
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import create_project as cp  # noqa: E402
 
 
 class TempProjectTestCase(unittest.TestCase):
-    """Cree un projet 2.0 vide dans un tmpdir jetable pour chaque test."""
+    """Creates an empty 2.0 project in a throwaway tmpdir for each test."""
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="ylos_test_")
@@ -35,7 +35,7 @@ class TempProjectTestCase(unittest.TestCase):
         self.project = info["source"]
 
     def _publish_step(self, asset_name, step, ext="usd", version_hint=None):
-        """Helper : allocate -> ecrit artefact+thumb -> finalize. Retourne (version, info)."""
+        """Helper: allocate -> writes artifact+thumb -> finalize. Returns (version, info)."""
         staging, final = cp.allocate_publish_version(self.project, asset_name, comment="", kind=step)
         version = cp.publish_version_from_dir(final)
         stem = f"{asset_name}_{step}_v{version:03d}"
@@ -49,7 +49,7 @@ class TempProjectTestCase(unittest.TestCase):
 
 
 class TestNamingValidation(TempProjectTestCase):
-    """Volet 0 : create_asset() valide le nommage a la creation (point unique)."""
+    """Part 0: create_asset() validates naming at creation (single point)."""
 
     def test_asset_bad_name_raises_with_suggestion(self):
         with self.assertRaises(ValueError) as ctx:
@@ -85,14 +85,14 @@ class TestNamingValidation(TempProjectTestCase):
         self.assertEqual(info["entity_type"], "shot")
 
     def test_validate_publish_asset_name_alias_unchanged(self):
-        # Contrat historique (Houdini HDA) : doit rester utilisable tel quel.
+        # Historical contract (Houdini HDA): must stay usable as-is.
         self.assertTrue(cp.validate_publish_asset_name("CHARACTER_Lina_Default", "CHARACTER"))
         with self.assertRaises(ValueError):
             cp.validate_publish_asset_name("Lina", "CHARACTER")
 
 
 class TestAtomicWrite(unittest.TestCase):
-    """Volet 0bis : _atomic_write_text/_atomic_write_json ne corrompent jamais la cible."""
+    """Part 0bis: _atomic_write_text/_atomic_write_json never corrupt the target."""
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="ylos_test_")
@@ -127,7 +127,7 @@ class TestAtomicWrite(unittest.TestCase):
 
 
 class TestTwoPhasePublish(TempProjectTestCase):
-    """Volet 1 : allocate_publish_version/finalize_publish_version generalises (kind)."""
+    """Part 1: allocate_publish_version/finalize_publish_version generalized (kind)."""
 
     def setUp(self):
         super().setUp()
@@ -144,7 +144,7 @@ class TestTwoPhasePublish(TempProjectTestCase):
         self.assertEqual(entry["status"], "complete")
         self.assertTrue(entry["artifact"].endswith(".usd"))
         self.assertTrue(entry["thumb"].endswith("thumb.png"))
-        self.assertNotIn("layer", entry)  # 'layer' reserve a kind='lop'
+        self.assertNotIn("layer", entry)  # 'layer' reserved for kind='lop'
 
     def test_missing_thumb_rejected_staging_intact(self):
         staging, final = cp.allocate_publish_version(
@@ -153,7 +153,7 @@ class TestTwoPhasePublish(TempProjectTestCase):
         version = cp.publish_version_from_dir(final)
         stem = f"PROP_Tente_Default_modeling_v{version:03d}"
         (staging / f"{stem}.usd").write_bytes(b"x")
-        # thumb.png volontairement absent
+        # thumb.png deliberately absent
         with self.assertRaises(ValueError):
             cp.finalize_publish_version(
                 self.project, "PROP_Tente_Default", staging, final, version,
@@ -193,7 +193,7 @@ class TestTwoPhasePublish(TempProjectTestCase):
 
 
 class TestSyncWebAssets(TempProjectTestCase):
-    """Volet 3 : sync_web_assets — copie, assets.json, sha256, miroir."""
+    """Part 3: sync_web_assets — copy, assets.json, sha256, mirror."""
 
     def setUp(self):
         super().setUp()
@@ -233,7 +233,7 @@ class TestSyncWebAssets(TempProjectTestCase):
         self.assertEqual(len(assets_json["assets"]["PROP_Tente_Default"]["sha256"]), 64)
 
     def test_sync_removes_stale_version_after_repin(self):
-        # v1 pinnee, sync, puis re-pin sur v2 -> v1 doit disparaitre.
+        # v1 pinned, sync, then re-pin on v2 -> v1 must disappear.
         manifest = cp.read_manifest(self.project)
         manifest["web"]["pinned_assets"]["PROP_Tente_Default"]["version"] = 1
         cp.write_manifest(Path(self.project) / cp.PIPELINE_DIR, manifest)
@@ -256,16 +256,16 @@ class TestSyncWebAssets(TempProjectTestCase):
 
 
 class TestPinWebAsset(TempProjectTestCase):
-    """INC-6 : API de pinning web dans l'orchestrateur (pin_web_asset / unpin_web_asset /
-    set_web_target). Valide contre les publishes GLB reels, ecrit project.json['web']
-    atomiquement, ne leve JAMAIS pour un cas metier (retour {"ok": bool, ...})."""
+    """INC-6: web pinning API in the orchestrator (pin_web_asset / unpin_web_asset /
+    set_web_target). Validates against the real GLB publishes, writes project.json['web']
+    atomically, NEVER raises for a business case (returns {"ok": bool, ...})."""
 
     def setUp(self):
         super().setUp()
         cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
         self._publish_step("PROP_Tente_Default", "lookdev", ext="glb")   # v1
         self._publish_step("PROP_Tente_Default", "lookdev", ext="glb")   # v2
-        self._publish_step("PROP_Tente_Default", "modeling", ext="usd")  # USD : jamais pinnable
+        self._publish_step("PROP_Tente_Default", "modeling", ext="usd")  # USD: never pinnable
 
     def _pins(self):
         return cp.read_manifest(self.project).get("web", {}).get("pinned_assets", {})
@@ -279,31 +279,31 @@ class TestPinWebAsset(TempProjectTestCase):
     def test_pin_nonexistent_version_clean_warning(self):
         result = cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 99)
         self.assertFalse(result["ok"])
-        self.assertIn("lookdev", result["error"])  # message liste le step / les disponibles
-        self.assertEqual(self._pins(), {})          # rien ecrit au manifeste
+        self.assertIn("lookdev", result["error"])  # message lists the step / the available ones
+        self.assertEqual(self._pins(), {})          # nothing written to the manifest
 
     def test_pin_usd_step_rejected(self):
-        # Un publish USD n'est jamais un GLB pinnable, meme s'il existe.
+        # A USD publish is never a pinnable GLB, even if it exists.
         result = cp.pin_web_asset(self.project, "PROP_Tente_Default", "modeling", 1)
         self.assertFalse(result["ok"])
         self.assertEqual(self._pins(), {})
 
     def test_pin_unknown_asset_no_raise(self):
         result = cp.pin_web_asset(self.project, "PROP_Fantome_Default", "lookdev", 1)
-        self.assertFalse(result["ok"])  # ok=False, jamais d'exception
+        self.assertFalse(result["ok"])  # ok=False, never an exception
 
     def test_pin_bad_types_rejected(self):
         self.assertFalse(
             cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", "2")["ok"])
         self.assertFalse(cp.pin_web_asset(self.project, "", "lookdev", 1)["ok"])
-        # bool est un int en Python : version=True ne doit pas matcher la v1.
+        # bool is an int in Python: version=True must not match v1.
         self.assertFalse(
             cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", True)["ok"])
 
     def test_unpin_idempotent(self):
         r0 = cp.unpin_web_asset(self.project, "PROP_Tente_Default")
         self.assertTrue(r0["ok"])
-        self.assertFalse(r0["was_pinned"])  # de-pinner un non-pinne : ok, was_pinned False
+        self.assertFalse(r0["was_pinned"])  # un-pinning an unpinned one: ok, was_pinned False
         cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 2)
         r1 = cp.unpin_web_asset(self.project, "PROP_Tente_Default")
         self.assertTrue(r1["was_pinned"])
@@ -313,11 +313,11 @@ class TestPinWebAsset(TempProjectTestCase):
         r = cp.set_web_target(self.project, "/tmp/some/web")
         self.assertEqual(r["target_dir"], "/tmp/some/web")
         self.assertEqual(cp.read_manifest(self.project)["web"]["target_dir"], "/tmp/some/web")
-        cp.set_web_target(self.project, "")  # '' efface la cible
+        cp.set_web_target(self.project, "")  # '' clears the target
         self.assertIsNone(cp.read_manifest(self.project)["web"]["target_dir"])
 
     def test_pin_then_sync_cycle(self):
-        # Circuit complet : pin via l'API -> set target -> sync copie le GLB pinne.
+        # Full circuit: pin via the API -> set target -> sync copies the pinned GLB.
         self.assertTrue(
             cp.pin_web_asset(self.project, "PROP_Tente_Default", "lookdev", 2)["ok"])
         web_dir = tempfile.mkdtemp(prefix="ylos_web_")
@@ -331,25 +331,25 @@ class TestPinWebAsset(TempProjectTestCase):
 
 
 class TestCleanStaleStaging(TempProjectTestCase):
-    """Sweep des allocations orphelines : clean_stale_staging()."""
+    """Sweep of orphaned allocations: clean_stale_staging()."""
 
     def setUp(self):
         super().setUp()
         cp.create_asset(self.project, "PROP_Tente_Default", asset_type="PROP")
 
     def _allocate_with_pid(self, step, pid):
-        """Allocate un staging_dir puis renomme son suffixe PID (simule un process mort ou
-        un autre process vivant, sans avoir a en forker un reel)."""
+        """Allocates a staging_dir then renames its PID suffix (simulates a dead process or
+        another live process, without having to fork a real one)."""
         staging, final = cp.allocate_publish_version(self.project, "PROP_Tente_Default", comment="", kind=step)
         renamed = staging.with_name(staging.name.rsplit("-", 1)[0] + f"-{pid}")
         staging.rename(renamed)
         return renamed, final
 
     def test_dry_run_reports_without_deleting(self):
-        dead_dir, _ = self._allocate_with_pid("modeling", 999999)  # PID quasi-certainement mort
+        dead_dir, _ = self._allocate_with_pid("modeling", 999999)  # PID almost certainly dead
         report = cp.clean_stale_staging(self.project, dry_run=True)
         self.assertIn(str(dead_dir), report["removed_staging"])
-        self.assertTrue(dead_dir.is_dir())  # dry-run : rien supprime
+        self.assertTrue(dead_dir.is_dir())  # dry-run: nothing deleted
 
     def test_live_pid_never_removed(self):
         import os
@@ -367,7 +367,7 @@ class TestCleanStaleStaging(TempProjectTestCase):
         kinds = [(e["kind"], e["version"]) for e in report["pending_without_staging"]]
         self.assertIn(("modeling", 1), kinds)
 
-        # Le manifeste n'est jamais modifie par le sweep (entree reste 'pending').
+        # The manifest is never modified by the sweep (entry stays 'pending').
         manifest = json.loads(
             (Path(self.project) / "assets" / "PROP_Tente_Default" / "manifest.json").read_text()
         )
@@ -381,7 +381,7 @@ class TestCleanStaleStaging(TempProjectTestCase):
 
 
 class TestFrameRange(TempProjectTestCase):
-    """Schema 2.1 : frame_range du shot (defaut a la creation + set_frame_range)."""
+    """Schema 2.1: shot frame_range (default at creation + set_frame_range)."""
 
     SHOT = "ANIMATION_Sq010_Default"
 
@@ -439,8 +439,8 @@ class TestFrameRange(TempProjectTestCase):
             cp.set_frame_range(self.project, "PROP_Tente_Default", 1001, 1100)
 
     def test_legacy_shot_without_frame_range_still_accepted(self):
-        # Manifeste 2.0 : shot sans frame_range (cle retiree a la main). set_frame_range
-        # doit l'accepter et poser la plage sans crash (fallback fps = defaut scene).
+        # 2.0 manifest: shot without frame_range (key removed by hand). set_frame_range
+        # must accept it and set the range without crashing (fallback fps = scene default).
         self._create_shot()
         path = Path(self.project) / "shots" / self.SHOT / cp.ASSET_MANIFEST_NAME
         m = json.loads(path.read_text(encoding="utf-8"))
@@ -453,8 +453,8 @@ class TestFrameRange(TempProjectTestCase):
 
 
 class TestCacheAndConsumablePublish(TempProjectTestCase):
-    """Increment 5 : convention cache (entity_cache_dir) + caches consommables publies en
-    deux-phases (extensions .vdb/.bgeo.sc/.abc, sequences en dossier) sans polluer la compo."""
+    """Increment 5: cache convention (entity_cache_dir) + consumable caches published via
+    two-phase (extensions .vdb/.bgeo.sc/.abc, sequences as folders) without polluting the compo."""
 
     SHOT = "FX_Sq010_Default"
 
@@ -462,15 +462,15 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         cp.create_asset(self.project, self.SHOT, entity_type="shot", asset_type="FX")
 
     def test_entity_cache_dir_path_and_mkdir(self):
-        # $PROJ_CACHE resolu depuis l'env (create() a pose <cache>/<projet>) - on cible la
-        # meme racine cache que le projet pour un chemin coherent.
+        # $PROJ_CACHE resolved from the env (create() set <cache>/<project>) - we target the
+        # same cache root as the project for a consistent path.
         os.environ[cp.ENV_CACHE] = self._tmp + "/cache"
         self.addCleanup(os.environ.pop, cp.ENV_CACHE, None)
         d = cp.entity_cache_dir(self.project, self.SHOT, "fx", "explosion")
         expected = (Path(self._tmp) / "cache" / "proj" / "houdini"
                     / self.SHOT / "fx" / "explosion")
         self.assertEqual(d.resolve(), expected.resolve())
-        self.assertTrue(d.is_dir())  # parents crees
+        self.assertTrue(d.is_dir())  # parents created
 
     def test_entity_cache_dir_validates_label(self):
         os.environ[cp.ENV_CACHE] = self._tmp + "/cache"
@@ -479,7 +479,7 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
             cp.entity_cache_dir(self.project, self.SHOT, "fx", "bad/label")
 
     def test_new_extensions_accepted_by_two_phase(self):
-        # Un cache consommable VDB passe le contrat deux-phases (artefact + thumbnail).
+        # A consumable VDB cache passes the two-phase contract (artifact + thumbnail).
         self._create_shot()
         staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="fx")
         version = cp.publish_version_from_dir(final)
@@ -494,8 +494,8 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         self.assertTrue(entry["artifact"].endswith(f"{stem}.vdb"))
 
     def test_bgeo_sc_double_suffix_resolved(self):
-        # Le suffixe double .bgeo.sc doit resoudre par concatenation f"{stem}{ext}", pas par
-        # split d'extension (_missing_artifacts). Un stem sans le fichier -> manquant.
+        # The double suffix .bgeo.sc must resolve by concatenation f"{stem}{ext}", not by
+        # extension split (_missing_artifacts). A stem without the file -> missing.
         d = Path(self._tmp) / "stg_bgeo"
         d.mkdir()
         (d / "cache_fx_v001.bgeo.sc").write_bytes(b"geo")
@@ -503,7 +503,7 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         self.assertEqual(cp._missing_artifacts(d, ["absent"]), ["absent"])
 
     def test_missing_artifacts_sequence_folder(self):
-        # Un artefact peut etre un DOSSIER de sequence (non vide) ; vide ou absent -> manquant.
+        # An artifact can be a sequence FOLDER (non-empty); empty or absent -> missing.
         d = Path(self._tmp) / "stg_seq"
         d.mkdir()
         seq = d / "explosion_fx_v001"
@@ -512,21 +512,21 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         (d / "thumb.png").write_bytes(b"png")
         self.assertEqual(
             cp._missing_artifacts(d, ["explosion_fx_v001", "thumb.png"]), [])
-        # dossier vide -> manquant
+        # empty folder -> missing
         (d / "empty_v001").mkdir()
         self.assertEqual(cp._missing_artifacts(d, ["empty_v001"]), ["empty_v001"])
 
     def test_missing_artifacts_dot_entry_stays_exact_file(self):
-        # La branche '.' (nom exact) reste prioritaire : un dossier 'thumb.png' ne satisfait
-        # PAS l'attente d'un fichier thumb.png.
+        # The '.' branch (exact name) stays prioritary: a 'thumb.png' folder does NOT
+        # satisfy the expectation of a thumb.png file.
         d = Path(self._tmp) / "stg_dot"
         d.mkdir()
-        (d / "thumb.png").mkdir()  # dossier homonyme, pas un fichier
+        (d / "thumb.png").mkdir()  # folder with the same name, not a file
         self.assertEqual(cp._missing_artifacts(d, ["thumb.png"]), ["thumb.png"])
 
     def test_sequence_publish_finalize_points_to_folder(self):
-        # finalize doit decouvrir le dossier de sequence (produced liste aussi les dossiers)
-        # et pointer 'artifact' dessus.
+        # finalize must discover the sequence folder (produced also lists folders)
+        # and point 'artifact' at it.
         self._create_shot()
         staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="fx")
         version = cp.publish_version_from_dir(final)
@@ -545,9 +545,9 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         self.assertTrue((Path(final) / stem).is_dir())
 
     def test_consumable_cache_absent_from_shot_root(self):
-        # Un publish VDB en kind=step NE pollue PAS shot_root.usda (pas un layer USD).
+        # A VDB publish as kind=step does NOT pollute shot_root.usda (not a USD layer).
         self._create_shot()
-        # publish USD (animation) -> present dans la compo
+        # USD publish (animation) -> present in the compo
         staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="animation")
         v = cp.publish_version_from_dir(final)
         astem = f"{self.SHOT}_animation_v{v:03d}"
@@ -555,7 +555,7 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
         (staging / "thumb.png").write_bytes(b"png")
         cp.finalize_publish_version(self.project, self.SHOT, staging, final, v,
                                     expected_artifacts=[astem, "thumb.png"])
-        # publish VDB (fx) -> absent de la compo
+        # VDB publish (fx) -> absent from the compo
         staging, final = cp.allocate_publish_version(self.project, self.SHOT, comment="", kind="fx")
         v = cp.publish_version_from_dir(final)
         fstem = f"{self.SHOT}_fx_v{v:03d}"
@@ -565,15 +565,15 @@ class TestCacheAndConsumablePublish(TempProjectTestCase):
                                     expected_artifacts=[fstem, "thumb.png"])
         shot_root = (Path(self.project) / "shots" / self.SHOT / cp.SHOT_ROOT_NAME).read_text(
             encoding="utf-8")
-        self.assertIn(f"{astem}.usda", shot_root)  # animation USD compose
-        self.assertNotIn(".vdb", shot_root)         # VDB jamais en subLayer
+        self.assertIn(f"{astem}.usda", shot_root)  # animation USD composed
+        self.assertNotIn(".vdb", shot_root)         # VDB never a subLayer
         self.assertNotIn(fstem, shot_root)
 
 
 class TestListPublishes(TempProjectTestCase):
-    """Volet lecture (CC#1c) : list_publishes fusionne deux-phases (dossier niche) +
-    fichiers plats legacy sans doublon de version ; latest_publish_artifact prend la
-    'complete' de version max. Ne leve jamais pour un cas metier."""
+    """Read part (CC#1c): list_publishes merges two-phase (nested folder) +
+    legacy flat files without version duplicates; latest_publish_artifact takes the
+    'complete' of the max version. Never raises for a business case."""
 
     def setUp(self):
         super().setUp()
@@ -587,22 +587,22 @@ class TestListPublishes(TempProjectTestCase):
         return f
 
     def test_two_phase_and_legacy_merge(self):
-        self._publish_step("PROP_Tente_Default", "modeling")   # v1 deux-phases (dossier)
-        self._legacy_flat("modeling", 2)                       # v2 fichier plat legacy
+        self._publish_step("PROP_Tente_Default", "modeling")   # v1 two-phase (folder)
+        self._legacy_flat("modeling", 2)                       # v2 legacy flat file
         pubs = cp.list_publishes(self.project, "PROP_Tente_Default", "modeling")
         self.assertEqual([(e["version"], e["legacy"]) for e in pubs], [(1, False), (2, True)])
         self.assertTrue(all(e["exists"] for e in pubs))
         self.assertTrue(all(Path(e["abs_path"]).is_file() for e in pubs))
 
     def test_legacy_never_overrides_two_phase_same_version(self):
-        version, _ = self._publish_step("PROP_Tente_Default", "modeling")  # v1 deux-phases
-        self._legacy_flat("modeling", version)                            # meme numero, a plat
+        version, _ = self._publish_step("PROP_Tente_Default", "modeling")  # v1 two-phase
+        self._legacy_flat("modeling", version)                            # same number, flat
         pubs = cp.list_publishes(self.project, "PROP_Tente_Default", "modeling")
         self.assertEqual(len(pubs), 1)
-        self.assertFalse(pubs[0]["legacy"])  # le contrat vivant prime
+        self.assertFalse(pubs[0]["legacy"])  # the live contract wins
 
     def test_latest_publish_artifact_is_complete_max(self):
-        self._publish_step("PROP_Tente_Default", "modeling")   # v1 complete (deux-phases)
+        self._publish_step("PROP_Tente_Default", "modeling")   # v1 complete (two-phase)
         self._legacy_flat("modeling", 3)                       # v3 complete (legacy)
         latest = cp.latest_publish_artifact(self.project, "PROP_Tente_Default", "modeling")
         self.assertIsNotNone(latest)
@@ -611,7 +611,7 @@ class TestListPublishes(TempProjectTestCase):
         self.assertTrue(Path(latest["abs_path"]).is_file())
 
     def test_pending_excluded_from_latest(self):
-        # allocate sans finalize -> entree 'pending' (artifact None), visible mais jamais latest.
+        # allocate without finalize -> 'pending' entry (artifact None), visible but never latest.
         cp.allocate_publish_version(self.project, "PROP_Tente_Default", comment="", kind="modeling")
         pubs = cp.list_publishes(self.project, "PROP_Tente_Default", "modeling")
         self.assertEqual([e["status"] for e in pubs], ["pending"])
@@ -624,8 +624,8 @@ class TestListPublishes(TempProjectTestCase):
 
 
 class TestFinalizeThumbnailField(TempProjectTestCase):
-    """Volet contrat (CC#1c) : finalize_publish_version renseigne 'thumbnail' (chemin
-    relatif entite) quand thumb.png existe, en plus de 'thumb' (compat lecteurs existants)."""
+    """Contract part (CC#1c): finalize_publish_version fills 'thumbnail' (entity-relative
+    path) when thumb.png exists, in addition to 'thumb' (compat with existing readers)."""
 
     def setUp(self):
         super().setUp()
@@ -636,16 +636,16 @@ class TestFinalizeThumbnailField(TempProjectTestCase):
         mpath = Path(self.project) / "assets" / "PROP_Tente_Default" / "manifest.json"
         entry = json.loads(mpath.read_text())["step_publishes"]["modeling"][-1]
         self.assertEqual(entry["status"], "complete")
-        self.assertTrue(entry["thumbnail"], "'thumbnail' doit etre renseigne")
+        self.assertTrue(entry["thumbnail"], "'thumbnail' must be filled")
         self.assertTrue(entry["thumbnail"].endswith("thumb.png"))
         self.assertTrue(entry["thumbnail"].startswith("modeling/publish/"))
-        self.assertEqual(entry["thumbnail"], entry["thumb"])  # meme chemin
+        self.assertEqual(entry["thumbnail"], entry["thumb"])  # same path
 
 
 class TestPipelineTarget(unittest.TestCase):
-    """CC#2 volet B : la cible de pipeline (FORMAT d'artifact) est une decision
-    d'orchestrateur. create() ecrit 'pipeline_target' (derive du prod_type) ;
-    get_pipeline_target() le lit tolerablement (champ absent -> derive, defaut 'offline')."""
+    """CC#2 part B: the pipeline target (artifact FORMAT) is an orchestrator
+    decision. create() writes 'pipeline_target' (derived from prod_type);
+    get_pipeline_target() reads it tolerantly (field absent -> derived, default 'offline')."""
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
@@ -657,10 +657,10 @@ class TestPipelineTarget(unittest.TestCase):
         return str(info["source"])
 
     def test_mapping_covers_all_prod_types(self):
-        # Chaque PROD_TYPE a une cible (pas de KeyError silencieux downstream).
+        # Each PROD_TYPE has a target (no silent KeyError downstream).
         for pt in cp.PROD_TYPES:
             self.assertIn(cp.PROD_TYPE_TO_TARGET.get(pt), ("web", "offline"),
-                          f"{pt} sans cible dans PROD_TYPE_TO_TARGET")
+                          f"{pt} without a target in PROD_TYPE_TO_TARGET")
 
     def test_create_writes_web_for_xr(self):
         proj = self._make("web_proj", "XR")
@@ -679,7 +679,7 @@ class TestPipelineTarget(unittest.TestCase):
         self.assertEqual(cp.get_pipeline_target(proj), "offline")
 
     def test_missing_field_derives_from_prod_type(self):
-        # Projet legacy 2.0 sans 'pipeline_target' : derive du prod_type, jamais de crash.
+        # Legacy 2.0 project without 'pipeline_target': derived from prod_type, never a crash.
         proj = self._make("legacy_proj", "AR")
         mpath = Path(proj) / "_pipeline" / "project.json"
         data = json.loads(mpath.read_text())
@@ -688,8 +688,8 @@ class TestPipelineTarget(unittest.TestCase):
         self.assertEqual(cp.get_pipeline_target(proj), "web")  # AR -> web
 
     def test_explicit_field_wins_over_prod_type(self):
-        # Un champ explicite prime la derivation (override manuel possible).
-        proj = self._make("override_proj", "FILM")  # FILM -> offline par defaut
+        # An explicit field takes priority over the derivation (manual override possible).
+        proj = self._make("override_proj", "FILM")  # FILM -> offline by default
         mpath = Path(proj) / "_pipeline" / "project.json"
         data = json.loads(mpath.read_text())
         data["pipeline_target"] = "web"
@@ -697,14 +697,14 @@ class TestPipelineTarget(unittest.TestCase):
         self.assertEqual(cp.get_pipeline_target(proj), "web")
 
     def test_unreadable_manifest_defaults_offline(self):
-        # Manifeste absent -> defaut tolerant, jamais d'exception.
+        # Manifest absent -> tolerant default, never an exception.
         self.assertEqual(cp.get_pipeline_target(self._tmp + "/nope"), "offline")
 
 
 class TestResolveEntity(TempProjectTestCase):
-    """resolve_entity : wrapper PUBLIC de _find_asset_entity (principe 5) - localise une
-    entite quelle que soit sa famille (assets/sets/shots), ne leve JAMAIS (None si absente
-    ou manifeste illisible). Consomme par le State Manager Blender (famille d'un state)."""
+    """resolve_entity: PUBLIC wrapper of _find_asset_entity (principle 5) - locates an
+    entity whatever its family (assets/sets/shots), NEVER raises (None if absent
+    or manifest unreadable). Consumed by the Blender State Manager (a state's family)."""
 
     def setUp(self):
         super().setUp()
@@ -718,8 +718,8 @@ class TestResolveEntity(TempProjectTestCase):
         r = cp.resolve_entity(self.project, "PROP_Tente_Default")
         self.assertIsNotNone(r)
         self.assertEqual(r["name"], "PROP_Tente_Default")
-        self.assertEqual(r["family"], "asset")           # cle ENTITY_DIR
-        self.assertEqual(r["entity_type"], "PROP")        # sous-type
+        self.assertEqual(r["family"], "asset")           # ENTITY_DIR key
+        self.assertEqual(r["entity_type"], "PROP")        # subtype
         self.assertEqual(os.path.basename(r["dir"]), "PROP_Tente_Default")
         self.assertEqual(os.path.basename(os.path.dirname(r["dir"])), "assets")
         self.assertIsInstance(r["manifest"], dict)
@@ -741,11 +741,11 @@ class TestResolveEntity(TempProjectTestCase):
 
 
 class TestResolveEntityThumbnail(TempProjectTestCase):
-    """resolve_entity_thumbnail : POINT UNIQUE de la vignette d'entite (web UI + panel Blender
-    + futur n8n/Houdini, principe 5). Cascade du plus intentionnel au plus automatique :
-    custom -> publish -> legacy -> wip -> none. Ne leve JAMAIS pour un cas metier ; la 'source'
-    fait partie du contrat (un consommateur doit pouvoir signaler un WIP plutot que de le faire
-    passer pour un publie)."""
+    """resolve_entity_thumbnail: SINGLE POINT for the entity thumbnail (web UI + Blender panel
+    + future n8n/Houdini, principle 5). Cascade from most intentional to most automatic:
+    custom -> publish -> legacy -> wip -> none. NEVER raises for a business case; the 'source'
+    is part of the contract (a consumer must be able to flag a WIP rather than passing it
+    off as a published one)."""
 
     NAME = "PROP_Tente_Default"
 
@@ -754,12 +754,12 @@ class TestResolveEntityThumbnail(TempProjectTestCase):
         cp.create_asset(self.project, self.NAME, asset_type="PROP")
         r = cp.resolve_entity(self.project, self.NAME)
         self.edir = Path(r["dir"])
-        # Un step qui a bien un sous-dossier publish/ : le resolveur scanne exactement ceux-la.
+        # A step that does have a publish/ subfolder: the resolver scans exactly those.
         self.step = sorted(d.name for d in self.edir.iterdir()
                            if (d / "publish").is_dir())[0]
 
     def test_publish_thumbnail(self):
-        # Un publish 'complete' du contrat deux-phases porte deja son thumb dans le manifeste.
+        # A 'complete' publish from the two-phase contract already carries its thumb in the manifest.
         self._publish_step(self.NAME, self.step)
         r = cp.resolve_entity_thumbnail(self.project, self.NAME)
         self.assertEqual(r["source"], "publish")
@@ -767,7 +767,7 @@ class TestResolveEntityThumbnail(TempProjectTestCase):
         self.assertTrue(Path(r["path"]).is_file())
 
     def test_custom_preview_beats_publish(self):
-        # Un geste humain explicite (preview.png) prime toujours sur l'heuristique.
+        # An explicit human gesture (preview.png) always takes priority over the heuristic.
         self._publish_step(self.NAME, self.step)
         (self.edir / cp.ENTITY_PREVIEW_NAME).write_bytes(b"png")
         r = cp.resolve_entity_thumbnail(self.project, self.NAME)
@@ -776,7 +776,7 @@ class TestResolveEntityThumbnail(TempProjectTestCase):
         self.assertEqual(Path(r["path"]), self.edir / cp.ENTITY_PREVIEW_NAME)
 
     def test_legacy_flat_publish_scan(self):
-        # Projet pre-deux-phases : un .png a plat sous <step>/publish/, aucune entree manifeste.
+        # Pre-two-phase project: a flat .png under <step>/publish/, no manifest entry.
         pub = self.edir / self.step / "publish"
         pub.mkdir(parents=True, exist_ok=True)
         (pub / "old_preview.png").write_bytes(b"png")
@@ -785,7 +785,7 @@ class TestResolveEntityThumbnail(TempProjectTestCase):
         self.assertEqual(r["rel"], f"{self.step}/publish/old_preview.png")
 
     def test_wip_thumbnail_when_nothing_published(self):
-        # Le trou UX principal : entre la creation et le 1er publish, seul un thumb de WIP existe.
+        # The main UX gap: between creation and the 1st publish, only a WIP thumb exists.
         wip = self.edir / self.step / "wip"
         wip.mkdir(parents=True, exist_ok=True)
         fname = f"{self.NAME}_{self.step}_v001_thumb.png"
