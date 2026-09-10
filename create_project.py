@@ -1101,6 +1101,69 @@ def scene_starter_spec(entity_name, step, dcc="blender", project_root=None):
 
 
 # --------------------------------------------------------------------------------------
+# Playblast (review media) - versioned output spec
+# --------------------------------------------------------------------------------------
+# Output is a PNG image SEQUENCE in a per-version folder rather than a movie: PNG is
+# universally available (some Blender builds ship without the FFMPEG encoder - observed on
+# macOS 5.2), the naming stays clean, and it mirrors the pipeline's existing sequence-folder
+# convention. A movie container can be layered on later, gated on ffmpeg availability.
+_PLAYBLAST_DIRNAME = "playblast"
+_PLAYBLAST_VER_RE = re.compile(r"_v(\d+)(?:\.|$)")
+
+
+def playblast_spec(entity_name, step, project_root=None):
+    """PURE, serializable spec for a review PLAYBLAST of entity+step (a viewport capture
+    over the frame range). Same split as scene_starter_spec: the orchestrator ALLOCATES the
+    versioned output - in the SOURCE tree (<entity>/<step>/playblast/<stem>/), so the web
+    Project Browser can serve it - and the DCC RENDERS the frames. NEVER raises for a
+    business case: {"ok": False, "reason": ...} for an unknown entity or an undeclared step.
+
+    On success: {"ok": True, entity, step, family, dir, version, stem, sequence:True,
+    ext:"png", path (the per-version sequence FOLDER), frame_prefix (frames are
+    <frame_prefix>.####.png inside path), frame_range}. version is the next free one (a
+    playblast never overwrites); frame_range comes from the shot manifest (schema 2.1) or is
+    None (the DCC then uses its scene range).
+    """
+    if project_root is None:
+        return {"ok": False, "reason": "project_root is required"}
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return {"ok": False, "reason": f"entity {entity_name!r} not found (no manifest.json)"}
+    declared = resolved["manifest"].get("steps") or []
+    if declared and step not in declared:
+        return {"ok": False,
+                "reason": (f"step {step!r} not declared for {entity_name!r} "
+                           f"(manifest steps: {', '.join(declared)})")}
+
+    pdir = Path(resolved["dir"]) / step / _PLAYBLAST_DIRNAME
+
+    best = 0
+    if pdir.is_dir():
+        for f in pdir.iterdir():
+            m = _PLAYBLAST_VER_RE.search(f.name)
+            if m:
+                best = max(best, int(m.group(1)))
+    version = best + 1
+    stem = f"{entity_name}_{step}_v{version:03d}"
+    frame_range = resolved["manifest"].get("frame_range") if resolved["family"] == "shot" else None
+
+    return {
+        "ok": True,
+        "entity": entity_name,
+        "step": step,
+        "family": resolved["family"],
+        "dir": str(pdir),
+        "version": version,
+        "stem": stem,
+        "sequence": True,
+        "ext": "png",
+        "path": str(pdir / stem),          # per-version sequence folder
+        "frame_prefix": stem,              # frames: <stem>.####.png inside path
+        "frame_range": frame_range,
+    }
+
+
+# --------------------------------------------------------------------------------------
 # Creation - project
 # --------------------------------------------------------------------------------------
 

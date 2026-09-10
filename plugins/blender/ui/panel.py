@@ -193,6 +193,9 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
         save_row.scale_y = 1.2
         save_row.operator("ylos.save_wip", text="Save Version", icon="FILE_TICK")
 
+        # Review media: a versioned viewport playblast over the frame range.
+        layout.operator("ylos.playblast", text="Playblast", icon="RENDER_ANIMATION")
+
         layout.separator(factor=0.4)
         open_row = layout.row(align=True)
         open_row.operator("ylos.open_latest_wip", text="Open Latest", icon="IMPORT")
