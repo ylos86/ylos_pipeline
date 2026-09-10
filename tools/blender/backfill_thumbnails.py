@@ -1,34 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Re-rend les thumbnails de publish existants, depuis l'ARTEFACT deja publie.
+"""Re-renders existing publish thumbnails, from the ALREADY-published ARTIFACT.
 
-Pourquoi cet outil existe
--------------------------
-Trois bugs cumulatifs de render_publish_thumbnail() ont produit, pendant toute leur duree de
-vie, des thumbnails PLATS (silhouette noire ou fond uni) : eclairage insuffisant, clipping
-camera au defaut (clip_end=1000) et objets hide_render inclus dans le cadrage. Les corriger
-ne repare pas le passe : les thumb.png deja ecrits restent tels quels sur disque. Cet outil
-les regenere sans toucher a la geometrie publiee ni aux numeros de version — il relit
-l'artefact (GLB/USD) du publish, le cadre et le rend a nouveau.
+Why this tool exists
+--------------------
+Three cumulative bugs in render_publish_thumbnail() produced, throughout their
+lifetime, FLAT thumbnails (black silhouette or plain background): insufficient lighting, default
+camera clipping (clip_end=1000) and hide_render objects included in the framing. Fixing them
+does not repair the past: the thumb.png already written stay as-is on disk. This tool
+regenerates them without touching the published geometry or the version numbers — it re-reads
+the publish's artifact (GLB/USD), frames it and renders it again.
 
-ATTENTION - ecriture dans une zone de publish
----------------------------------------------
-Un dossier de publish est cense etre IMMUABLE. Cet outil y reecrit thumb.png : c'est le seul
-cas ou c'est defendable (le thumbnail est une representation derivee, pas la donnee publiee —
-l'artefact, le manifeste et la version ne bougent pas), mais ca reste une mutation. D'ou :
-  - DRY-RUN PAR DEFAUT (meme convention que create_project.clean_stale_staging) ;
-  - --apply obligatoire pour ecrire ;
-  - par defaut, seuls les thumbnails DETECTES PLATS sont regeneres (--all pour tout refaire).
+WARNING - writing into a publish area
+-------------------------------------
+A publish folder is meant to be IMMUTABLE. This tool rewrites thumb.png in it: it's the only
+case where that is defensible (the thumbnail is a derived representation, not the published data —
+the artifact, the manifest and the version don't move), but it remains a mutation. Hence:
+  - DRY-RUN BY DEFAULT (same convention as create_project.clean_stale_staging);
+  - --apply mandatory to write;
+  - by default, only the thumbnails DETECTED AS FLAT are regenerated (--all to redo everything).
 
 Usage
 -----
   BLENDER=/Applications/Blender.app/Contents/MacOS/Blender
   "$BLENDER" --background --factory-startup \\
-      --python tools/blender/backfill_thumbnails.py -- --project /chemin/projet
-  # puis, une fois le rapport relu :
+      --python tools/blender/backfill_thumbnails.py -- --project /path/project
+  # then, once the report is reviewed:
   "$BLENDER" --background --factory-startup \\
-      --python tools/blender/backfill_thumbnails.py -- --project /chemin/projet --apply
+      --python tools/blender/backfill_thumbnails.py -- --project /path/project --apply
 
-Exit code : 0 si le scan s'est deroule sans erreur (meme en dry-run), 1 sinon.
+Exit code: 0 if the scan ran without error (even in dry-run), 1 otherwise.
 """
 
 import argparse
@@ -44,9 +44,9 @@ for _p in (REPO_ROOT, PLUGINS):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# Un thumbnail dont l'ecart-type des pixels est sous ce seuil ne porte aucune information
-# visuelle exploitable (mesure : les thumbs casses du projet de test tombaient a 0.001-0.01,
-# un rendu correct depasse 0.05). Seuil sur les valeurs lineaires 0-1 de bpy.data.images.
+# A thumbnail whose pixel standard deviation is below this threshold carries no usable
+# visual information (measured: the test project's broken thumbs fell to 0.001-0.01,
+# a correct render exceeds 0.05). Threshold on the linear 0-1 values of bpy.data.images.
 FLAT_STD_THRESHOLD = 0.02
 
 IMPORTERS = {
@@ -62,7 +62,7 @@ IMPORTERS = {
 
 
 def _image_std(path):
-    """Ecart-type des canaux RGB d'une image, ou None si illisible."""
+    """Standard deviation of an image's RGB channels, or None if unreadable."""
     import bpy
     try:
         img = bpy.data.images.load(path)
@@ -81,7 +81,7 @@ def _image_std(path):
 
 
 def _import_artifact(path):
-    """Importe l'artefact dans la scene courante. Retourne les objets AJOUTES, ou []."""
+    """Imports the artifact into the current scene. Returns the ADDED objects, or []."""
     import bpy
     kind = IMPORTERS.get(os.path.splitext(path)[1].lower())
     if kind is None:
@@ -101,8 +101,8 @@ def _import_artifact(path):
 
 
 def _iter_publishes(project_root):
-    """(entity_name, entity_dir, step, version, artifact_abs, thumb_abs) pour chaque publish
-    'complete' du contrat deux-phases dont l'artefact existe encore sur disque."""
+    """(entity_name, entity_dir, step, version, artifact_abs, thumb_abs) for each 'complete'
+    publish of the two-phase contract whose artifact still exists on disk."""
     from pathlib import Path
     for family in ("assets", "sets", "shots"):
         fam = Path(project_root) / family
@@ -133,20 +133,20 @@ def _iter_publishes(project_root):
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="backfill_thumbnails")
-    ap.add_argument("--project", required=True, help="Racine du projet Ylos")
+    ap.add_argument("--project", required=True, help="Ylos project root")
     ap.add_argument("--apply", action="store_true",
-                    help="Ecrire reellement (sans ce flag : dry-run, rien n'est modifie)")
+                    help="Actually write (without this flag: dry-run, nothing is modified)")
     ap.add_argument("--all", action="store_true",
-                    help="Regenerer TOUS les thumbnails, pas seulement ceux detectes plats")
+                    help="Regenerate ALL thumbnails, not only those detected as flat")
     ap.add_argument("--size", type=int, default=512)
     args = ap.parse_args(argv)
 
     import bpy
     from blender.core import thumbnails  # plugins/blender importe comme package 'blender'
 
-    print(f"[backfill] projet   : {args.project}")
-    print(f"[backfill] mode     : {'APPLY (ecriture)' if args.apply else 'DRY-RUN (aucune ecriture)'}")
-    print(f"[backfill] selection: {'tous les publishes' if args.all else 'thumbnails plats uniquement'}")
+    print(f"[backfill] project  : {args.project}")
+    print(f"[backfill] mode     : {'APPLY (writing)' if args.apply else 'DRY-RUN (no writing)'}")
+    print(f"[backfill] selection: {'all publishes' if args.all else 'flat thumbnails only'}")
     print()
 
     stats = {"scanned": 0, "flat": 0, "rendered": 0, "written": 0, "failed": 0, "skipped_ok": 0}
@@ -164,12 +164,12 @@ def main(argv):
             print(f"  OK    {label}  (std={std:.4f})")
             continue
 
-        # Scene neuve par publish : aucun residu d'un import precedent dans le cadrage.
+        # Fresh scene per publish: no residue from a previous import in the framing.
         bpy.ops.wm.read_homefile(use_empty=True)
         objs = _import_artifact(artifact)
         if not objs:
             stats["failed"] += 1
-            print(f"  FAIL  {label}  import impossible : {os.path.basename(artifact)}")
+            print(f"  FAIL  {label}  import impossible: {os.path.basename(artifact)}")
             continue
 
         target_dir = os.path.dirname(thumb) if args.apply else \
@@ -179,25 +179,25 @@ def main(argv):
         produced = thumbnails.render_publish_thumbnail(objs, target_dir, size=args.size)
         if not produced:
             stats["failed"] += 1
-            print(f"  FAIL  {label}  rendu : {thumbnails.LAST_ERROR}")
+            print(f"  FAIL  {label}  render: {thumbnails.LAST_ERROR}")
             continue
 
         stats["rendered"] += 1
         new_std = _image_std(produced)
         if args.apply:
-            # render_publish_thumbnail ecrit deja 'thumb.png' dans target_dir : quand
-            # --apply, target_dir EST le dossier de publish, donc le fichier est en place.
+            # render_publish_thumbnail already writes 'thumb.png' in target_dir: when
+            # --apply, target_dir IS the publish folder, so the file is in place.
             stats["written"] += 1
             print(f"  WRITE {label}  std {std if std is None else round(std,4)} -> {round(new_std,4)}")
         else:
             print(f"  DRY   {label}  std {std if std is None else round(std,4)} -> {round(new_std,4)}"
-                  f"   apercu: {produced}")
+                  f"   preview: {produced}")
 
     print()
     print("[backfill] " + json.dumps(stats))
     if not args.apply and stats["rendered"]:
-        print("[backfill] Dry-run : les apercus sont dans ~/.ylos/backfill-preview/. "
-              "Relance avec --apply pour ecrire dans les dossiers de publish.")
+        print("[backfill] Dry-run: the previews are in ~/.ylos/backfill-preview/. "
+              "Re-run with --apply to write into the publish folders.")
     return 0
 
 

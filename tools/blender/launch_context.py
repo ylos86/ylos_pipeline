@@ -1,30 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-launch_context.py - Launcher versionne : ouvrir Blender dans un contexte pipeline Ylos.
+launch_context.py - Versioned launcher: open Blender in a Ylos pipeline context.
 
-Invoque par ylos_ui.py (bouton "Ouvrir dans Blender") et utilisable en CLI :
+Invoked by ylos_ui.py ("Open in Blender" button) and usable from the CLI:
 
     blender --python tools/blender/launch_context.py -- \
         --project <root> [--entity <name>] [--step <step>] [--path <file>] \
         [--kind wip|publish|scene_default]
 
-REGLE PIPELINE (cf. CLAUDE.md) : TOUT lancement DCC passe par ce launcher versionne.
-Plus jamais de `--python-expr` inline. Diagnostic CC#1d : en GUI, une op lancee via
-`--python-expr` s'execute pendant le boot (contexte pas pret) et echoue en silence ->
-l'utilisateur obtient une instance vide. Ce launcher differe l'execution au premier
-tick d'un timer (contexte pret) et journalise chaque etape.
+PIPELINE RULE (see CLAUDE.md): EVERY DCC launch goes through this versioned launcher.
+No more inline `--python-expr`. Diagnosis CC#1d: in GUI, an op launched via
+`--python-expr` runs during boot (context not ready) and fails silently ->
+the user gets an empty instance. This launcher defers execution to the first
+tick of a timer (context ready) and logs each step.
 
-- GUI (bpy.app.background == False) : les ops ne s'executent JAMAIS au parse time.
-  bpy.app.timers.register(callback, first_interval=0.2) -> execution au 1er tick.
-- Background (--background) : execution immediate + sys.exit(code) (pour la CI/tests).
+- GUI (bpy.app.background == False): ops NEVER run at parse time.
+  bpy.app.timers.register(callback, first_interval=0.2) -> execution at the 1st tick.
+- Background (--background): immediate execution + sys.exit(code) (for CI/tests).
 
-Ordre d'ouverture impose :
-  * .blend -> wm.open_mainfile D'ABORD (l'open remplace la scene), puis contexte.
-  * USD    -> contexte D'ABORD (open_context + enums), puis wm.usd_import (merge).
+Imposed opening order:
+  * .blend -> wm.open_mainfile FIRST (the open replaces the scene), then context.
+  * USD    -> context FIRST (open_context + enums), then wm.usd_import (merge).
 
-Observabilite : chaque etape est journalisee dans ~/.ylos/launch.log (timestamp, argv,
-succes/echec + traceback complet) ET imprimee. Aucune exception ne sort du timer.
-Le chemin du log est surchargeable par $YLOS_LAUNCH_LOG (isolation des tests).
+Observability: each step is logged to ~/.ylos/launch.log (timestamp, argv,
+success/failure + full traceback) AND printed. No exception leaves the timer.
+The log path is overridable via $YLOS_LAUNCH_LOG (test isolation).
 """
 import argparse
 import json
@@ -36,29 +36,29 @@ from pathlib import Path
 
 import bpy
 
-# --- Localisation du repo (pattern CLAUDE.md : realpath + remontee parents) -----------
+# --- Repo location (CLAUDE.md pattern: realpath + parent walk-up) ---------------------
 _THIS = os.path.realpath(__file__)
 REPO_ROOT = os.path.normpath(os.path.join(_THIS, "..", "..", ".."))  # tools/blender/.. -> repo
 for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "plugins")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# Log surchargeable ($YLOS_LAUNCH_LOG) : les tests isolent leur propre fichier.
+# Overridable log ($YLOS_LAUNCH_LOG): tests isolate their own file.
 LOG_PATH = os.environ.get("YLOS_LAUNCH_LOG") or str(Path.home() / ".ylos" / "launch.log")
 
-# Extensions ouvertes par import USD (le reste = mainfile .blend). Miroir de ylos_ui.py.
+# Extensions opened by USD import (the rest = .blend mainfile). Mirror of ylos_ui.py.
 USD_OPEN_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
-# Cible pipeline 'web' (cf. create_project.PROD_TYPE_TO_TARGET) : publish = .glb, importe via
-# import_scene.gltf (meme merge-dans-la-scene que l'USD, jamais un open_mainfile).
+# 'web' pipeline target (see create_project.PROD_TYPE_TO_TARGET): publish = .glb, imported via
+# import_scene.gltf (same merge-into-the-scene as USD, never an open_mainfile).
 GLB_OPEN_EXTS = (".glb", ".gltf")
 
 
 # --------------------------------------------------------------------------------------
-# Observabilite
+# Observability
 # --------------------------------------------------------------------------------------
 
 def _log(msg, exc=False):
-    """Append horodate dans LOG_PATH ET print. Ne leve jamais (echec d'ecriture avale)."""
+    """Timestamped append to LOG_PATH AND print. Never raises (write failure swallowed)."""
     line = f"[{datetime.now(timezone.utc).isoformat()}] {msg}"
     print(line, flush=True)
     try:
@@ -74,10 +74,10 @@ def _log(msg, exc=False):
 
 
 def _set_enum_safe(obj, prop, value, items):
-    """Affecte une valeur d'enum SANS jamais crasher : une valeur absente des items (valeur
-    legacy/inconnue lue d'un manifeste ou prefixe de nom invalide) -> warning loggue +
-    fallback (valeur courante conservee), jamais d'exception. Miroir du pattern
-    op_open_context._set_enum_safe, cote launcher (pas d'operateur -> log au lieu de report)."""
+    """Assign an enum value WITHOUT ever crashing: a value absent from the items (legacy/
+    unknown value read from a manifest or invalid name prefix) -> logged warning +
+    fallback (current value kept), never an exception. Mirror of the
+    op_open_context._set_enum_safe pattern, launcher-side (no operator -> log instead of report)."""
     valid = {v for v, _label, _desc in items}
     if value in valid:
         try:
@@ -85,9 +85,9 @@ def _set_enum_safe(obj, prop, value, items):
             _log(f"context: {prop} = {value!r}")
             return True
         except Exception:
-            _log(f"context: setattr {prop}={value!r} a echoue", exc=True)
+            _log(f"context: setattr {prop}={value!r} failed", exc=True)
             return False
-    _log(f"context: {prop} = {value!r} ignore (hors enum {sorted(valid)}) - valeur conservee")
+    _log(f"context: {prop} = {value!r} ignored (outside enum {sorted(valid)}) - value kept")
     return False
 
 
@@ -96,35 +96,35 @@ def _set_enum_safe(obj, prop, value, items):
 # --------------------------------------------------------------------------------------
 
 def _addon_registered():
-    """True si l'op ylos.open_context est enregistree. `"op" in dir(bpy.ops.ylos)` est le
-    seul check fiable dans les DEUX etats : `hasattr(bpy.types, "YLOS_OT_OpenContext")` renvoie
-    toujours False (les operateurs ne sont pas exposes ainsi) et `hasattr(bpy.ops.ylos, "op")`
-    toujours True (stub paresseux) - les deux menent a une mauvaise decision (re-register en
-    GUI ou jamais de register en CI)."""
+    """True if the ylos.open_context op is registered. `"op" in dir(bpy.ops.ylos)` is the
+    only reliable check in BOTH states: `hasattr(bpy.types, "YLOS_OT_OpenContext")` always
+    returns False (operators are not exposed that way) and `hasattr(bpy.ops.ylos, "op")`
+    always True (lazy stub) - both lead to a wrong decision (re-register in
+    GUI or never register in CI)."""
     return "open_context" in dir(bpy.ops.ylos)
 
 
 def _ensure_addon():
-    """L'op ylos.open_context et les proprietes de scene n'existent que si l'addon est
-    enregistre. En GUI l'utilisateur l'a active (ne pas re-register : double register ->
-    RuntimeError) ; en background (CI, --factory-startup) on l'enregistre nous-meme. Non
-    fatal : un echec degrade le contexte, jamais l'ouverture du fichier."""
+    """The ylos.open_context op and the scene properties only exist if the addon is
+    registered. In GUI the user enabled it (do not re-register: double register ->
+    RuntimeError); in background (CI, --factory-startup) we register it ourselves. Non-
+    fatal: a failure degrades the context, never the file opening."""
     if _addon_registered():
         return True
     try:
-        import blender as addon  # package plugins/blender importe comme 'blender'
+        import blender as addon  # package plugins/blender imported as 'blender'
         addon.register()
         ok = _addon_registered()
-        _log(f"addon: register() {'OK' if ok else 'sans ylos.open_context'}")
+        _log(f"addon: register() {'OK' if ok else 'without ylos.open_context'}")
         return ok
     except Exception:
-        _log("addon: register() a echoue - contexte pipeline indisponible", exc=True)
+        _log("addon: register() failed - pipeline context unavailable", exc=True)
         return False
 
 
 def _entity_type(project, entity):
-    """Famille de l'entite (asset|set|shot) lue du manifeste, de facon tolerante. None si
-    illisible -> le context_type reste inchange (set garde)."""
+    """Family of the entity (asset|set|shot) read from the manifest, tolerantly. None if
+    unreadable -> the context_type stays unchanged (set kept)."""
     try:
         import create_project as cp
         _edir, mpath = cp._find_asset_entity(Path(project), entity)
@@ -135,44 +135,44 @@ def _entity_type(project, entity):
 
 
 def _resolve_path(args):
-    """Fichier a ouvrir : --path explicite, sinon resolution via l'orchestrateur (logique
-    unique, reutilisable Houdini). resolve_open_target NE LEVE JAMAIS -> dict exists=False."""
+    """File to open: explicit --path, otherwise resolution via the orchestrator (single
+    logic, reusable by Houdini). resolve_open_target NEVER RAISES -> dict exists=False."""
     if args.path:
         return args.path
     if not args.entity:
-        _log("resolve: ni --path ni --entity - rien a resoudre")
+        _log("resolve: neither --path nor --entity - nothing to resolve")
         return None
     import create_project as cp
     target = cp.resolve_open_target(args.entity, "blender", args.step, project_root=args.project)
     if target.get("exists"):
         _log(f"resolve: {args.entity!r} (step={args.step!r}) -> [{target['kind']}] {target['path']}")
         return target["path"]
-    _log(f"resolve: aucun target pour {args.entity!r}: {target.get('reason', '')}")
+    _log(f"resolve: no target for {args.entity!r}: {target.get('reason', '')}")
     return None
 
 
 def _apply_context(project, entity, step):
-    """Charge le projet (prod_type, preset de scene) via l'op de l'addon, puis pose le
-    contexte d'entite sur la scene courante. Chaque affectation d'enum est gardee."""
+    """Loads the project (prod_type, scene preset) via the addon's op, then sets the
+    entity context on the current scene. Each enum assignment is guarded."""
     _ensure_addon()
-    # 1. charger le projet - jamais fatal (l'ouverture du fichier prime).
+    # 1. load the project - never fatal (the file opening takes priority).
     try:
         bpy.ops.ylos.open_context('EXEC_DEFAULT', directory=str(project))
         _log(f"context: open_context(directory={str(project)!r}) OK")
     except Exception:
-        _log("context: open_context a echoue (non fatal)", exc=True)
+        _log("context: open_context failed (non-fatal)", exc=True)
 
     if not entity:
         return
     scene = bpy.context.scene
-    from blender.core import vocab  # apres _ensure_addon : plugins sur sys.path
+    from blender.core import vocab  # after _ensure_addon: plugins on sys.path
 
-    # ylos_current_asset : StringProperty (jamais un enum).
+    # ylos_current_asset: StringProperty (never an enum).
     try:
         scene.ylos_current_asset = entity
         _log(f"context: ylos_current_asset = {entity!r}")
     except Exception:
-        _log(f"context: set ylos_current_asset={entity!r} a echoue", exc=True)
+        _log(f"context: set ylos_current_asset={entity!r} failed", exc=True)
 
     if step:
         _set_enum_safe(scene, "ylos_current_step", step, vocab.STEP_ITEMS_ALL)
@@ -181,21 +181,21 @@ def _apply_context(project, entity, step):
     if etype:
         _set_enum_safe(scene, "ylos_context_type", etype.upper(), vocab.CONTEXT_TYPE_ITEMS)
 
-    # Type d'asset = prefixe TYPE_ du nom (convention TYPE_Nom_Variant) si valide.
+    # Asset type = the name's TYPE_ prefix (TYPE_Name_Variant convention) if valid.
     prefix = entity.split("_", 1)[0]
     _set_enum_safe(scene, "ylos_asset_type", prefix, vocab.ASSET_TYPE_ITEMS)
 
 
 # --------------------------------------------------------------------------------------
-# Ouverture (callback)
+# Opening (callback)
 # --------------------------------------------------------------------------------------
 
 def _do_launch(args):
-    """Ouvre le fichier resolu dans l'ordre impose, contextualise, journalise. Retourne un
-    code de sortie (0 succes, 1 echec) pour le mode background. Ne leve jamais."""
+    """Opens the resolved file in the imposed order, contextualizes, logs. Returns an
+    exit code (0 success, 1 failure) for background mode. Never raises."""
     path = _resolve_path(args)
     if not path:
-        _log("LAUNCH FAILURE: aucun fichier a ouvrir (ni --path, ni resolution)")
+        _log("LAUNCH FAILURE: no file to open (neither --path nor resolution)")
         return 1
 
     ext = os.path.splitext(path)[1].lower()
@@ -203,8 +203,8 @@ def _do_launch(args):
     is_glb = ext in GLB_OPEN_EXTS
     try:
         if is_usd or is_glb:
-            # USD/GLB : contexte D'ABORD (open_context + enums), puis import (merge dans la
-            # scene) - meme ordre pour les deux, seul l'operateur d'import differe.
+            # USD/GLB: context FIRST (open_context + enums), then import (merge into the
+            # scene) - same order for both, only the import operator differs.
             _apply_context(args.project, args.entity, args.step)
             if is_usd:
                 bpy.ops.wm.usd_import(filepath=path)
@@ -213,12 +213,12 @@ def _do_launch(args):
                 bpy.ops.import_scene.gltf(filepath=path)
                 _log(f"open: import_scene.gltf({path!r}) OK")
         else:
-            # .blend : open_mainfile D'ABORD (remplace la scene), puis contexte.
+            # .blend: open_mainfile FIRST (replaces the scene), then context.
             bpy.ops.wm.open_mainfile(filepath=path)
             _log(f"open: open_mainfile({path!r}) OK")
             _apply_context(args.project, args.entity, args.step)
     except Exception:
-        _log(f"LAUNCH FAILURE: ouverture de {path!r} a echoue", exc=True)
+        _log(f"LAUNCH FAILURE: opening {path!r} failed", exc=True)
         return 1
 
     n_objects = len(bpy.data.objects)
@@ -228,19 +228,19 @@ def _do_launch(args):
 
 
 # --------------------------------------------------------------------------------------
-# Entree
+# Entry point
 # --------------------------------------------------------------------------------------
 
 def _parse_args():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     p = argparse.ArgumentParser(prog="launch_context.py",
-                                description="Lancer Blender dans un contexte pipeline Ylos.")
-    p.add_argument("--project", required=True, help="Racine du projet Ylos.")
-    p.add_argument("--entity", help="Nom de l'entite (asset/set/shot).")
-    p.add_argument("--step", help="Step vise (defaut : 1er step declare au manifeste).")
-    p.add_argument("--path", help="Fichier a ouvrir ; absent -> resolve_open_target.")
+                                description="Launch Blender in a Ylos pipeline context.")
+    p.add_argument("--project", required=True, help="Ylos project root.")
+    p.add_argument("--entity", help="Entity name (asset/set/shot).")
+    p.add_argument("--step", help="Targeted step (default: 1st step declared in the manifest).")
+    p.add_argument("--path", help="File to open; absent -> resolve_open_target.")
     p.add_argument("--kind", choices=("wip", "publish", "scene_default"),
-                   help="Indice de nature du fichier (metadonnee, journalisee).")
+                   help="Hint about the file's nature (metadata, logged).")
     return p.parse_args(argv)
 
 
@@ -248,24 +248,24 @@ def main():
     try:
         args = _parse_args()
     except SystemExit:
-        _log("LAUNCH FAILURE: arguments invalides (voir argv ci-dessus)")
+        _log("LAUNCH FAILURE: invalid arguments (see argv above)")
         raise
     _log(f"launch argv={sys.argv!r} kind={args.kind!r}")
 
     if bpy.app.background:
-        # Background : le contexte est pret, execution immediate + code de sortie.
+        # Background: the context is ready, immediate execution + exit code.
         sys.exit(_do_launch(args))
     else:
-        # GUI : NE JAMAIS executer au parse time (contexte pas pret pendant le boot).
-        # Differer au 1er tick d'un timer ; aucune exception ne doit en sortir.
+        # GUI: NEVER execute at parse time (context not ready during boot).
+        # Defer to the 1st tick of a timer; no exception must leave it.
         def _tick():
             try:
                 _do_launch(args)
             except Exception:
-                _log("LAUNCH FAILURE: exception non capturee dans le timer", exc=True)
-            return None  # None -> ne pas re-armer le timer
+                _log("LAUNCH FAILURE: uncaught exception in the timer", exc=True)
+            return None  # None -> do not re-arm the timer
         bpy.app.timers.register(_tick, first_interval=0.2)
-        _log("GUI: lancement differe via bpy.app.timers (first_interval=0.2)")
+        _log("GUI: deferred launch via bpy.app.timers (first_interval=0.2)")
 
 
 if __name__ == "__main__":
