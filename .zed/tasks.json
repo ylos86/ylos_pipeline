@@ -1,6 +1,6 @@
-// Tasks Zed pour Ylos Pipeline — committées au repo (contrairement au keymap.json qui
-// reste global/user, cf. discussion). Lancement : Cmd-Shift-R (task::Spawn) puis taper
-// le début du label, Entrée. Rerun du dernier : Cmd-Alt-R.
+// Zed tasks for Ylos Pipeline — committed to the repo (unlike keymap.json which
+// stays global/user, see discussion). Launch: Cmd-Shift-R (task::Spawn) then type
+// the start of the label, Enter. Rerun the last one: Cmd-Alt-R.
 [
   {
     "label": "Ylos UI: launch",
