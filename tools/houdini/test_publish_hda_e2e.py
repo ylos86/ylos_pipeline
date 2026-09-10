@@ -1,24 +1,24 @@
 #!/usr/bin/env hython
-"""test_publish_hda_e2e.py - reproduit un noeud ylos::publish::0.2 EXACTEMENT comme le TAB
-menu de Houdini le ferait, puis appelle le callback publish tel quel.
+"""test_publish_hda_e2e.py - reproduces a ylos::publish::0.2 node EXACTLY as Houdini's TAB
+menu would, then calls the publish callback as-is.
 
-MANUEL / HYTHON UNIQUEMENT - hors CI (necessite Houdini + le HDA installe). La CI
-(`python3 -m unittest`, sans Houdini) ne charge jamais ce fichier (`import hou` top-level).
+MANUAL / HYTHON ONLY - outside CI (requires Houdini + the installed HDA). CI
+(`python3 -m unittest`, without Houdini) never loads this file (`import hou` top-level).
 
-Difference deliberee avec un test "pratique" : on ne pre-remplit AUCUN parametre a la main,
-sauf `asset_name` (le seul que l'utilisateur renseigne manuellement dans le workflow reel).
-Tout le reste (project_root via default_expression, asset_type via default_value, les parms
-promus caches) doit venir des VRAIES valeurs par defaut de la definition installee. C'est le
-seul moyen de reproduire les deux bugs (663f5c8, d51682e) qui n'existaient QUE sur un noeud
-fraichement cree - un test qui pose les parms a la main les masque, comme cela s'est produit.
+Deliberate difference from a "practical" test: we pre-fill NO parameter by hand,
+except `asset_name` (the only one the user fills manually in the real workflow).
+Everything else (project_root via default_expression, asset_type via default_value, the hidden
+promoted parms) must come from the REAL default values of the installed definition. It's the
+only way to reproduce the two bugs (663f5c8, d51682e) that existed ONLY on a freshly
+created node - a test that sets the parms by hand masks them, as happened.
 
-A lancer depuis un repertoire NEUTRE (jamais la racine du repo) : un bug d'import qui ne se
-declare que quand le cwd n'est pas la racine (cf. 663f5c8, masque par sys.path[0]='' quand le
-shell etait deja dans REPO) doit pouvoir se reproduire ici.
+To run from a NEUTRAL directory (never the repo root): an import bug that only
+shows up when the cwd is not the root (see 663f5c8, masked by sys.path[0]='' when the
+shell was already in REPO) must be reproducible here.
 
-Usage :
-    cd /un/repertoire/neutre
-    hython /chemin/absolu/vers/tools/houdini/test_publish_hda_e2e.py
+Usage:
+    cd /a/neutral/directory
+    hython /absolute/path/to/tools/houdini/test_publish_hda_e2e.py
 """
 
 import json
@@ -30,19 +30,19 @@ from pathlib import Path
 
 import hou
 
-# Chemin absolu et resolu (jamais dirname(__file__) nu, meme raison que le fix symlink
-# documente dans build_publish_hda.py) : ce script doit fonctionner peu importe le cwd.
+# Absolute and resolved path (never bare dirname(__file__), same reason as the symlink fix
+# documented in build_publish_hda.py): this script must work regardless of the cwd.
 _HERE = os.path.realpath(__file__)
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 
 TYPE_NAME = "ylos::publish::0.2"
-ASSET_TYPE = "CHARACTER"          # doit matcher ASSET_TYPES[0] (default_value reel du parm)
+ASSET_TYPE = "CHARACTER"          # must match ASSET_TYPES[0] (the parm's real default_value)
 ASSET_NAME = "CHARACTER_Test_Default"
 
-# Mode step (0.2) : fixture shot + publish d'un step qui produit un layer USD.
-SHOT_NAME = "ANIMATION_Test_Default"   # prefixe = un SHOT_TYPES ; distinct du step publie
+# Step mode (0.2): shot fixture + publish of a step that produces a USD layer.
+SHOT_NAME = "ANIMATION_Test_Default"   # prefix = a SHOT_TYPES; distinct from the published step
 SHOT_TYPE = "ANIMATION"
-SHOT_STEP = "lighting"                 # un DEFAULT_SHOT_STEPS, produit bien un layer (pas comp/2D)
+SHOT_STEP = "lighting"                 # a DEFAULT_SHOT_STEPS, does produce a layer (not comp/2D)
 
 
 def fail(msg):
@@ -51,10 +51,10 @@ def fail(msg):
 
 
 def test_finalize_rejects_missing_thumb():
-    """finalize_publish_version() doit refuser de committer si le thumbnail manque du staging -
-    contrat de completude (cf. bug staging_dir orphelin : thumb.png ecrit ~4s apres l'os.replace
-    en session GUI Houdini, husk/usdrender_rop asynchrone). Pur create_project.py, pas besoin de
-    hou/HDA - reproduit juste l'etat d'un staging_dir incomplet a la main."""
+    """finalize_publish_version() must refuse to commit if the thumbnail is missing from staging -
+    completeness contract (see orphan staging_dir bug: thumb.png written ~4s after the os.replace
+    in a Houdini GUI session, async husk/usdrender_rop). Pure create_project.py, no need for
+    hou/HDA - just reproduces the state of an incomplete staging_dir by hand."""
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)
     import create_project as cp
@@ -75,8 +75,8 @@ def test_finalize_rejects_missing_thumb():
         )
         version = cp.publish_version_from_dir(final_dir)
 
-        # Ecrit SEULEMENT le layer, jamais le thumb - simule exactement le staging_dir capture
-        # par le bug (render du thumb pas encore termine au moment du finalize).
+        # Writes ONLY the layer, never the thumb - simulates exactly the staging_dir captured
+        # by the bug (thumb render not yet finished at finalize time).
         layer_stem = "{}_lop_v{:03d}".format(asset_name, version)
         (staging_dir / (layer_stem + ".usd")).write_text("#usda 1.0\n", encoding="utf-8")
 
@@ -92,11 +92,11 @@ def test_finalize_rejects_missing_thumb():
             raised = True
 
         if not raised:
-            fail("finalize_publish_version() n'a PAS leve alors que thumb.png manquait du staging")
+            fail("finalize_publish_version() did NOT raise while thumb.png was missing from staging")
         if not staging_dir.is_dir():
-            fail("staging_dir a disparu alors que le finalize aurait du echouer avant tout replace")
+            fail("staging_dir vanished while finalize should have failed before any replace")
         if final_dir.exists():
-            fail("final_dir existe alors que le finalize aurait du echouer avant tout replace")
+            fail("final_dir exists while finalize should have failed before any replace")
 
         entity_manifest_path = (
             Path(project_source) / "assets" / asset_name / cp.ASSET_MANIFEST_NAME
@@ -107,21 +107,21 @@ def test_finalize_rejects_missing_thumb():
         )
         if entry["status"] != "pending":
             fail(
-                "l'entree de version est passee a {!r} alors que le finalize a echoue - "
-                "attendu 'pending' (jamais commit)".format(entry["status"])
+                "the version entry switched to {!r} while finalize failed - "
+                "expected 'pending' (never committed)".format(entry["status"])
             )
 
-        print("[ok] finalize_publish_version() rejette bien un staging_dir sans thumb")
+        print("[ok] finalize_publish_version() correctly rejects a staging_dir without a thumb")
         print("[PASS] test_finalize_rejects_missing_thumb")
     finally:
         shutil.rmtree(tmp_base, ignore_errors=True)
 
 
 def main():
-    # Import de create_project pour le SETUP du test (scaffolder un projet + un asset) -
-    # distinct de l'import que fait le module Python embarque du HDA lui-meme (celui-la est
-    # sous test, pas contourne : on ne touche pas sys.path pour lui, on verifie juste que son
-    # propre _repo_root() s'en sort avec le HOME reel deja charge par le package Houdini).
+    # Import of create_project for the test SETUP (scaffold a project + an asset) -
+    # distinct from the import the HDA's own embedded Python module does (that one is
+    # under test, not bypassed: we don't touch sys.path for it, we just verify that its
+    # own _repo_root() copes with the real HOME already loaded by the Houdini package).
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)
     import create_project as cp
@@ -133,8 +133,8 @@ def main():
     node = None
     real_home = os.environ.get("HOME")
     try:
-        # 1. Projet + asset reels sur disque (fixture de test, pas un parm pre-rempli : c'est
-        #    l'equivalent d'un projet deja scaffolde avant que l'utilisateur ouvre Houdini).
+        # 1. Real project + asset on disk (test fixture, not a pre-filled parm: it's
+        #    the equivalent of a project already scaffolded before the user opens Houdini).
         info = cp.create(
             "E2ETest",
             root=os.path.join(tmp_base, "projects"),
@@ -143,93 +143,93 @@ def main():
         project_source = info["source"]
         cp.create_asset(project_source, ASSET_NAME, entity_type="asset", asset_type=ASSET_TYPE)
 
-        # 2. Fichier ~/.ylos/active_project - c'est CE fichier que le default_expression du
-        #    parm project_root lit. On ne pose jamais project_root a la main sur le noeud.
+        # 2. ~/.ylos/active_project file - THIS is the file that the project_root parm's
+        #    default_expression reads. We never set project_root by hand on the node.
         active_project_file = os.path.join(fake_home, ".ylos", "active_project")
         with open(active_project_file, "w", encoding="utf-8") as f:
             f.write(project_source)
 
-        # 3. Noeud EXACTEMENT comme le TAB menu : aucun kwarg de parm, type resolu depuis le
-        #    .hdanc installe via le package Houdini (HOUDINI_OTLSCAN_PATH), pas depuis un
-        #    build local. Si le type est introuvable, le package n'est pas charge - on le
-        #    signale distinctement d'un echec du callback.
+        # 3. Node EXACTLY like the TAB menu: no parm kwarg, type resolved from the
+        #    installed .hdanc via the Houdini package (HOUDINI_OTLSCAN_PATH), not from a
+        #    local build. If the type is not found, the package is not loaded - we
+        #    report it distinctly from a callback failure.
         stage = hou.node("/stage")
         try:
             node = stage.createNode(TYPE_NAME)
         except hou.OperationFailed as exc:
             fail(
-                "type '{}' introuvable (package Houdini non charge ? "
-                "cf. plugins/houdini/ylos.json) : {}".format(TYPE_NAME, exc)
+                "type '{}' not found (Houdini package not loaded? "
+                "see plugins/houdini/ylos.json): {}".format(TYPE_NAME, exc)
             )
 
-        # 4. HOME bascule sur le fake home UNIQUEMENT maintenant : Houdini a deja demarre et
-        #    scanne HOUDINI_OTLSCAN_PATH avec le vrai HOME (le package resout $YLOS_REPO =
-        #    $HOME/Desktop/Claude/YlosPipeline a ce moment-la, avant ce script). Le seul code
-        #    qui doit voir le HOME bascule est le default_expression de project_root (lu a
-        #    l'eval du parm) et l'import du module embarque du HDA (qui, lui, ne depend pas
-        #    de HOME - il derive son repo root de son propre chemin de definition installee).
+        # 4. HOME switched to the fake home ONLY now: Houdini has already started and
+        #    scanned HOUDINI_OTLSCAN_PATH with the real HOME (the package resolves $YLOS_REPO =
+        #    $HOME/Desktop/Claude/YlosPipeline at that moment, before this script). The only code
+        #    that must see the switched HOME is project_root's default_expression (read at
+        #    parm eval) and the import of the HDA's embedded module (which does not depend
+        #    on HOME - it derives its repo root from its own installed definition path).
         os.environ["HOME"] = fake_home
 
-        # 5. Seul parm pose a la main : asset_name (le seul que l'utilisateur remplit).
+        # 5. Only parm set by hand: asset_name (the only one the user fills).
         node.parm("asset_name").set(ASSET_NAME)
 
-        # 6. Sanity-check des VRAIS defauts de la definition, AVANT tout clic - c'est
-        #    precisement ce que le test precedent ne verifiait pas.
+        # 6. Sanity-check of the REAL definition defaults, BEFORE any click - it's
+        #    precisely what the previous test did not verify.
         asset_type_default = node.evalParm("asset_type")
         if not asset_type_default:
             fail(
-                "asset_type est vide sur un noeud fraichement cree (regression du fix "
-                "d51682e - default_value manquant sur le ParmTemplate menu)."
+                "asset_type is empty on a freshly created node (regression of the "
+                "d51682e fix - default_value missing on the menu ParmTemplate)."
             )
         if asset_type_default != ASSET_TYPE:
             fail(
-                "asset_type par defaut = {!r}, attendu {!r} (ASSET_TYPES[0] a-t-il change "
-                "sans mettre a jour ce test ?)".format(asset_type_default, ASSET_TYPE)
+                "default asset_type = {!r}, expected {!r} (did ASSET_TYPES[0] change "
+                "without updating this test?)".format(asset_type_default, ASSET_TYPE)
             )
 
         project_root_default = node.evalParm("project_root")
         if project_root_default != project_source:
             fail(
-                "project_root par defaut = {!r}, attendu {!r} (default_expression cassee ou "
-                "~/.ylos/active_project non lu).".format(project_root_default, project_source)
+                "default project_root = {!r}, expected {!r} (broken default_expression or "
+                "~/.ylos/active_project not read).".format(project_root_default, project_source)
             )
 
         status_before = node.evalParm("status")
         if status_before:
-            fail("status non vide avant tout publish : {!r}".format(status_before))
+            fail("status not empty before any publish: {!r}".format(status_before))
 
-        # 7. Declenche le callback EXACTEMENT comme un clic utilisateur (pressButton execute
-        #    le script_callback du parm, pas un appel direct a hou.phm().publish()).
+        # 7. Triggers the callback EXACTLY like a user click (pressButton runs
+        #    the parm's script_callback, not a direct call to hou.phm().publish()).
         try:
             node.parm("publish").pressButton()
         except hou.OperationFailed as exc:
-            # Le callback re-leve apres avoir ecrit "ERREUR: ..." dans status - le message
-            # status (verifie juste apres) est la source de verite, celle-ci n'est qu'un filet.
-            print("[warn] pressButton a leve : {}".format(exc))
+            # The callback re-raises after writing "ERROR: ..." into status - the status
+            # message (checked just after) is the source of truth, this one is only a net.
+            print("[warn] pressButton raised: {}".format(exc))
 
         status_after = node.evalParm("status")
         if not status_after.startswith("OK"):
-            fail("callback publish en erreur - status = {!r}".format(status_after))
+            fail("publish callback errored - status = {!r}".format(status_after))
 
-        # 8. Verification sur disque, pas seulement le texte du status : le vrai livrable.
+        # 8. Disk verification, not just the status text: the real deliverable.
         publish_dir = os.path.join(project_source, "assets", ASSET_NAME, "lop", "publish")
         if not os.path.isdir(publish_dir):
-            fail("aucun repertoire de publish sur disque : {}".format(publish_dir))
+            fail("no publish directory on disk: {}".format(publish_dir))
         versions = sorted(os.listdir(publish_dir))
         if not versions:
-            fail("repertoire de publish vide : {}".format(publish_dir))
+            fail("empty publish directory: {}".format(publish_dir))
         version_dir = os.path.join(publish_dir, versions[-1])
         produced = sorted(os.listdir(version_dir))
         layers = [n for n in produced if n != cp.LOP_THUMB_NAME]
         thumbs = [n for n in produced if n == cp.LOP_THUMB_NAME]
         if not layers:
-            fail("aucun layer USD ecrit dans {} (produced={!r})".format(version_dir, produced))
+            fail("no USD layer written in {} (produced={!r})".format(version_dir, produced))
         if not thumbs:
-            fail("aucun thumbnail ecrit dans {} (produced={!r})".format(version_dir, produced))
+            fail("no thumbnail written in {} (produced={!r})".format(version_dir, produced))
 
         print("[ok] status         : {}".format(status_after))
-        print("[ok] version publiee: {}".format(version_dir))
-        print("[ok] fichiers       : {}".format(produced))
+        print("[ok] published ver. : {}".format(version_dir))
+        print("[ok] files          : {}".format(produced))
         print("[PASS]")
 
     finally:
@@ -243,13 +243,13 @@ def main():
 
 
 def test_step_publish_shot():
-    """Mode step (0.2) : sur une fixture shot, publier `publish_kind=lighting` doit deposer
-    le layer dans shots/<shot>/lighting/publish/, ecrire step_publishes['lighting'] au
-    manifeste (statut complete) et declencher la recomposition de shot_root.usda
-    (refresh_entity_root, kind != 'lop'). Meme reproduction fidele du TAB menu que main() :
-    seuls asset_name (le shot) et publish_kind sont poses a la main (les deux valeurs que
-    l'utilisateur choisit dans le workflow step reel) ; asset_type garde son defaut et est
-    ignore par le callback en mode step."""
+    """Step mode (0.2): on a shot fixture, publishing `publish_kind=lighting` must place
+    the layer in shots/<shot>/lighting/publish/, write step_publishes['lighting'] to the
+    manifest (status complete) and trigger the recomposition of shot_root.usda
+    (refresh_entity_root, kind != 'lop'). Same faithful TAB-menu reproduction as main():
+    only asset_name (the shot) and publish_kind are set by hand (the two values
+    the user chooses in the real step workflow); asset_type keeps its default and is
+    ignored by the callback in step mode."""
     if REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)
     import create_project as cp
@@ -278,77 +278,77 @@ def test_step_publish_shot():
             node = stage.createNode(TYPE_NAME)
         except hou.OperationFailed as exc:
             fail(
-                "type '{}' introuvable (package Houdini non charge ? "
-                "cf. plugins/houdini/ylos.json) : {}".format(TYPE_NAME, exc)
+                "type '{}' not found (Houdini package not loaded? "
+                "see plugins/houdini/ylos.json): {}".format(TYPE_NAME, exc)
             )
 
         os.environ["HOME"] = fake_home
 
-        # Les deux seuls parms poses a la main dans le workflow step : le shot et le step.
+        # The only two parms set by hand in the step workflow: the shot and the step.
         node.parm("asset_name").set(SHOT_NAME)
         node.parm("publish_kind").set(SHOT_STEP)
 
-        # Le menu publish_kind doit exposer le step (lu du manifeste du shot par
-        # kind_menu_items) - sinon la valeur posee ne matcherait aucun item.
+        # The publish_kind menu must expose the step (read from the shot's manifest by
+        # kind_menu_items) - otherwise the set value would match no item.
         kind_items = node.parm("publish_kind").menuItems()
         if SHOT_STEP not in kind_items:
             fail(
-                "publish_kind ne propose pas {!r} (menu genere = {!r} ; manifeste du shot "
-                "non lu par kind_menu_items ?)".format(SHOT_STEP, kind_items)
+                "publish_kind does not propose {!r} (generated menu = {!r}; shot manifest "
+                "not read by kind_menu_items?)".format(SHOT_STEP, kind_items)
             )
         if node.evalParm("publish_kind") != SHOT_STEP:
-            fail("publish_kind = {!r}, attendu {!r}".format(
+            fail("publish_kind = {!r}, expected {!r}".format(
                 node.evalParm("publish_kind"), SHOT_STEP))
 
         try:
             node.parm("publish").pressButton()
         except hou.OperationFailed as exc:
-            print("[warn] pressButton a leve : {}".format(exc))
+            print("[warn] pressButton raised: {}".format(exc))
 
         status_after = node.evalParm("status")
         if not status_after.startswith("OK"):
-            fail("callback publish (step) en erreur - status = {!r}".format(status_after))
+            fail("publish callback (step) errored - status = {!r}".format(status_after))
 
-        # 1. Le layer atterrit sous le sous-arbre du step, PAS sous lop/.
+        # 1. The layer lands under the step subtree, NOT under lop/.
         publish_dir = os.path.join(
             project_source, "shots", SHOT_NAME, SHOT_STEP, "publish"
         )
         if not os.path.isdir(publish_dir):
-            fail("aucun repertoire de publish step sur disque : {}".format(publish_dir))
+            fail("no step publish directory on disk: {}".format(publish_dir))
         versions = sorted(os.listdir(publish_dir))
         if not versions:
-            fail("repertoire de publish step vide : {}".format(publish_dir))
+            fail("empty step publish directory: {}".format(publish_dir))
         version_dir = os.path.join(publish_dir, versions[-1])
         produced = sorted(os.listdir(version_dir))
         if not [n for n in produced if n != cp.LOP_THUMB_NAME]:
-            fail("aucun layer USD ecrit dans {} (produced={!r})".format(version_dir, produced))
+            fail("no USD layer written in {} (produced={!r})".format(version_dir, produced))
         if cp.LOP_THUMB_NAME not in produced:
-            fail("aucun thumbnail dans {} (produced={!r})".format(version_dir, produced))
+            fail("no thumbnail in {} (produced={!r})".format(version_dir, produced))
 
-        # 2. Le manifeste enregistre l'entree sous step_publishes[step], statut complete.
+        # 2. The manifest records the entry under step_publishes[step], status complete.
         manifest_path = Path(project_source) / "shots" / SHOT_NAME / cp.ASSET_MANIFEST_NAME
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         step_entries = manifest.get(cp.STEP_PUBLISHES_KEY, {}).get(SHOT_STEP)
         if not step_entries:
             fail(
-                "step_publishes[{!r}] absent/vide au manifeste (kind mal route ?) : {}".format(
+                "step_publishes[{!r}] absent/empty in the manifest (kind mis-routed?): {}".format(
                     SHOT_STEP, manifest.get(cp.STEP_PUBLISHES_KEY))
             )
         if step_entries[-1].get("status") != "complete":
-            fail("derniere entree step_publishes[{!r}] non 'complete' : {!r}".format(
+            fail("last step_publishes[{!r}] entry not 'complete': {!r}".format(
                 SHOT_STEP, step_entries[-1]))
-        # Le publish LOP ne doit PAS avoir ete alimente en mode step.
+        # The LOP publish must NOT have been fed in step mode.
         if manifest.get(cp.LOP_PUBLISHES_KEY):
-            fail("lop_publishes non vide apres un publish step : {!r}".format(
+            fail("lop_publishes not empty after a step publish: {!r}".format(
                 manifest.get(cp.LOP_PUBLISHES_KEY)))
 
-        # 3. shot_root.usda recompose par finalize (kind != 'lop' -> refresh_entity_root).
+        # 3. shot_root.usda recomposed by finalize (kind != 'lop' -> refresh_entity_root).
         shot_root = Path(project_source) / "shots" / SHOT_NAME / cp.SHOT_ROOT_NAME
         if not shot_root.is_file():
-            fail("shot_root.usda non recompose apres le publish step : {}".format(shot_root))
+            fail("shot_root.usda not recomposed after the step publish: {}".format(shot_root))
 
         print("[ok] status         : {}".format(status_after))
-        print("[ok] version publiee: {}".format(version_dir))
+        print("[ok] published ver. : {}".format(version_dir))
         print("[ok] step_publishes : {}".format(step_entries[-1]))
         print("[ok] shot_root.usda : {}".format(shot_root))
         print("[PASS] test_step_publish_shot")
@@ -364,9 +364,9 @@ def test_step_publish_shot():
 
 
 if __name__ == "__main__":
-    # Contrat de completude d'abord : rapide, pas de rendu Houdini reel, feedback immediat.
-    # Puis l'e2e complet avec le vrai HDA/rendu (mode lop, puis mode step). Fail-fast
-    # (cf. fail()) : si un test echoue, les suivants ne se lancent pas.
+    # Completeness contract first: fast, no real Houdini render, immediate feedback.
+    # Then the full e2e with the real HDA/render (lop mode, then step mode). Fail-fast
+    # (see fail()): if a test fails, the following ones don't run.
     test_finalize_rejects_missing_thumb()
     main()
     test_step_publish_shot()

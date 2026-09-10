@@ -1,16 +1,16 @@
 #!/usr/bin/env hython
-"""build_publish_hda.py - construit ylos::publish::0.2 (Lop) par code, hython uniquement.
+"""build_publish_hda.py - builds ylos::publish::0.2 (Lop) by code, hython only.
 
-Rejouable : detruit/reconstruit le noeud de build a chaque run, ecrase le .hdanc cible.
-La definition du HDA vit en git via CE script, pas comme un blob binaire d'edition GUI.
+Replayable: destroys/rebuilds the build node on each run, overwrites the target .hdanc.
+The HDA definition lives in git via THIS script, not as a binary blob of GUI editing.
 
-0.2 ajoute le mode step : le parametre `publish_kind` (menu 'lop' + steps de l'entite,
-lus du manifeste) selectionne le sous-arbre de publish. 'lop' = contrat historique
-(instantane complet, `asset_type` requis) ; un nom de step = publish deux-phases par step
-(kind=<step>, alimente la composition asset_root/shot_root). Pas de cohabitation 0.1 : le
-.hdanc est regenere entierement par ce script (cf. build()).
+0.2 adds the step mode: the `publish_kind` parameter (menu 'lop' + the entity's steps,
+read from the manifest) selects the publish subtree. 'lop' = historical contract
+(complete snapshot, `asset_type` required); a step name = two-phase per-step publish
+(kind=<step>, feeds the asset_root/shot_root composition). No 0.1 cohabitation: the
+.hdanc is regenerated entirely by this script (see build()).
 
-Usage :
+Usage:
     hython tools/houdini/build_publish_hda.py
 """
 
@@ -28,17 +28,17 @@ THUMB_RES = 512
 
 
 def _repo_root():
-    # os.path.realpath (jamais dirname(__file__) nu) : meme fix que le bug symlink Blender,
-    # applique ici au script de build lui-meme (pas seulement au module embarque du HDA).
+    # os.path.realpath (never bare dirname(__file__)): same fix as the Blender symlink bug,
+    # applied here to the build script itself (not just the HDA's embedded module).
     here = os.path.realpath(__file__)
     return os.path.dirname(os.path.dirname(os.path.dirname(here)))
 
 
 def _python_module_source():
     return '''\
-"""Callback ylos::publish. Importe create_project.py comme source de verite unique pour
-le locking/versioning/manifest - ne reimplemente jamais cette logique ici (cf. contrat
-pipeline Ylos)."""
+"""ylos::publish callback. Imports create_project.py as the single source of truth for
+locking/versioning/manifest - never reimplement this logic here (see the Ylos
+pipeline contract)."""
 
 import json
 import os
@@ -51,24 +51,24 @@ import hou
 
 
 def _log(msg):
-    # Instrumentation temporaire pour valider en session GUI reelle que le render du thumb
-    # bloque bien avant finalize (cf. bug staging_dir orphelin, timing async usdrender_rop).
-    # print(flush=True), pas le module logging : diagnostic ponctuel, visible sans config,
-    # dans le terminal qui a lance Houdini.
+    # Temporary instrumentation to validate in a real GUI session that the thumb render
+    # blocks before finalize (see orphan staging_dir bug, async usdrender_rop timing).
+    # print(flush=True), not the logging module: one-off diagnostic, visible without config,
+    # in the terminal that launched Houdini.
     print("[ylos.publish] {} {}".format(
         datetime.now().isoformat(timespec="milliseconds"), msg
     ), flush=True)
 
 
 def _repo_root(node):
-    # os.path.realpath sur le chemin de definition HDA (via l'API hou, pas __file__) :
-    # un module embarque n'a pas de __file__ fiable, et meme s'il en avait un, le meme
-    # fix symlink que Blender s'applique.
-    # otl_path = REPO/plugins/houdini/otls/ylos_publish.hdanc -> 4 dirname() pour REPO
-    # (1 pour le nom de fichier + 3 pour otls/houdini/plugins). Bug reel observe en GUI :
-    # avec 3 dirname() on atterrit sur REPO/plugins (pas de create_project.py dedans),
-    # ModuleNotFoundError. Masque en hython car le cwd du shell etait deja REPO (fallback
-    # d'import via sys.path[0]='' qui cachait le bug) - jamais fiable, corrige ici.
+    # os.path.realpath on the HDA definition path (via the hou API, not __file__):
+    # an embedded module has no reliable __file__, and even if it had one, the same
+    # symlink fix as Blender applies.
+    # otl_path = REPO/plugins/houdini/otls/ylos_publish.hdanc -> 4 dirname() for REPO
+    # (1 for the file name + 3 for otls/houdini/plugins). Real bug observed in GUI:
+    # with 3 dirname() we land on REPO/plugins (no create_project.py in it),
+    # ModuleNotFoundError. Masked in hython because the shell cwd was already REPO (import
+    # fallback via sys.path[0]='' that hid the bug) - never reliable, fixed here.
     otl_path = os.path.realpath(node.type().definition().libraryFilePath())
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(otl_path))))
 
@@ -82,13 +82,13 @@ def _cp(node):
 
 
 def kind_menu_items(node):
-    """Genere le menu 'publish_kind' : 'lop' (instantane complet, contrat historique) suivi
-    des steps de l'entite saisie, lus depuis son manifest.json via create_project (source de
-    verite unique - jamais de liste de steps codee en dur dans le HDA). Fallback statique
-    DEFAULT_SHOT_STEPS + DEFAULT_ASSET_STEPS (union ordonnee, doublons retires) si le manifeste
-    n'est pas lisible (entite pas encore saisie, projet introuvable, JSON casse...). Retourne
-    la liste plate [valeur, label, ...] attendue par item_generator_script (mode Replace)."""
-    cp = _cp(node)  # _repo_root derive de la definition installee : toujours resoluble
+    """Generates the 'publish_kind' menu: 'lop' (complete snapshot, historical contract) followed
+    by the entered entity's steps, read from its manifest.json via create_project (single source
+    of truth - never a hard-coded step list in the HDA). Static fallback
+    DEFAULT_SHOT_STEPS + DEFAULT_ASSET_STEPS (ordered union, duplicates removed) if the manifest
+    is not readable (entity not entered yet, project not found, broken JSON...). Returns
+    the flat list [value, label, ...] expected by item_generator_script (Replace mode)."""
+    cp = _cp(node)  # _repo_root derived from the installed definition: always resolvable
 
     steps = None
     try:
@@ -99,7 +99,7 @@ def kind_menu_items(node):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             steps = manifest.get("steps") or None
     except Exception:
-        steps = None  # entite pas encore saisie / manifeste illisible -> fallback statique
+        steps = None  # entity not entered yet / unreadable manifest -> static fallback
 
     if not steps:
         steps = []
@@ -107,7 +107,7 @@ def kind_menu_items(node):
             if s not in steps:
                 steps.append(s)
 
-    items = ["lop", "lop (instantane complet)"]
+    items = ["lop", "lop (complete snapshot)"]
     for s in steps:
         items.extend([s, s])
     return items
@@ -126,44 +126,44 @@ def publish(kwargs):
 
     try:
         if kind == "lop":
-            # Contrat historique : instantane complet hors taxonomie de steps. Le nom est
-            # (re)valide, 'asset_type' requis et confronte au manifeste par allocate.
+            # Historical contract: complete snapshot outside the step taxonomy. The name is
+            # (re)validated, 'asset_type' required and checked against the manifest by allocate.
             cp.validate_publish_asset_name(asset_name, asset_type)
             staging_dir, final_dir = cp.allocate_publish_version(
                 project_root, asset_name, asset_type, comment=comment
             )
         else:
-            # Mode step : publish deux-phases dans step_publishes[kind]. 'asset_type' est
-            # ignore (comme dans allocate_publish_version pour kind != 'lop') ; le nommage de
-            # l'entite est deja garanti a la creation (validate_entity_name), pas de
-            # revalidation ici.
+            # Step mode: two-phase publish in step_publishes[kind]. 'asset_type' is
+            # ignored (as in allocate_publish_version for kind != 'lop'); the entity's
+            # naming is already guaranteed at creation (validate_entity_name), no
+            # revalidation here.
             staging_dir, final_dir = cp.allocate_publish_version(
                 project_root, asset_name, comment=comment, kind=kind
             )
         version = cp.publish_version_from_dir(final_dir)
 
-        # layer_stem = versioned_name calcule par allocate_publish_version
-        # ('{asset}_{kind}_v{NNN}') : identique pour lop et pour un step. Nom demande au ROP
-        # (savepath), PAS garanti etre le nom reellement ecrit sur disque (licence Apprentice
-        # reecrit en '.usdnc') - finalize_publish_version resout le stem contre les extensions
-        # USD connues (PUBLISH_ARTIFACT_EXTENSIONS).
+        # layer_stem = versioned_name computed by allocate_publish_version
+        # ('{asset}_{kind}_v{NNN}'): identical for lop and for a step. Name requested to the ROP
+        # (savepath), NOT guaranteed to be the name actually written to disk (Apprentice license
+        # rewrites to '.usdnc') - finalize_publish_version resolves the stem against the known
+        # USD extensions (PUBLISH_ARTIFACT_EXTENSIONS).
         layer_stem = "{}_{}_v{:03d}".format(asset_name, kind, version)
         layer_path = os.path.join(str(staging_dir), layer_stem + ".usd")
         thumb_path = os.path.join(str(staging_dir), cp.LOP_THUMB_NAME)
 
-        # Configure Layer : marque le save path calcule depuis staging_dir. Le ROP USD
-        # exporte ensuite CE layer precisement (savestyle='separate', pas de flatten) :
-        # Houdini ne serialise que son propre layer authored, jamais geo.usd.
-        # Une instance de HDA verrouille interdit d'ecrire directement sur les parametres
-        # des noeuds internes (hou.PermissionError) : on passe par les parametres promus
-        # au niveau du noeud (_layer_savepath / _thumb_outputimage), relies aux noeuds
-        # internes par expression channel-reference posee au build (cf. build_publish_hda.py).
+        # Configure Layer: marks the save path computed from staging_dir. The USD ROP
+        # then exports THIS layer precisely (savestyle='separate', no flatten):
+        # Houdini only serializes its own authored layer, never geo.usd.
+        # A locked HDA instance forbids writing directly on the internal nodes'
+        # parameters (hou.PermissionError): we go through the node-level promoted
+        # parameters (_layer_savepath / _thumb_outputimage), linked to the internal
+        # nodes by a channel-reference expression set at build (see build_publish_hda.py).
         node.parm("_layer_savepath").set(layer_path)
         node.parm("_thumb_outputimage").set(thumb_path)
 
-        # savestyle='flattenimplicitlayers' ecrit aussi un layer racine jetable (subLayers
-        # -> notre fichier cible, deja autonome) : le confiner hors de staging_dir pour que
-        # finalize_publish_version() n'y voie que le vrai layer + le thumb.
+        # savestyle='flattenimplicitlayers' also writes a disposable root layer (subLayers
+        # -> our target file, already standalone): confine it outside staging_dir so
+        # finalize_publish_version() only sees the real layer + the thumb there.
         scratch_dir = tempfile.mkdtemp(prefix="ylos_publish_scratch_")
         try:
             node.parm("_publish_scratch_output").set(
@@ -191,7 +191,7 @@ def publish(kwargs):
 
         status_parm.set("OK - {} v{:03d} - {}".format(kind, version, result["final_dir"]))
     except Exception as exc:
-        status_parm.set("ERREUR: {}".format(exc))
+        status_parm.set("ERROR: {}".format(exc))
         raise
 '''
 
@@ -216,15 +216,15 @@ def _build_parm_template_group(cp):
 
     g.append(hou.StringParmTemplate("asset_name", "Asset Name", 1))
 
-    # Menu dynamique 'lop' + steps de l'entite saisie (lus du manifeste par kind_menu_items,
-    # source de verite unique). item_generator_script delegue au module embarque via
-    # hdaModule() : la liste de steps n'est jamais codee en dur dans la definition. Defaut
-    # 'lop' -> compat totale avec le contrat historique (un noeud fraichement cree publie en
-    # lop comme 0.1). Mode Replace : la valeur DOIT etre un des items generes.
-    # Le script de menu est evalue en mode 'eval' (UNE expression, pas un bloc) : ni 'return X'
-    # ni 'menu = X' ne sont valides (verifie empiriquement, SyntaxError sur les deux). On donne
-    # donc une expression nue qui produit la liste plate [token, label, ...] ; 'kwargs' (avec
-    # 'node') est fourni dans le namespace d'evaluation.
+    # Dynamic menu 'lop' + the entered entity's steps (read from the manifest by kind_menu_items,
+    # single source of truth). item_generator_script delegates to the embedded module via
+    # hdaModule(): the step list is never hard-coded in the definition. Default
+    # 'lop' -> full compat with the historical contract (a freshly created node publishes in
+    # lop like 0.1). Replace mode: the value MUST be one of the generated items.
+    # The menu script is evaluated in 'eval' mode (ONE expression, not a block): neither 'return X'
+    # nor 'menu = X' is valid (verified empirically, SyntaxError on both). So we give
+    # a bare expression that produces the flat list [token, label, ...]; 'kwargs' (with
+    # 'node') is provided in the evaluation namespace.
     g.append(hou.StringParmTemplate(
         "publish_kind", "Publish Kind", 1,
         default_value=("lop",),
@@ -242,10 +242,10 @@ def _build_parm_template_group(cp):
 
     g.append(hou.StringParmTemplate("version_comment", "Version Comment", 1))
 
-    # Parametres promus (plomberie) : les noeuds internes d'une instance de HDA verrouillee
-    # ne sont pas editables directement (hou.PermissionError). Ces deux parms au niveau du
-    # noeud sont relies aux noeuds internes par channel-reference (cf. build()) ; le callback
-    # ecrit ici, jamais sur configure_publish_layer/savepath ou thumb_rop/outputimage.
+    # Promoted parameters (plumbing): the internal nodes of a locked HDA instance
+    # are not directly editable (hou.PermissionError). These parms at the node
+    # level are linked to the internal nodes by channel-reference (see build()); the callback
+    # writes here, never on configure_publish_layer/savepath or thumb_rop/outputimage.
     for name, label in (
         ("_layer_savepath", "Layer Save Path (internal)"),
         ("_thumb_outputimage", "Thumb Output Image (internal)"),
@@ -278,9 +278,9 @@ def build():
     otl_path = os.path.join(repo_root, OTL_REL_PATH)
     os.makedirs(os.path.dirname(otl_path), exist_ok=True)
 
-    # Pas de cohabitation 0.1/0.2 : hda_def.save() sur une librairie existante AJOUTE la
-    # definition (les deux versions cohabiteraient dans le meme .hdanc, TAB menu ambigu). On
-    # repart d'un fichier neuf - le script est la source de verite, le blob est jetable.
+    # No 0.1/0.2 cohabitation: hda_def.save() on an existing library ADDS the
+    # definition (both versions would cohabit in the same .hdanc, ambiguous TAB menu). We
+    # start from a fresh file - the script is the source of truth, the blob is disposable.
     if os.path.exists(otl_path):
         os.remove(otl_path)
 
@@ -301,8 +301,8 @@ def build():
     output0 = subnet.node("output0")
     output0.setInput(0, cfg)
 
-    # Camera dediee au thumb, sur une branche separee (jamais mergee dans output0) :
-    # le layer publie ne doit JAMAIS contenir cette camera.
+    # Camera dedicated to the thumb, on a separate branch (never merged into output0):
+    # the published layer must NEVER contain this camera.
     cam = subnet.createNode("camera", "thumb_cam")
     cam.setInput(0, cfg)
     cam.parm("primpath").set(THUMB_CAM_PRIMPATH)
@@ -314,24 +314,24 @@ def build():
     cam.parm("lookatpositiony").set(0)
     cam.parm("lookatpositionz").set(0)
 
-    # ROPs "detaches" : lisent un LOP via loppath (chemin relatif), ne sont jamais wires
-    # dans le flux reseau principal. Declenches par le callback Python, pas par le cook.
+    # "Detached" ROPs: read a LOP via loppath (relative path), are never wired
+    # into the main network flow. Triggered by the Python callback, not by the cook.
     publish_rop = subnet.createNode("usd_rop", "publish_rop")
     publish_rop.parm("loppath").set(publish_rop.relativePathTo(cfg))
-    # 'flattenimplicitlayers' (PAS 'flattenstage'/'flattenalllayers') : collapse les
-    # sous-couches anonymes/en-memoire du reseau LOP amont (le sphere de test, les edits
-    # de Configure Layer...) dans le fichier unique vise par savepath, mais preserve intactes
-    # les references deja file-backees (ex: un geo.usd sublayer-e depuis un step precedent -
-    # jamais touche, jamais re-serialise). 'separate' echoue des qu'un noeud upstream produit
-    # un layer anonyme sans savepath explicite (verifie empiriquement : hou.OperationFailed
+    # 'flattenimplicitlayers' (NOT 'flattenstage'/'flattenalllayers'): collapses the
+    # anonymous/in-memory sub-layers of the upstream LOP network (the test sphere, the Configure
+    # Layer edits...) into the single file targeted by savepath, but preserves intact
+    # the already file-backed references (e.g. a geo.usd sublayered from a previous step -
+    # never touched, never re-serialized). 'separate' fails as soon as an upstream node produces
+    # an anonymous layer without an explicit savepath (verified empirically: hou.OperationFailed
     # "Layer saved to a location generated from a node path").
     publish_rop.parm("savestyle").set("flattenimplicitlayers")
-    # Sans ce toggle a 0, le ROP erreure des qu'un noeud amont produit un layer anonyme sans
-    # savepath explicite (verifie empiriquement), au lieu de le flattener silencieusement
-    # comme le nom du savestyle le promet. A 0 : un seul fichier ecrit, confirme par un
-    # `find` sur toute l'arborescence de test (cf. investigation build_publish_hda).
+    # Without this toggle at 0, the ROP errors as soon as an upstream node produces an anonymous
+    # layer without an explicit savepath (verified empirically), instead of flattening it silently
+    # as the savestyle name promises. At 0: a single file written, confirmed by a
+    # `find` over the whole test tree (see build_publish_hda investigation).
     publish_rop.parm("errorsavingimplicitpaths").set(0)
-    publish_rop.parm("trange").set(0)                # frame courante uniquement
+    publish_rop.parm("trange").set(0)                # current frame only
 
     thumb_rop = subnet.createNode("usdrender_rop", "thumb_rop")
     thumb_rop.parm("loppath").set(thumb_rop.relativePathTo(cam))
@@ -340,13 +340,13 @@ def build():
     thumb_rop.parm("override_res").set("specific")
     thumb_rop.parm("res_user1").set(THUMB_RES)
     thumb_rop.parm("res_user2").set(THUMB_RES)
-    # 'soho_foreground' ("Wait for Render to Complete", herite de l'heritage Mantra du node) :
-    # trouve par enumeration reelle de node.parms() via hython (Houdini 21.0.631), pas suppose
-    # depuis la doc. Sans lui, node.render() en session GUI rend la main des que husk est
-    # SOUMIS (pas termine) : le thumb.png arrive plusieurs secondes apres le publish, dans un
-    # staging_dir deja renomme/orphelin (bug reproductible en GUI uniquement, jamais en hython
-    # headless ou render() bloque naturellement). publish_rop (type usd_rop, pas usdrender_rop)
-    # n'a pas cet effet : c'est une serialisation de layer in-process, pas un husk separe.
+    # 'soho_foreground' ("Wait for Render to Complete", inherited from the node's Mantra legacy):
+    # found by actual enumeration of node.parms() via hython (Houdini 21.0.631), not assumed
+    # from the docs. Without it, node.render() in a GUI session returns as soon as husk is
+    # SUBMITTED (not finished): the thumb.png arrives several seconds after the publish, in a
+    # staging_dir already renamed/orphan (bug reproducible in GUI only, never in headless
+    # hython where render() blocks naturally). publish_rop (type usd_rop, not usdrender_rop)
+    # does not have this effect: it's an in-process layer serialization, not a separate husk.
     thumb_rop.parm("soho_foreground").set(1)
 
     subnet.layoutChildren()
@@ -364,35 +364,35 @@ def build():
     hda_def.setParmTemplateGroup(_build_parm_template_group(cp))
     hda_def.addSection("PythonModule", _python_module_source())
 
-    # Channel-reference : "../<parm>" resout, pour un noeud interne, vers le parametre du
-    # noeud qui le contient (l'instance de HDA elle-meme une fois promu). Pose APRES
-    # createDigitalAsset pour que ce soit bien le nom de parm promu qui existe deja.
+    # Channel-reference: "../<parm>" resolves, for an internal node, to the parameter of the
+    # node that contains it (the HDA instance itself once promoted). Set AFTER
+    # createDigitalAsset so that the promoted parm name already exists.
     hda_node.node("configure_publish_layer").parm("savepath").setExpression(
         'chs("../_layer_savepath")'
     )
     hda_node.node("thumb_rop").parm("outputimage").setExpression(
         'chs("../_thumb_outputimage")'
     )
-    # savestyle='flattenimplicitlayers' ecrit aussi un layer racine "de reliure" (subLayers
-    # -> notre fichier cible) sur lopoutput, en plus du fichier cible lui-meme (verifie
-    # empiriquement via pxr.Usd : le fichier cible est deja autonome, sans subLayers - ce
-    # layer racine est un artefact jetable, jamais utile en aval). Sans ce wiring il retombe
-    # sur le nommage $HIP par defaut et pollue le repo (verifie : plugins/../geo/untitled...).
-    # Redirige vers un repertoire scratch temporaire (jamais staging_dir : finalize_publish_
-    # version() ne doit voir QUE le vrai layer + le thumb dans staging_dir).
+    # savestyle='flattenimplicitlayers' also writes a "binding" root layer (subLayers
+    # -> our target file) on lopoutput, in addition to the target file itself (verified
+    # empirically via pxr.Usd: the target file is already standalone, without subLayers - this
+    # root layer is a disposable artifact, never useful downstream). Without this wiring it falls back
+    # on the default $HIP naming and pollutes the repo (verified: plugins/../geo/untitled...).
+    # Redirect to a temporary scratch directory (never staging_dir: finalize_publish_
+    # version() must see ONLY the real layer + the thumb in staging_dir).
     hda_node.node("publish_rop").parm("lopoutput").setExpression(
         'chs("../_publish_scratch_output")'
     )
-    # template_node=hda_node est OBLIGATOIRE : hda_def.save() sans template_node ne remonte
-    # PAS l'etat live du noeud dans la definition (verifie empiriquement - les deux
-    # setExpression() ci-dessus etaient sinon silencieusement perdus, rawValue() vide apres
-    # rechargement). Cf. doc hou.HDADefinition.save : "If None, this method does not update
+    # template_node=hda_node is MANDATORY: hda_def.save() without template_node does NOT
+    # push the node's live state into the definition (verified empirically - the two
+    # setExpression() above were otherwise silently lost, rawValue() empty after
+    # reload). See the hou.HDADefinition.save doc: "If None, this method does not update
     # the definition's contents."
     hda_def.save(otl_path, template_node=hda_node)
 
     hda_node.destroy()
 
-    print("[ok] HDA construit : {}".format(otl_path))
+    print("[ok] HDA built: {}".format(otl_path))
     return otl_path
 
 
