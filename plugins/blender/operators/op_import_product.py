@@ -11,11 +11,12 @@ import bpy
 import os
 import sys
 from bpy.props import StringProperty, IntProperty
-from ..core.asset import resolve_publish_entry, read_entity_manifest
+from ..core.asset import resolve_publish_entry
 from ..core.project import (
     resolve_parent_collection, get_or_create_collection, link_collection,
     set_active_collection,
 )
+from ..core import usd_convention
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -45,12 +46,17 @@ def import_artifact(abs_path: str) -> None:
     """Imports 'abs_path' into the ACTIVE collection (never a path resolved here - already
     provided by the caller via the orchestrator). Raises ValueError on an unknown extension:
     the caller turns it into an error report, never a silent crash nor a mainfile
-    opened by mistake on an unsupported artifact."""
+    opened by mistake on an unsupported artifact.
+
+    USD goes through core.usd_convention.import_kwargs(): our publishes are Y-up /
+    metersPerUnit stages (docs/usd-convention.md), and those kwargs are what brings them back
+    at their original Blender orientation and scale. Export and import must always be read
+    together, never tuned on one side only."""
     ext = os.path.splitext(abs_path)[1].lower()
     if ext in GLB_IMPORT_EXTS:
         bpy.ops.import_scene.gltf(filepath=abs_path)
     elif ext in USD_IMPORT_EXTS:
-        bpy.ops.wm.usd_import(filepath=abs_path)
+        bpy.ops.wm.usd_import(filepath=abs_path, **usd_convention.import_kwargs())
     else:
         raise ValueError(f"unsupported artifact extension for import: {ext!r}")
 
@@ -82,7 +88,17 @@ class YLOS_OT_ImportProduct(bpy.types.Operator):
             self.report({"ERROR"}, "Missing project/entity/step.")
             return {"CANCELLED"}
 
-        ctx_type = scene.ylos_context_type.lower()
+        # The imported entity's family comes from the ORCHESTRATOR, never from the scene's
+        # context enum. Cockpit bug this fixes: importing an asset while the scene context
+        # said SHOT read shots/<asset>/manifest.json (absent) -> asset_type silently fell
+        # back to PROP and the collection landed under the wrong parent. Called from the
+        # launcher - where the context enum is whatever the previous file left behind -
+        # that was the normal case, not the edge case.
+        resolved = _cp().resolve_entity(project_path, self.entity)
+        if resolved is None:
+            self.report({"ERROR"}, f"Entity '{self.entity}' not found under project.")
+            return {"CANCELLED"}
+        ctx_type = resolved["family"]
 
         col_name = import_state_collection_name(self.entity, self.step)
         if bpy.data.collections.get(col_name):
@@ -104,9 +120,10 @@ class YLOS_OT_ImportProduct(bpy.types.Operator):
 
         abs_path = entry["abs_path"]
 
-        manifest = read_entity_manifest(project_path, self.entity, ctx_type)
+        # Manifest already read by resolve_entity - no second disk read, and no family guess.
+        manifest = resolved.get("manifest") or {}
         asset_type = manifest.get("type", "PROP")
-        entity_ctx = manifest.get("entity_type", ctx_type).upper()
+        entity_ctx = (manifest.get("entity_type") or ctx_type).upper()
 
         parent, _label = resolve_parent_collection(asset_type, entity_ctx, scene)
         collection = get_or_create_collection(col_name)

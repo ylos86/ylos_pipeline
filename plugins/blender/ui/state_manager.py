@@ -8,7 +8,7 @@
 import bpy
 
 from ..operators.op_update_imports import (
-    tagged_import_collections, get_cached_update_results,
+    tagged_import_collections, get_cached_update_results, get_cached_downstream_impact,
 )
 
 
@@ -65,6 +65,48 @@ def _draw_export_states(layout, scene):
     pub.scale_y = 1.4
     pub.enabled = any(s.enabled for s in states)
     pub.operator("ylos.publish_states", text="Publish", icon="EXPORT")
+
+    _draw_downstream_impact(layout)
+
+
+def _draw_downstream_impact(layout):
+    """"Used in" of the LAST publish of this session: which entities consume what we just
+    republished and still pin an older version. Read from the cache filled by
+    op_publish.publish_entity_step (create_project.entity_dependencies) - draw() never walks
+    the dependency index itself, it is a full-project scan.
+
+    Answers the Prism question the plan asks for ("republishing an asset must surface every
+    shot that references an older version") without leaving Blender."""
+    impact = get_cached_downstream_impact()
+    outdated = impact.get("outdated") or []
+    if not impact.get("entity") or not outdated:
+        return
+
+    layout.separator(factor=0.4)
+    box = layout.box().column(align=True)
+    head = box.row(align=True)
+    head.alert = True
+    head.label(text=f"Outdated after {impact['entity']}", icon="ERROR")
+
+    # One line per CONSUMER (an entity can reference several steps of the same dependency;
+    # the actionable unit is the consumer, not the edge).
+    seen = {}
+    for edge in outdated:
+        consumer = edge.get("consumer") or {}
+        dependency = edge.get("dependency") or {}
+        name = consumer.get("entity")
+        if not name or name in seen:
+            continue
+        seen[name] = (dependency.get("version"), dependency.get("latest_version"))
+    for name in sorted(seen):
+        pinned, latest = seen[name]
+        row = box.row(align=True)
+        row.label(text=name, icon="OUTLINER_COLLECTION")
+        right = row.row()
+        right.alignment = "RIGHT"
+        pinned_txt = f"v{pinned:03d}" if isinstance(pinned, int) else "unpinned"
+        latest_txt = f"v{latest:03d}" if isinstance(latest, int) else "?"
+        right.label(text=f"{pinned_txt} -> {latest_txt}")
 
 
 def _draw_import_states(layout, context):

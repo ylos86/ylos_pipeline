@@ -9,10 +9,15 @@ import os
 import sys
 import bpy
 
-from ..core.asset import get_latest_wip_version, list_wip_versions
+from ..core.asset import (
+    get_latest_wip_version, list_scenefiles, get_entity_step_status,
+)
 from ..core import vocab
 from .state_manager import draw_state_manager
 from ..operators.op_scene_check import get_cached_results
+from ..operators.op_update_imports import (
+    count_available_updates, has_checked_updates, tagged_import_collections,
+)
 
 _SEVERITY_ICONS = {
     "ERROR":   "CANCEL",
@@ -52,6 +57,75 @@ def _step_folder(scene, sub):
 # and two steps could collide on their first 3 letters. The N-panel is narrow but
 # resizable - Blender truncates a too-long label cleanly, which a brain does not
 # do with "Loo".
+
+
+def _active_step_status(scene):
+    """{'status','explicit','derived'} of the active entity+step (schema 2.2), or None when
+    the step is not declared for that entity. Reads core.asset's TTL cache: draw() runs on
+    every redraw and must never walk a manifest itself."""
+    if not _has_asset(scene):
+        return None
+    status = get_entity_step_status(scene.ylos_project_path, scene.ylos_current_asset)
+    return status.get(scene.ylos_current_step)
+
+
+def _draw_step_status(layout, scene):
+    """Production status of the active entity+step + the three explicit actions
+    (Review / Approved / Auto). All three go through ylos.set_step_status ->
+    create_project.set_step_status, the single point that validates and persists.
+    A DERIVED status (empty/wip/published) is displayed but never written."""
+    entry = _active_step_status(scene)
+    box = layout.box().column(align=True)
+
+    head = box.row(align=True)
+    head.label(text="Status", icon="INFO")
+    value = head.row()
+    value.alignment = "RIGHT"
+    if entry is None:
+        # Not an error state to hide: a step outside the entity's declared steps cannot
+        # carry a status, and set_step_status would rightly refuse it.
+        value.label(text="step not declared", icon="ERROR")
+        return
+    value.label(text=vocab.status_label(entry["status"]),
+                icon=vocab.status_icon(entry["status"]))
+
+    if not entry["explicit"]:
+        note = box.row(align=True)
+        note.scale_y = 0.8
+        note.label(text="derived from disk")
+
+    actions = box.row(align=True)
+    for value_id, label, _desc in vocab.STEP_STATUS_ITEMS:
+        btn = actions.operator(
+            "ylos.set_step_status", text=label,
+            # 'auto' is depressed when nothing explicit is stored: it IS the current mode.
+            depress=(entry["status"] == value_id
+                     or (value_id == "auto" and not entry["explicit"])),
+        )
+        btn.status = value_id
+
+
+def _draw_updates_line(layout):
+    """Compact 'Updates available' line + the ylos.check_updates button. One row, always the
+    same place, so a stale import is visible without unfolding the State Manager. Never
+    claims "up to date" before a check actually ran (silence and freshness are not the
+    same thing)."""
+    imported = tagged_import_collections()
+    if not imported:
+        return
+    row = layout.row(align=True)
+    n = count_available_updates()
+    if not has_checked_updates():
+        row.label(text=f"{len(imported)} import(s) - not checked", icon="QUESTION")
+    elif n:
+        warn = row.row()
+        warn.alert = True
+        warn.label(text=f"{n} update(s) available", icon="ERROR")
+    else:
+        row.label(text=f"{len(imported)} import(s) up to date", icon="CHECKMARK")
+    right = row.row(align=True)
+    right.alignment = "RIGHT"
+    right.operator("ylos.check_updates", text="", icon="FILE_REFRESH")
 
 
 # ---------------------------------------------------------------------------
@@ -151,17 +225,38 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
     def poll(cls, context):
         return _has_asset(context.scene)
 
+    def draw_header(self, context):
+        """Status of the active step in the panel HEADER: readable while the section is
+        collapsed, and free (TTL cache, no disk touch). Cheap discoverability, no
+        restructuring of the section itself."""
+        entry = _active_step_status(context.scene)
+        if entry:
+            self.layout.label(text="", icon=vocab.status_icon(entry["status"]))
+
     def draw(self, context):
         layout = self.layout
         scene  = context.scene
+
+        # Production status of entity+step (schema 2.2) - first thing in the section:
+        # "where is this task" comes before "which file am I on".
+        _draw_step_status(layout, scene)
+        layout.separator(factor=0.4)
 
         latest_wip = get_latest_wip_version(
             scene.ylos_project_path, scene.ylos_current_asset,
             scene.ylos_current_step, scene.ylos_context_type.lower(),
         )
+        # Every DCC's scenefiles for this step (create_project.list_scenefiles): a Houdini
+        # .hip* WIP is COUNTED and shown here, but never openable from Blender.
+        scenefiles = list_scenefiles(
+            scene.ylos_project_path, scene.ylos_current_asset,
+            scene.ylos_current_step, scene.ylos_context_type.lower(),
+        )
+        blend_files = [s for s in scenefiles if s.get("dcc") == "blender"]
+        other_dccs = [s for s in scenefiles if s.get("dcc") != "blender"]
 
         header = layout.row(align=True)
-        header.label(text="WIP", icon="FILE_BLEND")
+        header.label(text=f"WIP  ({len(blend_files)})", icon="FILE_BLEND")
         ver = header.row()
         ver.alignment = "RIGHT"
         ver.label(text=f"v{latest_wip:03d}" if latest_wip else "none yet")
@@ -173,14 +268,21 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
         new_row.scale_y = 1.2 if not latest_wip else 1.0
         new_row.operator("ylos.create_scene", text="New Scene", icon="FILE_NEW")
 
-        if latest_wip:
-            versions = list_wip_versions(
-                scene.ylos_project_path, scene.ylos_current_asset,
-                scene.ylos_current_step, scene.ylos_context_type.lower(),
-            )
-            last_comment = versions[-1].get("comment") if versions else ""
+        if blend_files:
+            last_comment = blend_files[-1].get("comment")
             if last_comment:
                 layout.box().label(text=last_comment, icon="TEXT")
+
+        if other_dccs:
+            # Visible, explicitly NOT openable: hiding another DCC's work makes the step
+            # look empty when it is not; offering an Open button that fails is worse.
+            by_dcc = {}
+            for row in other_dccs:
+                by_dcc[row["dcc"]] = by_dcc.get(row["dcc"], 0) + 1
+            summary = ", ".join(f"{n} {dcc}" for dcc, n in sorted(by_dcc.items()))
+            info = layout.row(align=True)
+            info.scale_y = 0.9
+            info.label(text=f"{summary} WIP (open in its DCC)", icon="FILE_HIDDEN")
 
         layout.separator(factor=0.4)
         layout.use_property_split = True
@@ -208,6 +310,11 @@ class YLOS_PT_Scenefile(bpy.types.Panel):
                              icon="FOLDER_REDIRECT")
         op.folder_path = _step_folder(scene, "wip")
 
+        # Imported products: one compact line, always at the same place (the detail stays
+        # in the State Manager section).
+        layout.separator(factor=0.4)
+        _draw_updates_line(layout)
+
 
 # ---------------------------------------------------------------------------
 # Section: State Manager (Prism-style - single draw in ui/state_manager.py, also mounted
@@ -225,6 +332,21 @@ class YLOS_PT_StateManager(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         return _has_project(context.scene)
+
+    def draw_header(self, context):
+        """Counters in the header (in-memory only, no disk): how many export states are
+        stacked and how many imports are behind. Both are the reason to unfold the section."""
+        n_states = len(context.scene.ylos_export_states)
+        n_updates = count_available_updates()
+        parts = []
+        if n_states:
+            parts.append(f"{n_states} state{'s' if n_states > 1 else ''}")
+        if n_updates:
+            parts.append(f"{n_updates} update{'s' if n_updates > 1 else ''}")
+        if parts:
+            row = self.layout.row()
+            row.alert = bool(n_updates)
+            row.label(text="  ·  ".join(parts))
 
     def draw(self, context):
         draw_state_manager(self.layout, context)
@@ -248,6 +370,23 @@ class YLOS_PT_SceneCheck(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         return _has_asset(context.scene)
+
+    def draw_header(self, context):
+        """Error / warning counts of the last scan in the header (in-memory cache). The
+        section is DEFAULT_CLOSED: without this, a blocking error stays invisible."""
+        results = get_cached_results()
+        if not results:
+            return
+        err, warn = results["error_count"], results["warning_count"]
+        row = self.layout.row(align=True)
+        if err:
+            sub = row.row()
+            sub.alert = True
+            sub.label(text=str(err), icon="CANCEL")
+        if warn:
+            row.label(text=str(warn), icon="ERROR")
+        if not err and not warn:
+            row.label(text="", icon="CHECKMARK")
 
     def draw(self, context):
         layout = self.layout

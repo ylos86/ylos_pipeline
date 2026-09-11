@@ -45,6 +45,11 @@ def main():
         ("STEP_ITEMS[ASSET]", _values(vocab.STEP_ITEMS["ASSET"]), list(cp.DEFAULT_ASSET_STEPS)),
         ("STEP_ITEMS[SET]",   _values(vocab.STEP_ITEMS["SET"]),   list(cp.DEFAULT_SET_STEPS)),
         ("STEP_ITEMS[SHOT]",  _values(vocab.STEP_ITEMS["SHOT"]),  list(cp.DEFAULT_SHOT_STEPS)),
+        # Schema 2.2 step status: the SETTABLE domain only - the 'auto' sentinel plus the
+        # explicit statuses. empty/wip/published are derived by get_step_status and must
+        # never appear in a settable enum.
+        ("STEP_STATUS_ITEMS", _values(vocab.STEP_STATUS_ITEMS),
+         [cp.STEP_STATUS_AUTO] + list(cp.STEP_STATUS_EXPLICIT)),
     ]
     for name, got, expected in checks:
         if got != expected:

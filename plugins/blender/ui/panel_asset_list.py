@@ -17,9 +17,10 @@ cache already in place). Same rule as op_scene_check / op_io.
 
 import bpy
 
-from ..core.asset import list_project_entities, get_asset_step_status
+from ..core.asset import list_project_entities, get_entity_step_status
 from ..core.project import ASSET_STEPS, SHOT_STEPS, SET_STEPS
 from ..core import entity_thumbs
+from ..core import vocab
 
 _STEP_MAP = {
     "asset": ASSET_STEPS,
@@ -60,6 +61,15 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
     def poll(cls, context):
         s = context.scene
         return bool(s.ylos_project_path and s.ylos_project_name)
+
+    def draw_header(self, context):
+        """Entity count of the active family in the header (TTL cache, no extra disk hit):
+        tells whether the project is empty before the section is even unfolded."""
+        scene = context.scene
+        entities = list_project_entities(scene.ylos_project_path,
+                                         scene.ylos_context_type.lower())
+        if entities:
+            self.layout.label(text=str(len(entities)))
 
     def draw(self, context):
         layout = self.layout
@@ -133,24 +143,39 @@ class YLOS_PT_AssetListPanel(bpy.types.Panel):
                 kw["icon"] = _TYPE_ICONS.get(entity["type"], "OBJECT_DATA")
             row.operator("ylos.switch_asset_confirm", **kw).new_asset = name
 
-        # ── Active entity's steps, in full ─────────────────────────────────────────
+        # ── Active entity's steps, in full, each with its status marker ────────────
         if active and any(e["name"] == active for e in entities):
-            status = get_asset_step_status(scene.ylos_project_path, active, ctx_type)
+            # Schema 2.2 status per step (explicit review/approved from the manifest,
+            # otherwise empty/wip/published derived from disk) - TTL-cached read, single
+            # source create_project.get_step_status.
+            status = get_entity_step_status(scene.ylos_project_path, active)
+            # The entity's DECLARED steps win over the family default: an entity created
+            # with a subset of steps must not show departments it does not have.
+            declared = [s for s in steps if s in status] or steps
             layout.separator(factor=0.4)
             step_col = layout.column(align=True)
-            for step in steps:
-                published = status.get(step, False)
+            for step in declared:
+                entry = status.get(step) or {}
+                value = entry.get("status", "empty")
                 row = step_col.row(align=True)
                 row.scale_y = 1.05
                 btn = row.operator(
                     "ylos.switch_step_confirm",
-                    text=step.capitalize(),
-                    # Publish state read at a glance, without opening the web UI:
-                    # filled checkbox = at least one publish, empty box = nothing yet.
-                    icon="CHECKBOX_HLT" if published else "CHECKBOX_DEHLT",
+                    text=vocab.PRESENTATION["step"].get(step, (step.capitalize(),))[0],
+                    # Status read at a glance, without opening the web UI. Replaces the
+                    # published/not-published checkbox: 'review' and 'approved' are
+                    # production facts a checkbox could not express.
+                    icon=vocab.status_icon(value),
                     depress=(scene.ylos_current_step == step),
                 )
                 btn.new_step = step
+                # An EXPLICIT status is a human decision, not a disk state: marked as such
+                # so nobody reads "Approved" as "the exporter said so".
+                if entry.get("explicit"):
+                    tag = row.row()
+                    tag.alignment = "RIGHT"
+                    tag.scale_x = 0.55
+                    tag.label(text=vocab.status_label(value))
 
         layout.separator(factor=0.3)
 

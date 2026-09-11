@@ -3,7 +3,6 @@
 # Read-only helpers: path resolution, version detection, entity listing.
 # Creation logic removed — use create_project.py (source of truth).
 
-import json
 import os
 import sys
 import re
@@ -100,50 +99,49 @@ def _get_entity_root(project_path: str, entity_name: str, entity_type: str) -> P
 # Version detection
 # ---------------------------------------------------------------------------
 
-VERSION_PATTERN         = re.compile(r"_v(\d{3})\.blend$")
+# The WIP version regex and the sidecar reader used to live here (VERSION_PATTERN /
+# _read_wip_sidecar). Both are gone: create_project owns the scenefile scan
+# (_SCENEFILE_VER_RE + sidecar merge, every DCC at once) - see list_scenefiles below.
 VERSION_VARIANT_PATTERN = re.compile(r"_v(\d{3})(?:__([A-Za-z][A-Za-z0-9]*))?\.(?:usd[az]?)$")
 
 
-def _read_wip_sidecar(blend_path: Path) -> dict:
-    """Sidecar '<wip>.blend.json' (comment/user/date/blender_version, written by
-    ylos.save_wip) - {} if absent or unreadable, never an exception (same tolerant
-    convention as the rest of the module)."""
-    sidecar = blend_path.with_name(blend_path.name + ".json")
-    if not sidecar.is_file():
-        return {}
+def _fallback_date(path: str) -> str:
+    """Display date derived from the file's mtime ('Jun 15, 14:02'), used ONLY when the
+    Prism-style sidecar carries none. Presentation detail, deliberately not pushed into the
+    orchestrator (which returns the sidecar's raw ISO 'date')."""
     try:
-        return json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+        return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%b %d, %H:%M")
+    except OSError:
+        return ""
+
+
+def list_scenefiles(project_path: str, entity_name: str, step: str,
+                    entity_type: str = "asset") -> list:
+    """Thin adapter over create_project.list_scenefiles - EVERY DCC's versioned scenefiles
+    of one step, ascending version. Single logic: the wip/ scan, the version regex and the
+    sidecar merge all live in the orchestrator (SCENEFILE_EXTENSIONS). The local .blend-only
+    duplicate scan is gone - it also made a Houdini WIP of the same step invisible here.
+    'entity_type' is accepted for call-site compatibility but ignored: resolve_entity finds
+    the family by itself.
+
+    Row = the orchestrator's scenefile dict {version, filename, path, dcc, comment, user,
+    date, dcc_version, blender_version}, with 'date' filled from the mtime when the sidecar
+    has none (historical display shape of this module)."""
+    rows = _cp().list_scenefiles(project_path, entity_name, step).get(step, [])
+    for row in rows:
+        if not row.get("date"):
+            row["date"] = _fallback_date(row["path"])
+    return rows
 
 
 def list_wip_versions(project_path: str, entity_name: str, step: str,
                       entity_type: str = "asset") -> list:
-    root = _get_entity_root(project_path, entity_name, entity_type)
-    wip_dir = root / step / "wip"
-
-    if not wip_dir.exists():
-        return []
-
-    results = []
-    for f in sorted(wip_dir.iterdir()):
-        if f.suffix.lower() != ".blend":
-            continue
-        m = VERSION_PATTERN.search(f.name)
-        if m:
-            mtime = f.stat().st_mtime
-            date_str = datetime.fromtimestamp(mtime).strftime("%b %d, %H:%M")
-            sidecar = _read_wip_sidecar(f)
-            results.append({
-                "version":  int(m.group(1)),
-                "filename": f.name,
-                "path":     str(f),
-                "date":     date_str,
-                "comment":  sidecar.get("comment", ""),
-                "user":     sidecar.get("user", ""),
-            })
-
-    return sorted(results, key=lambda x: x["version"])
+    """Blender-OPENABLE WIP versions of a step = list_scenefiles filtered to dcc ==
+    'blender'. A Houdini .hip* WIP of the same step is listed by list_scenefiles (visible in
+    the panel, tagged with its DCC) but never here: Blender cannot open it, and an 'Open'
+    button that fails is worse than an entry marked non-openable."""
+    return [r for r in list_scenefiles(project_path, entity_name, step, entity_type)
+            if r.get("dcc") == "blender"]
 
 
 _USD_PUBLISH_EXTS = (".usd", ".usda", ".usdc", ".usdz", ".usdnc")
@@ -200,10 +198,17 @@ def resolve_wip_save_path(project_path: str, entity_name: str, step: str,
 
 def get_latest_wip_version(project_path: str, entity_name: str, step: str,
                            entity_type: str = "asset") -> int:
-    versions = list_wip_versions(project_path, entity_name, step, entity_type)
-    if not versions:
+    """Highest BLENDER WIP version of the step, or 0 - thin wrapper over
+    create_project._latest_wip(entity_dir, step, 'blender'), the single scan shared with
+    resolve_open_target and scene_starter_spec (so the next Save Version can never disagree
+    with the version the orchestrator would allocate). A Houdini .hip* WIP of the same step
+    does NOT bump this number: WIP numbering is per DCC."""
+    cp = _cp()
+    resolved = cp.resolve_entity(project_path, entity_name)
+    if resolved is None:
         return 0
-    return versions[-1]["version"]
+    _path, version = cp._latest_wip(resolved["dir"], step, "blender")
+    return version
 
 
 def get_latest_publish_version(project_path: str, entity_name: str, step: str,
@@ -218,17 +223,18 @@ def get_latest_publish_version(project_path: str, entity_name: str, step: str,
 
 
 def read_entity_manifest(project_path: str, entity_name: str, entity_type: str = "asset") -> dict:
-    """Raw entity manifest (type/entity_type/steps...) - {} if absent/unreadable,
-    never an exception (same tolerance as the rest of the module). Used to know the
-    real type (PROP/CHARACTER/...) of an import, see core.project.resolve_parent_collection."""
-    root = _get_entity_root(project_path, entity_name, entity_type)
-    manifest_path = root / "manifest.json"
-    if not manifest_path.is_file():
-        return {}
+    """Raw entity manifest (type/entity_type/steps...) - {} if absent/unreadable, never an
+    exception (same tolerance as the rest of the module).
+
+    Thin wrapper over create_project.resolve_entity, which finds the entity in WHATEVER
+    family it belongs to. 'entity_type' is accepted for call-site compatibility and ignored:
+    passing the scene's context enum here was a real bug (an asset imported while the
+    context said SHOT resolved to shots/<asset>/manifest.json, i.e. nothing)."""
     try:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        resolved = _cp().resolve_entity(project_path, entity_name)
+    except Exception:
         return {}
+    return (resolved or {}).get("manifest") or {}
 
 
 def resolve_publish_entry(project_path: str, entity_name: str, step: str, version: int = None,
@@ -257,52 +263,41 @@ _entity_cache = {}
 _CACHE_TTL = 4.0
 
 
+_TYPE_PRESENTATION = {
+    "PROP":        ("Prop",        "MESH_CUBE"),
+    "CHARACTER":   ("Character",   "ARMATURE_DATA"),
+    "ENVIRONMENT": ("Environment", "WORLD"),
+    "SHOT":        ("Shot",        "SEQUENCE"),
+    "SET":         ("Set",         "PACKAGE"),
+}
+
+
 def list_project_entities(project_path: str, entity_type: str = "asset") -> list:
+    """Thin adapter over create_project.list_entities(project_root, family) - the local
+    folder scan + manifest read is gone (it was a third copy of the same walk, and it
+    silently swallowed an unreadable manifest instead of flagging it).
+
+    Row = {name, type (sub-type), type_label, type_icon, path, steps, broken}. 'broken' is
+    the orchestrator's orphan reason (folder with no readable manifest.json) - surfaced,
+    never dropped. TTL cache kept: draw() is called on every UI redraw."""
     cache_key = project_path + ":" + entity_type
     cached = _entity_cache.get(cache_key)
     if cached and (_time.time() - cached["ts"]) < _CACHE_TTL:
         return cached["data"]
 
-    folder_map = {"asset": "assets", "shot": "shots", "set": "sets"}
-    base = Path(project_path) / folder_map.get(entity_type, "assets")
-
-    if not base.is_dir():
-        return []
-
     results = []
-    try:
-        for d in sorted(base.iterdir()):
-            if not d.is_dir():
-                continue
-            manifest_path = d / "manifest.json"
-            asset_type = "PROP"
-            if manifest_path.exists():
-                try:
-                    import json
-                    with open(manifest_path) as f:
-                        mf = json.load(f)
-                    asset_type = mf.get("type", "PROP").upper()
-                except Exception:
-                    pass
-
-            type_map = {
-                "PROP":        ("Prop",        "MESH_CUBE"),
-                "CHARACTER":   ("Character",   "ARMATURE_DATA"),
-                "ENVIRONMENT": ("Environment", "WORLD"),
-                "SHOT":        ("Shot",        "SEQUENCE"),
-                "SET":         ("Set",         "PACKAGE"),
-            }
-            label, icon = type_map.get(asset_type, ("Asset", "OBJECT_DATA"))
-
-            results.append({
-                "name":       d.name,
-                "type":       asset_type,
-                "type_label": label,
-                "type_icon":  icon,
-                "path":       str(d),
-            })
-    except Exception:
-        pass
+    for e in _cp().list_entities(project_path, entity_type):
+        asset_type = (e.get("entity_type") or "PROP").upper()
+        label, icon = _TYPE_PRESENTATION.get(asset_type, ("Asset", "OBJECT_DATA"))
+        results.append({
+            "name":       e["name"],
+            "type":       asset_type,
+            "type_label": label,
+            "type_icon":  icon,
+            "path":       e["dir"],
+            "steps":      e.get("steps") or [],
+            "broken":     e.get("broken"),
+        })
 
     _entity_cache[cache_key] = {"ts": _time.time(), "data": results}
     return results
@@ -316,13 +311,57 @@ def invalidate_entity_cache(project_path: str = None):
                 del _entity_cache[key]
     else:
         _entity_cache.clear()
+    invalidate_step_status_cache(project_path)
+
+
+# ---------------------------------------------------------------------------
+# Per-step status (schema 2.2) - read-only view of create_project.get_step_status
+# ---------------------------------------------------------------------------
+
+_status_cache = {}
+
+
+def get_entity_step_status(project_path: str, entity_name: str) -> dict:
+    """{step: {"status", "explicit", "derived"}} for every declared step - thin adapter over
+    create_project.get_step_status (single source: the EXPLICIT manifest value wins,
+    otherwise empty/wip/published is derived from disk).
+
+    TTL-cached like the entity list: a Blender panel draw() runs on every redraw and must
+    not walk the manifest each frame. Invalidated by invalidate_entity_cache() (called by
+    ylos.refresh_asset_list) and by ylos.set_step_status. Never raises: an unknown entity or
+    an unreadable project returns {}."""
+    cache_key = project_path + "::" + entity_name
+    cached = _status_cache.get(cache_key)
+    if cached and (_time.time() - cached["ts"]) < _CACHE_TTL:
+        return cached["data"]
+    try:
+        data = _cp().get_step_status(project_path, entity_name) or {}
+    except Exception:
+        data = {}
+    _status_cache[cache_key] = {"ts": _time.time(), "data": data}
+    return data
+
+
+def invalidate_step_status_cache(project_path: str = None):
+    global _status_cache
+    if project_path:
+        for key in list(_status_cache):
+            if key.startswith(project_path):
+                del _status_cache[key]
+    else:
+        _status_cache.clear()
 
 
 def get_asset_step_status(project_path: str, asset_name: str,
                           entity_type: str = "asset") -> dict:
+    """{step: is_published} - historical boolean shape kept for existing call-sites, now
+    read from get_entity_step_status (schema 2.2) instead of one latest_publish_artifact()
+    call per step. Deliberately built on the DERIVED status: an explicit 'review'/'approved'
+    is a production decision, not proof that an artifact exists on disk."""
     step_map = {"asset": ASSET_STEPS, "shot": SHOT_STEPS, "set": SET_STEPS}
     steps = step_map.get(entity_type, ASSET_STEPS)
+    status = get_entity_step_status(project_path, asset_name)
     return {
-        step: get_latest_publish_version(project_path, asset_name, step, entity_type) > 0
+        step: status.get(step, {}).get("derived") == "published"
         for step in steps
     }

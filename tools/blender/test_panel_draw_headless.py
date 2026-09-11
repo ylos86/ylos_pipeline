@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Headless Blender test: the sections of the unified N-panel (plugins/blender/ui/panel.py -
-Context/Scenefile/State Manager/Scene Check; State Manager via ui/state_manager.py) ACTUALLY
+Context/Assets/Scenefile/State Manager/Scene Check; State Manager via ui/state_manager.py)
+ACTUALLY
 run their draw() without an exception, on a project/entity fixture, in the empty states (nothing
 published/saved) AND populated (real WIP + publish). Blender '--background' has no window -> no real bpy.types.UILayout
 available: draw() is called with a FAKE layout (duck-type, accepts any call/attribute)
@@ -56,13 +57,18 @@ class _FakeLayout:
 def _draw(panel_cls, context):
     fake_self = types.SimpleNamespace(layout=_FakeLayout())
     panel_cls.draw(fake_self, context)
+    # draw_header() runs on EVERY redraw, collapsed section included - a crash there is as
+    # fatal as one in draw(), and invisible until the panel exists on screen.
+    header = getattr(panel_cls, "draw_header", None)
+    if header is not None:
+        header(types.SimpleNamespace(layout=_FakeLayout()), context)
 
 
 def main():
     import bpy
     import create_project as cp
     import blender as addon
-    from blender.ui import panel
+    from blender.ui import panel, panel_asset_list
     from blender.core import thumbnails
 
     work = tempfile.mkdtemp(prefix="ylos_panel_draw_test_")
@@ -114,6 +120,7 @@ def main():
         # --- State 3: active asset, nothing saved/published (branches 'none yet' / 'no publish') ---
         try:
             _draw(panel.YLOS_PT_Context, context)
+            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
             _draw(panel.YLOS_PT_Scenefile, context)
             _draw(panel.YLOS_PT_StateManager, context)  # subsumes Publish + Imports
             _draw(panel.YLOS_PT_SceneCheck, context)
@@ -142,6 +149,7 @@ def main():
         scene.ylos_export_states_index = 0
         try:
             _draw(panel.YLOS_PT_Context, context)
+            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
             _draw(panel.YLOS_PT_Scenefile, context)
             _draw(panel.YLOS_PT_StateManager, context)
             _draw(panel.YLOS_PT_SceneCheck, context)
@@ -170,9 +178,22 @@ def main():
 
         try:
             _draw(panel.YLOS_PT_StateManager, context)
+            _draw(panel.YLOS_PT_Scenefile, context)          # 'Updates available' line
+            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
         except Exception as e:
             _fail("YLOS_PT_StateManager.draw() raised (tagged import + update available branch)", e)
-        print("ok  YLOS_PT_StateManager.draw() : tagged import + update available without exception")
+        print("ok  draw() : tagged import + update available + downstream impact without exception")
+
+        # --- State 6: an EXPLICIT step status (schema 2.2) is displayed by both panels ---
+        res = bpy.ops.ylos.set_step_status('EXEC_DEFAULT', status="review")
+        if res != {"FINISHED"}:
+            _fail(f"ylos.set_step_status returned {res} (expected FINISHED)")
+        try:
+            _draw(panel.YLOS_PT_Scenefile, context)
+            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
+        except Exception as e:
+            _fail("draw() raised (state: explicit step status 'review')", e)
+        print("ok  draw() : explicit step status branch without exception")
 
         try:
             addon.unregister()

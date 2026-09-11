@@ -88,6 +88,20 @@ PRESENTATION = {
         "comp":      ("Comp",      ""),
         "layout":    ("Layout",    ""),
     },
+    # Schema 2.2 per-step status. Only the EXPLICIT values are settable (the others are
+    # DERIVED from disk by create_project.get_step_status and never written) - plus the
+    # 'auto' sentinel that CLEARS an explicit value and hands the step back to derivation.
+    "step_status": {
+        # Short labels on purpose: these are buttons in a narrow N-panel row. The
+        # explanation lives in the description (tooltip), not in the label.
+        "auto":      ("Auto",           "Clear the explicit status - hand the step back to "
+                                        "the status derived from disk"),
+        "review":    ("Review",         "Ready for review"),
+        "approved":  ("Approved",       "Reviewed and approved"),
+        "empty":     ("Empty",          "Nothing saved for this step yet"),
+        "wip":       ("WIP",            "At least one work-in-progress scenefile"),
+        "published": ("Published",      "At least one complete publish"),
+    },
 }
 
 
@@ -145,6 +159,36 @@ STEP_ITEMS_ALL = _items(
         _cp.DEFAULT_ASSET_STEPS, _cp.DEFAULT_SHOT_STEPS, _cp.DEFAULT_SET_STEPS
     ),
 )
+
+
+# Per-step status (schema 2.2). SETTABLE domain only: the explicit statuses of the
+# orchestrator (STEP_STATUS_EXPLICIT) plus the STEP_STATUS_AUTO sentinel that clears them.
+# 'auto' first so it is the default of ylos.set_step_status (clearing is the neutral act).
+# The derived statuses (empty/wip/published) are NEVER in this enum - they are read-only
+# outputs of get_step_status; only their LABELS live in PRESENTATION (panel display).
+STEP_STATUS_ITEMS = _items(
+    "step_status", (_cp.STEP_STATUS_AUTO,) + tuple(_cp.STEP_STATUS_EXPLICIT)
+)
+
+# Icon per status value - display only (a status must be readable at a glance in a narrow
+# N-panel, where the label itself is often truncated).
+STEP_STATUS_ICONS = {
+    "empty":     "CHECKBOX_DEHLT",
+    "wip":       "FILE_BLEND",
+    "published": "CHECKBOX_HLT",
+    "review":    "TIME",
+    "approved":  "CHECKMARK",
+}
+
+
+def status_label(value):
+    """Human label of a step status (any of STEP_STATUSES or the 'auto' sentinel)."""
+    return _present("step_status", value)[1]
+
+
+def status_icon(value):
+    """Blender icon id for a step status - 'DOT' for an unknown value (never raises)."""
+    return STEP_STATUS_ICONS.get(value, "DOT")
 
 
 def values(items):

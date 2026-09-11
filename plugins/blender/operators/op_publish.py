@@ -13,6 +13,9 @@ from ..core.scene_checker import get_asset_objects_for_publish
 from ..core.thumbnails import render_publish_thumbnail
 from ..core import thumbnails
 from ..core import entity_thumbs
+from ..core import asset as asset_core
+from ..core import usd_convention
+from .op_update_imports import tagged_import_collections, set_cached_downstream_impact
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
 
@@ -84,9 +87,12 @@ def _glb_export(filepath: str, context, objects: list) -> tuple:
         context.view_layer.objects.active = prev_active
 
 
-def _usd_export(filepath: str, context, objects: list) -> tuple:
-    """
-    Export USD to an exact filepath (staging_dir target, cf. execute()).
+def _usd_export(filepath: str, context, objects: list, entity: str, family: str) -> tuple:
+    """Export USD to an exact filepath (staging_dir target, cf. execute()) following
+    docs/usd-convention.md: upAxis = Y, metersPerUnit from the orchestrator, stage rooted at
+    /<Entity> (asset/set) or /ROOT (shot), defaultPrim set accordingly. The kwargs come from
+    core.usd_convention - the single translation of the convention into Blender's RNA, never
+    spelled out at a call-site (that is how half a project's layers end up Z-up).
     Returns (success, error_message).
     """
     scene = context.scene
@@ -94,20 +100,17 @@ def _usd_export(filepath: str, context, objects: list) -> tuple:
     prev_active   = context.view_layer.objects.active
 
     try:
+        kwargs = usd_convention.export_kwargs(
+            entity_name=entity, family=family, selected_only=bool(objects),
+        )
         if objects:
             for o in scene.objects:
                 o.select_set(False)
             for o in objects:
                 o.select_set(True)
             context.view_layer.objects.active = objects[0]
-            try:
-                bpy.ops.wm.usd_export(filepath=filepath, selected_objects_only=True)
-                return True, ""
-            except Exception as e:
-                return False, str(e)
-
         try:
-            bpy.ops.wm.usd_export(filepath=filepath)
+            bpy.ops.wm.usd_export(filepath=filepath, **kwargs)
             return True, ""
         except Exception as e:
             return False, str(e)
@@ -120,6 +123,47 @@ def _usd_export(filepath: str, context, objects: list) -> tuple:
         context.view_layer.objects.active = prev_active
 
 
+def scene_dependencies(entity: str) -> list:
+    """Dependencies (schema 2.2) of a publish made from THIS scene = the published products
+    the scene currently holds, read from the TAGGED import collections
+    (ylos_import_entity/step/version, written by ylos.import_product and kept in sync by
+    ylos.update_import). Shape expected by create_project.finalize_publish_version:
+    [{"entity", "step", "version"}].
+
+    The entity being published is filtered out: an asset re-importing its own product is a
+    working convenience, not a production dependency (and it would make every entity depend
+    on itself in the index). Deduplicated on (entity, step): only one import state may exist
+    per pair in a scene, but a stale duplicate must never double an edge."""
+    seen = {}
+    for col in tagged_import_collections():
+        dep_entity = col.get("ylos_import_entity")
+        dep_step = col.get("ylos_import_step")
+        if not dep_entity or not dep_step or dep_entity == entity:
+            continue
+        version = col.get("ylos_import_version")
+        seen[(str(dep_entity), str(dep_step))] = {
+            "entity": str(dep_entity),
+            "step": str(dep_step),
+            "version": int(version) if version else None,
+        }
+    return [seen[key] for key in sorted(seen)]
+
+
+def downstream_impact(cp, project_path: str, entity: str) -> list:
+    """Entities CONSUMING 'entity' that are now outdated (they pin a version older than the
+    latest complete publish) - read from create_project.entity_dependencies, the single
+    index (manifest 'dependencies' + USD ASCII layer scan). Returns the raw 'used_in' edges
+    filtered on dependency.outdated. Never raises: an index that cannot be read gives []
+    (a reporting nicety must not fail a publish that already committed)."""
+    try:
+        deps = cp.entity_dependencies(project_path, entity)
+    except Exception as e:                    # noqa: BLE001 - reporting must never fail
+        print(f"[Ylos publish] dependency index unavailable for {entity!r}: {e}")
+        return []
+    return [edge for edge in deps.get("used_in", [])
+            if edge.get("dependency", {}).get("outdated")]
+
+
 def publish_entity_step(context, project_path, entity, step, *,
                         allow_full_scene=False, comment="", load_after=False):
     """REUSABLE publish core: the simple button (ylos.publish, current step) AND the
@@ -127,14 +171,17 @@ def publish_entity_step(context, project_path, entity, step, *,
     logic, principle 5. The entity's family is resolved by create_project.resolve_entity
     (a state can target asset/set/shot, not only the current scene context). NEVER raises
     for a business case: returns a dict
-    {ok, version, message, path, method, warning}. Two-phase contract unchanged (allocate ->
-    USD/GLB export per target -> thumbnail required -> finalize)."""
+    {ok, version, message, path, method, warning, dependencies, outdated}. Two-phase contract
+    unchanged (allocate -> USD/GLB export per target -> thumbnail required -> finalize),
+    now recording the scene's tagged imports as schema-2.2 'dependencies' and reporting the
+    downstream entities the new version leaves outdated."""
     cp = _cp()
     scene = context.scene
 
     def _fail(msg, method="", warning=""):
         return {"ok": False, "version": 0, "message": msg, "path": "",
-                "method": method, "warning": warning}
+                "method": method, "warning": warning,
+                "dependencies": [], "outdated": []}
 
     if not project_path or not entity:
         return _fail("No active project or entity.")
@@ -163,8 +210,11 @@ def publish_entity_step(context, project_path, entity, step, *,
         print(f"[Ylos publish] shared datablock not renamed (object name kept): {s}")
 
     # Artifact format = orchestrator decision (pipeline target), never the DCC's.
+    # Offline target -> '.usdc': docs/usd-convention.md §2 bans a bare '.usd' (ambiguous,
+    # ASCII or crate depending on the writer) and pins geometry publishes to the binary
+    # crate. Composition roots stay '.usda' (written by the orchestrator, not here).
     target = cp.get_pipeline_target(project_path)
-    ext = ".glb" if target == "web" else ".usd"
+    ext = ".glb" if target == "web" else ".usdc"
 
     try:
         staging_dir, final_dir = cp.allocate_publish_version(
@@ -180,7 +230,7 @@ def publish_entity_step(context, project_path, entity, step, *,
     if target == "web":
         ok, err = _glb_export(art_path, context, objects)
     else:
-        ok, err = _usd_export(art_path, context, objects)
+        ok, err = _usd_export(art_path, context, objects, entity, ctx_type)
     if not ok:
         return _fail(f"{target} export failed: {err} (staging preserved: {staging_dir})",
                      method=method)
@@ -193,10 +243,16 @@ def publish_entity_step(context, project_path, entity, step, *,
         warning = (f"Thumbnail render failed ({cause}) - publish will be rejected "
                    f"(staging preserved: {staging_dir})")
 
+    # Schema 2.2: record WHAT this publish was built from (the scene's tagged imports).
+    # Source of truth for the dependency index that the USD ASCII scan cannot provide -
+    # a .usdc/.glb artifact is opaque to build_dependency_index.
+    dependencies = scene_dependencies(entity)
+
     try:
         info = cp.finalize_publish_version(
             project_path, entity, staging_dir, final_dir, version,
             expected_artifacts=[stem, "thumb.png"],
+            dependencies=dependencies,
         )
     except Exception as e:
         return _fail(str(e), method=method, warning=warning)
@@ -204,25 +260,44 @@ def publish_entity_step(context, project_path, entity, step, *,
     # The publish just wrote a thumb.png: the entity's thumbnail changes (and goes from
     # 'wip' to 'publish'). Without this purge, the panel would keep the old one until the TTL.
     entity_thumbs.invalidate(project_path)
+    # A publish moves the step from 'wip' to 'published' (derived status, schema 2.2).
+    asset_core.invalidate_step_status_cache(project_path)
+
+    # Who is now behind? Read the index AFTER the commit (the new version must be in the
+    # manifest for 'outdated' to mean anything) and cache it for the panel - same pattern as
+    # op_update_imports.get_cached_update_results: an explicit action computes, draw() reads.
+    outdated = downstream_impact(cp, project_path, entity)
+    set_cached_downstream_impact(entity, outdated)
 
     pub_path = os.path.join(info["final_dir"], stem + ext)
     message = (
         f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}] - "
         f"{n_renamed} datablocks renamed, {len(shared)} shared untouched (see console)"
     )
+    if dependencies:
+        message += f"  |  {len(dependencies)} dependency(ies) recorded"
+    if outdated:
+        names = sorted({e["consumer"]["entity"] for e in outdated})
+        detail = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+        outdated_note = f"{len(names)} downstream entity(ies) now outdated: {detail}"
+        warning = (warning + " | " if warning else "") + outdated_note
+        print(f"[Ylos publish] {outdated_note}")
 
     if load_after:
         try:
             if ext == ".glb":
                 bpy.ops.import_scene.gltf(filepath=pub_path)
             else:
-                bpy.ops.wm.usd_import(filepath=pub_path)
+                # Same convention module as the export: the stage comes back at its original
+                # Blender orientation and scale (Y-up xform re-absorbed, metersPerUnit applied).
+                bpy.ops.wm.usd_import(filepath=pub_path, **usd_convention.import_kwargs())
             message += f"  |  Loaded: {os.path.basename(pub_path)}"
         except Exception as e:
             warning = (warning + " | " if warning else "") + f"import failed: {e}"
 
     return {"ok": True, "version": info["version"], "message": message,
-            "path": pub_path, "method": method, "warning": warning}
+            "path": pub_path, "method": method, "warning": warning,
+            "dependencies": dependencies, "outdated": outdated}
 
 
 class YLOS_OT_Publish(bpy.types.Operator):
@@ -254,7 +329,7 @@ class YLOS_OT_Publish(bpy.types.Operator):
 
     _next_ver: int = 1        # display-only, computed in invoke
     _target: str = "offline"  # display-only: pipeline target (web|offline), computed in invoke
-    _ext: str = ".usd"        # display-only: artifact extension derived from the target
+    _ext: str = ".usdc"       # display-only: artifact extension derived from the target
 
     def invoke(self, context, event):
         scene = context.scene
@@ -272,7 +347,7 @@ class YLOS_OT_Publish(bpy.types.Operator):
         self._next_ver = latest + 1
         # Format = orchestrator decision (pipeline target), not the DCC's: the dialog shows it.
         self._target = _cp().get_pipeline_target(scene.ylos_project_path)
-        self._ext = ".glb" if self._target == "web" else ".usd"
+        self._ext = ".glb" if self._target == "web" else ".usdc"
         return context.window_manager.invoke_props_dialog(self, width=380)
 
     def draw(self, context):

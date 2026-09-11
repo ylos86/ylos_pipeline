@@ -1202,3 +1202,166 @@ Régénérer le HDA (`hython tools/houdini/build_publish_hda.py` — le `.hdanc`
 PythonModule, il n'y a pas d'autre moyen), puis : ouvrir le panel, faire un *New Scene*
 sur un step de shot et sur un step d'asset, un *Save Version* avec commentaire, et un
 publish → vérifier la clé `dependencies` dans le manifeste.
+
+## Parité Prism — Blender
+
+*2026-09-10 — addon `plugins/blender` v0.3.2 → **v0.4.0**, Blender 5.2.0 LTS (Python 3.13).*
+
+### 0. Diagnostic : la traceback au quit, enfin à la racine
+
+Tous les scripts headless passaient (`rc=0`, `PASS`) mais **chaque** run se terminait par :
+
+```
+RuntimeError: unregister_class(...): missing bl_rna attribute from '_RNAMeta' instance
+Exception in module unregister(): .../scripts/addons/ylos_pipeline/__init__.py
+```
+
+Trois sondes lancées dans Blender réel ont tranché (`probe_unreg.py`, `probe_usd.py`,
+`probe_usd2.py`), au lieu de raisonner sur le code :
+
+1. **Le même fichier vit sous deux identités d'import.** `ylos_pipeline` (le lien
+   symbolique dans `scripts/addons`, activé dans les préférences — donc présent dès le
+   démarrage de Blender, `--factory-startup` mis à part) et `blender` / `plugins.blender`
+   (le chemin du repo, ce qu'importent les `test_*_headless.py`).
+2. Chaque identité construit ses **propres objets de classe** partageant les mêmes
+   `bl_idname`. Enregistrer la seconde faisait **désenregistrer la première
+   implicitement** — les 40 lignes `Info: ... has been registered before, unregistering
+   previous` étaient la trace visible du problème, pas du bruit. Les classes de la première
+   passaient silencieusement à `is_registered == False`, **sans que son tuple `_classes`
+   le sache**.
+3. Au quit, Blender désactive l'addon des préférences → son `unregister()` parcourt ses
+   propres classes devenues fantômes → `unregister_class` lève.
+
+La sonde a aussi établi deux faits d'API **contre-intuitifs et opposés**, qui expliquent
+pourquoi seul `unregister_class` explosait : `bpy.utils.unregister_class()` sur une classe
+non enregistrée **lève** (elle ne no-op pas), alors que
+`VIEW3D_HT_header.remove(<fonction absente>)` **ne lève pas**.
+
+**Correctif (`__init__.py`)** — deux défenses complémentaires, les deux nécessaires :
+
+- **État explicite** : `_registered_classes` / `_ui_hooks_installed` /
+  `_properties_installed`. `unregister()` ne défait que ce que **cette** identité a posé, et
+  chaque `unregister_class` est gardé par `cls.is_registered`. `register()` et
+  `unregister()` sont **idempotents** et ne lèvent plus jamais.
+- **Libération des jumelles** : `register()` demande d'abord à toute autre identité vivante
+  du même fichier (repérée par `os.path.realpath(__file__)` + marqueur `_YLOS_ADDON_MODULE`)
+  de se désenregistrer proprement, au lieu de laisser Blender lui voler ses classes. Effet
+  de bord appréciable : la console est nette, les 40 lignes `Info` ont disparu.
+
+Couvert par `tools/blender/test_addon_registration_headless.py`, qui rejoue exactement le
+scénario du quit (register repo → `sys.modules["ylos_pipeline"].unregister()`), plus la
+double identité repo↔repo, et l'idempotence des deux sens.
+
+### 1. Statut par step (schéma 2.2)
+
+- `core/vocab.py` : `STEP_STATUS_ITEMS`, tuple **module-level** (piège GC bpy) construit
+  depuis `STEP_STATUS_AUTO + STEP_STATUS_EXPLICIT`. Le domaine **settable** ne contient
+  jamais `empty`/`wip`/`published` : ceux-là sont dérivés du disque, jamais écrits.
+  `status_label()` / `status_icon()` pour la présentation.
+- Nouvel opérateur `ylos.set_step_status` (`entity`, `step`, `status` — vides = contexte de
+  scène) → `create_project.set_step_status`, point d'écriture unique. Une erreur métier
+  (step non déclaré) remonte **le message de l'orchestrateur**, identique au web et à la CLI.
+- Section **Scenefile** : statut du step actif + les trois boutons Review / Approved / Auto,
+  avec la mention « derived from disk » quand rien d'explicite n'est posé.
+- Section **Assets** : un marqueur d'icône par step (remplace la case à cocher
+  publié/pas-publié — « Review » et « Approved » sont des faits de production qu'une case ne
+  savait pas dire), et le libellé du statut quand il est explicite.
+- Lecture via un cache TTL (`core/asset.get_entity_step_status`) : un `draw()` tourne à
+  chaque redraw et ne doit pas relire un manifeste. Purgé par l'opérateur **et** par le
+  publish — sans ça le panneau afficherait l'ancienne valeur pendant tout le TTL.
+
+### 2. Dépendances enregistrées au publish
+
+`op_publish.publish_entity_step` passe désormais `dependencies=[{entity, step, version}]` à
+`finalize_publish_version`, construit depuis les collections taguées
+`ylos_import_entity/step/version`. L'entité publiée est filtrée (un asset qui réimporte son
+propre produit est un confort de travail, pas une dépendance de prod).
+
+**Pourquoi c'est indispensable côté Blender** : l'artefact publié est un `.usdc` ou un
+`.glb` — **opaque** au scan de layers USD ASCII de `build_dependency_index()`. Sans
+l'enregistrement manifeste, « quel shot utilise cet asset » est purement aveugle pour tout ce
+que Blender produit.
+
+Juste après le commit, l'addon lit `entity_dependencies(...)["used_in"]` filtré sur
+`dependency.outdated`, le remonte dans le rapport de l'opérateur et le **met en cache** pour
+le panneau (`op_update_imports.set/get_cached_downstream_impact`, même motif que
+`get_cached_update_results`). La section State Manager affiche
+« Outdated after \<entité\> » avec, par consommateur, `v001 -> v002`.
+
+### 3. Scenefiles par l'orchestrateur
+
+`core/asset.py` avait son **propre** scan de `wip/` (regex `.blend` + lecteur de sidecar) :
+une troisième copie après `create_project` et `ylos_houdini`, et surtout un WIP Houdini du
+même step **invisible** depuis Blender — un step sur lequel quelqu'un travaille avait l'air
+vide. Sont devenus des adaptateurs minces :
+
+- `list_scenefiles()` → `create_project.list_scenefiles` (tous DCC, forme de ligne conservée,
+  `date` complétée depuis le mtime quand le sidecar n'en porte pas) ;
+- `list_wip_versions()` = le filtre `dcc == "blender"` : un `.hip*` est **visible mais jamais
+  proposé à l'ouverture** (un bouton Open qui échoue est pire qu'une entrée marquée
+  non-ouvrable) ;
+- `get_latest_wip_version()` → `_latest_wip(..., "blender")`, **le même scan que celui qui
+  alloue** la prochaine version — Save Version ne peut plus être en désaccord avec lui ;
+- `list_project_entities()` → `list_entities()`, qui **signale** un dossier orphelin au lieu
+  de le lister comme un PROP ordinaire ;
+- `read_entity_manifest()` → `resolve_entity()`.
+- Supprimés : `VERSION_PATTERN`, `_read_wip_sidecar`, le scan de dossiers, l'`import json`
+  devenu mort.
+
+### 4. Système USD (axe / unités / prim racine)
+
+Sondé en réel sur 5.2 avant d'écrire quoi que ce soit :
+`convert_orientation=True` + up `Y` + forward `NEGATIVE_Z` écrit bien `upAxis = "Y"` et
+**cuit la conversion en `xformOp:rotateXYZ = (-90, 0, 0)` sur le prim racine** (les points du
+mesh restent en espace Blender) ; `root_prim_path="/X"` pose `defaultPrim = "X"` ;
+`convert_scene_units="METERS"` donne `metersPerUnit = 1`. À l'import, les **défauts**
+`merge_parent_xform` / `apply_unit_conversion_scale` réabsorbent tout : la bbox monde revient
+identique.
+
+Nouveau `core/usd_convention.py` — **seule** traduction de `docs/usd-convention.md` en kwargs
+Blender, consommée par `op_publish` (publish) **et** `op_io` (export/import brut) :
+
+- prim racine `/<Entité>` pour asset/set, `/ROOT` (`USD_ROOT_PRIM`) pour un shot — sinon les
+  layers de step d'un shot ne s'empileraient pas sur le `/ROOT` de son `shot_root.usda` ;
+- valeurs prises dans `create_project` (`USD_UP_AXIS`, `USD_METERS_PER_UNIT`), jamais
+  redéclarées ici ;
+- **kwargs filtrés contre la RNA** du Blender qui tourne (`supported_kwargs`) : un argument
+  absent d'un build 4.2 est ignoré avec une note console, pas un `TypeError` en plein publish.
+
+**Changement d'extension** : cible `offline` → `.usdc` et non plus `.usd`. La convention
+bannit le `.usd` nu (ambigu ASCII/crate) ; les racines de composition restent en `.usda`
+(écrites par l'orchestrateur). Aucun test stdlib n'en dépendait.
+
+### 5. Cockpit + densité
+
+- **Bug réel corrigé** : `ylos.import_product` déduisait la famille de l'entité depuis
+  `scene.ylos_context_type`. Importer un asset alors que le contexte disait SHOT lisait
+  `shots/<asset>/manifest.json` (absent) → `asset_type` retombait sur PROP et la collection
+  atterrissait sous le mauvais parent. Depuis le launcher, où le contexte est celui que le
+  fichier précédent a laissé, c'était le **cas normal**, pas le cas limite. La famille vient
+  maintenant de `resolve_entity`. Même mensonge retiré de `ylos.update_import`.
+- Ligne compacte **« Updates available »** + bouton Check dans Scenefile, qui distingue
+  « rien de périmé » de « personne n'a encore regardé » (deux choses différentes).
+- Densité (léger, sans restructuration) : compteurs en **en-tête de section** — statut du
+  step, nombre d'entités, states + updates, erreurs/warnings du Scene Check (section repliée
+  par défaut : sans ça une erreur bloquante restait invisible). Tous lus en mémoire ou en
+  cache TTL, zéro accès disque supplémentaire par redraw.
+- Garde CLAUDE.md tenue : `grep -rn "items=\[" plugins/blender` ne remonte toujours que les
+  deux enums d'UI pure (`ylos_preview_size`, `direction`).
+
+### 6. Vérification
+
+Batterie **complète** (20 scripts, `tools/blender/test_*.py`, `test_launch_context.py`
+inclus sous `python3`) : **20/20 `rc=0` + ligne `PASS`**, et surtout **plus aucune**
+occurrence de `missing bl_rna` ni de `Exception in module unregister()` — aucune traceback
+nulle part. Stdlib : `test_create_project` + `test_step_status` + `test_dependency_index` =
+103 tests OK ; suite complète `discover -s tests` = **338 tests OK** (vérifiée deux fois).
+
+Cinq scripts headless ajoutés : `test_addon_registration_headless`,
+`test_step_status_headless`, `test_publish_dependencies_headless`,
+`test_scenefiles_headless`, `test_usd_convention_headless` ;
+`test_panel_draw_headless` étendu (panneau Assets, `draw_header()`, branches statut
+explicite et impact aval) et `test_vocab_sync` étendu (`STEP_STATUS_ITEMS`).
+
+**Aucune fonction ajoutée à `create_project.py`** : l'API 2.2 livrée ce matin suffisait telle
+quelle.

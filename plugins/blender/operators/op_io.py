@@ -12,6 +12,7 @@ import bpy
 from bpy.props import StringProperty, EnumProperty
 
 from ..core.asset import list_project_entities
+from ..core import usd_convention
 
 import os
 import sys
@@ -142,6 +143,19 @@ def _resolve_op(group, name):
     return getattr(grp, name, None) if grp is not None else None
 
 
+def _convention_kwargs(fmt, direction):
+    """USD is the pipeline's exchange format: even a RAW import/export follows
+    docs/usd-convention.md (Y-up, metersPerUnit) - via core.usd_convention, the single
+    translation of the convention into Blender's RNA. No root_prim_path is forced here: a
+    raw export is not a pipeline publish, it must not be re-rooted under an entity name.
+    Any other format gets {}."""
+    if fmt != "USD":
+        return {}
+    if direction == "export":
+        return usd_convention.export_kwargs()
+    return usd_convention.import_kwargs()
+
+
 class YLOS_OT_RawImport(bpy.types.Operator):
     bl_idname = "ylos.raw_import"
     bl_label = "Import File"
@@ -157,11 +171,12 @@ class YLOS_OT_RawImport(bpy.types.Operator):
         if op is None:
             self.report({"ERROR"}, f"{self.fmt} importer unavailable.")
             return {"CANCELLED"}
+        extra = _convention_kwargs(self.fmt, "import")
         try:
             if self.filepath:
-                result = op('EXEC_DEFAULT', filepath=self.filepath)
+                result = op('EXEC_DEFAULT', filepath=self.filepath, **extra)
                 return {"FINISHED"} if "FINISHED" in result else {"CANCELLED"}
-            op('INVOKE_DEFAULT')  # the native file browser opens (independent modal)
+            op('INVOKE_DEFAULT', **extra)  # native file browser opens (independent modal)
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, f"{self.fmt} import failed: {e}")
@@ -183,11 +198,12 @@ class YLOS_OT_RawExport(bpy.types.Operator):
         if op is None:
             self.report({"ERROR"}, f"{self.fmt} exporter unavailable.")
             return {"CANCELLED"}
+        kwargs = dict(kwargs, **_convention_kwargs(self.fmt, "export"))
         try:
             if self.filepath:
                 result = op('EXEC_DEFAULT', filepath=self.filepath, **kwargs)
                 return {"FINISHED"} if "FINISHED" in result else {"CANCELLED"}
-            op('INVOKE_DEFAULT', **kwargs)  # the native file browser opens (independent modal)
+            op('INVOKE_DEFAULT', **kwargs)  # native file browser opens (independent modal)
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, f"{self.fmt} export failed: {e}")

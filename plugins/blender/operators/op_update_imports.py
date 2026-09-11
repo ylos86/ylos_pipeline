@@ -30,6 +30,39 @@ def get_cached_update_results() -> dict:
     return _update_cache
 
 
+def count_available_updates() -> int:
+    """Number of imports with an update available in the last ylos.check_updates run - feeds
+    the compact 'Updates available' line of the panel."""
+    return sum(1 for r in _update_cache.values() if r.get("has_update"))
+
+
+def has_checked_updates() -> bool:
+    """True once ylos.check_updates has run in this session. Distinguishes 'nothing is
+    outdated' from 'nobody has looked yet' - two very different things to display."""
+    return bool(_update_cache)
+
+
+# Downstream impact of the LAST publish: which entities consume what we just republished
+# and now pin an older version. Same cache pattern as above (an explicit action computes,
+# draw() reads): the dependency index walks every manifest of the project - far too
+# expensive for a UI redraw.
+_downstream_cache = {"entity": "", "outdated": []}
+
+
+def set_cached_downstream_impact(entity: str, outdated: list) -> None:
+    """Record the outdated 'used_in' edges (create_project.entity_dependencies) left by the
+    publish of 'entity'. Called by op_publish.publish_entity_step right after finalize."""
+    global _downstream_cache
+    _downstream_cache = {"entity": entity, "outdated": list(outdated or [])}
+
+
+def get_cached_downstream_impact() -> dict:
+    """{'entity': str, 'outdated': [edge, ...]} - empty entity until a publish ran in this
+    session. Edge shape = create_project.entity_dependencies (consumer / dependency /
+    source / file)."""
+    return _downstream_cache
+
+
 def tagged_import_collections() -> list:
     return [c for c in bpy.data.collections if "ylos_import_entity" in c]
 
@@ -92,6 +125,11 @@ class YLOS_OT_UpdateImport(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         project_path = scene.ylos_project_path
+        # Explicit guard: called from the launcher/cockpit the scene context can still be
+        # empty, and "No publish found" would blame the entity for a missing project.
+        if not project_path:
+            self.report({"ERROR"}, "No active project.")
+            return {"CANCELLED"}
         collection = bpy.data.collections.get(self.collection_name)
         if collection is None or "ylos_import_entity" not in collection:
             self.report({"ERROR"}, f"'{self.collection_name}' is not a tagged import.")
@@ -102,9 +140,10 @@ class YLOS_OT_UpdateImport(bpy.types.Operator):
         old_version = collection["ylos_import_version"]
         n_before    = len(collection.objects)
 
-        entry = resolve_publish_entry(
-            project_path, entity, step, None, scene.ylos_context_type.lower(),
-        )
+        # No scene context enum here: resolve_publish_entry finds the entity in whatever
+        # family it lives in (create_project.resolve_entity). Feeding it the scene's
+        # context_type was a lie waiting to bite when updating an asset from a shot scene.
+        entry = resolve_publish_entry(project_path, entity, step, None)
         if not entry or not entry.get("abs_path"):
             self.report({"ERROR"}, f"No publish found for {entity}/{step}.")
             return {"CANCELLED"}
