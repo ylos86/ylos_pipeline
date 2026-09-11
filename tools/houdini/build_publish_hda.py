@@ -81,6 +81,47 @@ def _cp(node):
     return create_project
 
 
+def _yh(node):
+    """The Houdini bridge (plugins/houdini/python/ylos_houdini.py), for the pure
+    dependency-collection functions (stage_layer_paths / dependencies_from_paths). Resolved
+    from the INSTALLED definition like _cp(), never from PYTHONPATH: the HDA must work in a
+    session where the ylos.json package was not loaded."""
+    path = os.path.join(_repo_root(node), "plugins", "houdini", "python")
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    import ylos_houdini
+    return ylos_houdini
+
+
+def _collect_dependencies(node, project_root, asset_name):
+    """[{"entity", "step", "version"}] - the published products the stage being published
+    was composed from, read from the INPUT stage's layer stack (schema 2.2 'dependencies',
+    consumed by create_project.build_dependency_index).
+
+    Why the input and not node.stage(): the HDA's own branch adds the thumb camera and the
+    Configure Layer edits; only what enters the node is the artist's composition.
+
+    Why the manifest source matters here: the USD-layer scan of build_dependency_index only
+    reads ASCII layers, and an Apprentice publish is '.usdnc' (encrypted) - unreadable. For
+    Houdini publishes, this recorded list is the ONLY reliable dependency source
+    (see CLAUDE.md, 'Dependances').
+
+    Best-effort by design: a stage that refuses introspection returns None (key not
+    written) and the publish proceeds - dependency metadata must never block a valid
+    publish. Never raises."""
+    try:
+        inputs = node.inputs()
+        stage = inputs[0].stage() if inputs and inputs[0] is not None else None
+        if stage is None:
+            return None
+        yh = _yh(node)
+        paths = yh.stage_layer_paths(stage)
+        return yh.dependencies_from_paths(paths, project_root, exclude_entity=asset_name)
+    except Exception as exc:
+        _log("dependencies: not collected ({}: {})".format(type(exc).__name__, exc))
+        return None
+
+
 def kind_menu_items(node):
     """Generates the 'publish_kind' menu: 'lop' (complete snapshot, historical contract) followed
     by the entered entity's steps, read from its manifest.json via create_project (single source
@@ -182,11 +223,17 @@ def publish(kwargs):
         finally:
             shutil.rmtree(scratch_dir, ignore_errors=True)
 
+        # Schema 2.2: record WHAT this publish was built from, read from the input stage's
+        # layer stack (see _collect_dependencies). Collected AFTER the renders (the stage is
+        # cooked and stable) and BEFORE finalize, which is the only writer of the manifest.
+        dependencies = _collect_dependencies(node, project_root, asset_name)
+        _log("dependencies: {}".format(dependencies))
+
         expected_artifacts = [layer_stem, cp.LOP_THUMB_NAME]
         _log("finalize call: expected_artifacts={}".format(expected_artifacts))
         result = cp.finalize_publish_version(
             project_root, asset_name, staging_dir, final_dir, version,
-            expected_artifacts, comment=comment
+            expected_artifacts, comment=comment, dependencies=dependencies
         )
 
         status_parm.set("OK - {} v{:03d} - {}".format(kind, version, result["final_dir"]))

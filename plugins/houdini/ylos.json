@@ -4,6 +4,12 @@
             "YLOS_REPO": "$HOME/Desktop/Claude/YlosPipeline"
         },
         {
+            "HOUDINI_PATH": {
+                "value": "$YLOS_REPO/plugins/houdini",
+                "method": "append"
+            }
+        },
+        {
             "HOUDINI_OTLSCAN_PATH": {
                 "value": "$YLOS_REPO/plugins/houdini/otls",
                 "method": "append"

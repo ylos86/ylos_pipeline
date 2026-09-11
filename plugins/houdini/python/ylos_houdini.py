@@ -286,13 +286,274 @@ def deliver_render(project_root, shot_name, step, version):
 
 
 # --------------------------------------------------------------------------------------
+# Pure functions - Prism parity (scene starter plan, WIP sidecar, publish dependencies)
+# --------------------------------------------------------------------------------------
+
+# Sidecar next to every Houdini WIP ('<hip>.json'), same Prism-style contract as the
+# Blender operators ('<wip>.blend.json': comment / user / date / <dcc>_version) - read
+# back by create_project.list_scenefiles (key 'houdini_version' -> 'dcc_version').
+SIDECAR_SUFFIX = ".json"
+
+# Starter prims (docs/usd-convention.md): the shot camera lives under /ROOT/cameras/
+# (found by _first_shot_camera for the render); the starter dome light is a scratch
+# hint, kept under the assembly root of the family (/ROOT for a shot, top level for an
+# asset/set whose default prim is the entity itself).
+STARTER_CAMERA_PRIMPATH = "/ROOT/cameras/cam_main"
+STARTER_LIGHT_PRIMPATH = {"shot": "/ROOT/lights/dome_starter"}
+STARTER_LIGHT_PRIMPATH_DEFAULT = "/lights/dome_starter"
+
+# Pipeline context stamped on the Houdini session by create_scene (hou.putenv) - the
+# document (hip path, parse_wip_context) stays the source of truth; these variables are a
+# convenience for expressions ($YLOS_ENTITY in a filecache label, etc.) and for $JOB.
+CONTEXT_ENV_PROJECT = "YLOS_PROJECT"
+CONTEXT_ENV_ENTITY = "YLOS_ENTITY"
+CONTEXT_ENV_STEP = "YLOS_STEP"
+
+# '$JOB' / '${JOB}' with a real word boundary: a bare '\$\{?JOB\}?' would also match the
+# '$JOB' PREFIX of an unrelated '$JOBS/...' and rewrite it into a half-expanded path.
+_JOB_VAR_RE = re.compile(r"\$\{JOB\}|\$JOB(?![A-Za-z0-9_])")
+
+# Python Panel interface name (plugins/houdini/python_panels/ylos_browser.pypanel). The
+# shelf tool opens it BY NAME (hou.pypanel.interfaceByName), never by file path.
+PANEL_INTERFACE_NAME = "ylos_browser"
+
+# Publish HDA (tools/houdini/build_publish_hda.py). The UNVERSIONED name is tried as a
+# fallback: Houdini resolves it to the installed version, so a future 0.3 keeps working
+# without editing this bridge (extensions gotcha, CLAUDE.md: never assume a fixed name).
+PUBLISH_HDA_TYPES = ("ylos::publish::0.2", "ylos::publish")
+
+
+def wip_sidecar(comment, user, date, houdini_version):
+    """Sidecar payload of a Houdini WIP: {comment, user, date, houdini_version}. Pure
+    (values injected - the hou-side caller reads hou.userName()/applicationVersionString).
+    The keys mirror the Blender sidecar so list_scenefiles shows both DCCs the same way."""
+    return {
+        "comment": comment or "",
+        "user": user or "",
+        "date": date or "",
+        "houdini_version": houdini_version or "",
+    }
+
+
+def starter_plan(spec, license_category=None):
+    """Serializable plan realizing a create_project.scene_starter_spec(..., dcc='houdini')
+    in Houdini - the orchestrator decides WHAT (spec), this function decides HOW (which LOP
+    nodes, which hip path); create_scene() only executes it. Pure: no hou (the license only
+    picks the hip extension, injectable for tests).
+
+    Returns {"ok": False, "reason"} when the spec is not ok, otherwise:
+      ok, entity, step, family, version
+      target:      absolute hip path '<wip.dir>/<wip.stem><ext>' (ext by license)
+      sidecar:     '<target>.json' (wip_sidecar payload written next to the hip)
+      fps:         frames per second to set (shot frame_range, else None = leave Houdini's)
+      frame_range: [start, end] or None (shots with a manifest frame_range only)
+      env:         {YLOS_PROJECT, YLOS_ENTITY, YLOS_STEP, JOB} to hou.putenv
+      nodes:       ordered LOP chain to create in /stage, each {"type", "name", "parms"}:
+                   assembly references -> 'sublayer' (shot: the shot IS the stage) or
+                   'reference' (asset/set: grafted under /<entity>), then a 'camera'
+                   (spec.camera) and a 'domelight' (spec.lighting). Paths in $PROJ_ROOT
+                   (env_relative). Empty chain = empty scene (modeling/rigging starters).
+      display:     name of the node to give the display flag (last of the chain) or None
+      context:     the spec's context, passed through for the caller."""
+    if not spec or not spec.get("ok"):
+        return {"ok": False, "reason": (spec or {}).get("reason", "invalid starter spec")}
+    if spec.get("dcc") not in (None, "houdini"):
+        return {"ok": False, "reason": f"starter spec is for dcc {spec.get('dcc')!r}, not houdini"}
+
+    wip = spec["wip"]
+    ext = hip_extension(license_category)
+    allowed = tuple(wip.get("extensions") or ())
+    if allowed and ext not in allowed:
+        return {"ok": False,
+                "reason": f"hip extension {ext!r} not among the spec's {list(allowed)}"}
+    target = Path(wip["dir"]) / (wip["stem"] + ext)
+    family = spec.get("family", "asset")
+    entity = spec["entity"]
+
+    nodes = []
+    for ref in spec.get("references") or []:
+        if ref.get("kind") != "usd":
+            continue
+        path = env_relative(ref["path"])
+        if family == "shot":
+            # sublayer, never reference: the shot_root's root prim is /ROOT, it IS the stage.
+            nodes.append({"type": "sublayer", "name": entity,
+                          "parms": {"num_files": 1, "filepath1": path}})
+        else:
+            nodes.append({"type": "reference", "name": entity,
+                          "parms": {"primpath": f"/{entity}", "filepath1": path}})
+    if spec.get("camera"):
+        nodes.append({"type": "camera", "name": "cam_main",
+                      "parms": {"primpath": STARTER_CAMERA_PRIMPATH}})
+    if spec.get("lighting"):
+        nodes.append({"type": "domelight", "name": "dome_starter",
+                      "parms": {"primpath": STARTER_LIGHT_PRIMPATH.get(
+                          family, STARTER_LIGHT_PRIMPATH_DEFAULT)}})
+
+    fr = spec.get("frame_range") if family == "shot" else None
+    frame_range, fps = None, None
+    if fr:
+        try:
+            frame_range = [int(fr["start"]), int(fr["end"])]
+            fps = float(fr.get("fps") or cp.DEFAULT_SCENE["fps"])
+        except (KeyError, TypeError, ValueError):
+            frame_range, fps = None, None
+
+    context = dict(spec.get("context") or {})
+    project_root = context.get("project_root", "")
+    return {
+        "ok": True,
+        "entity": entity,
+        "step": spec["step"],
+        "family": family,
+        "version": wip["version"],
+        "target": str(target),
+        "sidecar": str(target) + SIDECAR_SUFFIX,
+        "fps": fps,
+        "frame_range": frame_range,
+        "env": {
+            CONTEXT_ENV_PROJECT: project_root,
+            CONTEXT_ENV_ENTITY: entity,
+            CONTEXT_ENV_STEP: spec["step"],
+            "JOB": project_root,
+        },
+        "nodes": nodes,
+        "display": nodes[-1]["name"] if nodes else None,
+        "context": context,
+    }
+
+
+def stage_layer_paths(stage):
+    """File paths a composed USD stage depends on: every used layer (sublayers, references,
+    payloads loaded - pxr.Usd.Stage.GetUsedLayers) plus the asset paths each file-backed
+    layer declares (GetCompositionAssetDependencies / legacy GetExternalReferences, resolved
+    against the layer with ComputeAbsolutePath). Anonymous layers are skipped. Duck-typed on
+    the pxr API (testable with stubs, no hou/pxr import here). Never raises: a layer that
+    refuses introspection is skipped."""
+    out, seen = [], set()
+
+    def _add(path):
+        path = str(path or "").strip()
+        if not path or path.startswith("anon:") or path in seen:
+            return
+        seen.add(path)
+        out.append(path)
+
+    try:
+        layers = list(stage.GetUsedLayers())
+    except Exception:
+        return out
+    for layer in layers:
+        try:
+            if getattr(layer, "anonymous", False):
+                continue
+            _add(getattr(layer, "realPath", "") or getattr(layer, "identifier", ""))
+            refs = None
+            for attr in ("GetCompositionAssetDependencies", "GetExternalReferences"):
+                fn = getattr(layer, attr, None)
+                if fn is not None:
+                    refs = fn()
+                    break
+            for ref in refs or ():
+                ref = str(ref)
+                resolver = getattr(layer, "ComputeAbsolutePath", None)
+                _add(resolver(ref) if resolver is not None else ref)
+        except Exception:
+            continue
+    return out
+
+
+def dependencies_from_paths(paths, project_root, exclude_entity=None, expand_roots=True):
+    """Map file paths a published stage used to publish dependencies
+    [{"entity", "step", "version"}] for finalize_publish_version(dependencies=...).
+
+    Built on create_project._classify_project_path - the SINGLE path -> entity mapper of
+    the orchestrator (the same one build_dependency_index uses on the USD ASCII scan) - so
+    Houdini never re-derives the project layout. Per path:
+      - '$PROJ_ROOT'/'${PROJ_ROOT}' expanded like the bridges write it (env_relative:
+        $PROJ_ROOT/<project> == project_root, via cp._expand_proj_root), '$JOB'/'${JOB}'
+        expanded to project_root (create_scene sets $JOB), '~' expanded;
+      - relative or 'anon:' paths, paths outside assets/ sets/ shots/ -> ignored;
+      - coordinates of 'exclude_entity' (the publishing entity: its own stack is not a
+        dependency, same rule as build_dependency_index) -> ignored;
+      - an assembly root (asset_root.usda / shot_root.usda, step None) cannot be recorded
+        as-is (finalize requires a step) -> with expand_roots it is expanded into the
+        step publishes it composes right now (latest complete USD per step, the exact
+        versions the stage was built from); without, it is dropped.
+    Deduplicated, insertion order, versions int or None. Pure (no hou)."""
+    project_root = Path(project_root)
+    out, seen = [], set()
+
+    def _push(coords):
+        if coords is None or coords.get("entity") == exclude_entity or not coords.get("step"):
+            return
+        key = (coords["entity"], coords["step"], coords.get("version"))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({"entity": coords["entity"], "step": coords["step"],
+                    "version": coords.get("version")})
+
+    def _expand_root(entity):
+        resolved = cp.resolve_entity(project_root, entity)
+        if resolved is None:
+            return
+        entity_dir = Path(resolved["dir"])
+        for rel in cp._latest_by_step(resolved["manifest"]).values():
+            _push(cp._classify_project_path(entity_dir / rel, project_root))
+
+    for raw in paths or ():
+        raw = str(raw or "").strip()
+        if not raw or raw.startswith("anon:"):
+            continue
+        raw = cp._expand_proj_root(raw, project_root)
+        raw = _JOB_VAR_RE.sub(lambda _m: str(project_root), raw)
+        raw = os.path.expanduser(raw)
+        if raw.startswith("$") or not os.path.isabs(raw):
+            continue   # unexpanded variable ($PROJ_CACHE...) or relative: never a source dep
+        coords = cp._classify_project_path(raw, project_root)
+        if coords is None:
+            continue
+        if coords.get("step") is None:
+            if expand_roots and coords["entity"] != exclude_entity:
+                _expand_root(coords["entity"])
+            continue
+        _push(coords)
+    return out
+
+
+# --------------------------------------------------------------------------------------
 # Houdini actions (hou required)
 # --------------------------------------------------------------------------------------
 
-def save_wip(entity_name=None, step=None, project_root=None):
-    """Saves the current hip as the next WIP version of <entity>/<step>. Without
-    arguments: context inferred from the current hip path (parse_wip_context). Returns
-    {'path', 'version'}."""
+def write_wip_sidecar(hip_path, comment="", user=None, date=None, houdini_version=None):
+    """Writes '<hip>.json' next to a saved WIP - the Prism-style sidecar that
+    create_project.list_scenefiles merges into the scenefile rows (comment / user / date /
+    houdini_version, see wip_sidecar). Atomic write (cp._atomic_write_json, same contract as
+    the Blender op_save_wip). 'user'/'houdini_version' None -> read from hou at call time
+    (lazy import: fully injectable, hence testable without Houdini). Returns the Path."""
+    if user is None or houdini_version is None:
+        import hou
+        if user is None:
+            user = hou.userName()
+        if houdini_version is None:
+            houdini_version = hou.applicationVersionString()
+    if date is None:
+        date = cp._now()
+    path = Path(str(hip_path) + SIDECAR_SUFFIX)
+    cp._atomic_write_json(path, wip_sidecar(comment, user, date, houdini_version))
+    return path
+
+
+def save_wip(entity_name=None, step=None, project_root=None, comment=""):
+    """Saves the current hip as the next WIP version of <entity>/<step>, plus its sidecar
+    '<hip>.json' (comment / user / date / houdini_version). Without arguments: context
+    inferred from the current hip path (parse_wip_context). Returns
+    {'path', 'version', 'sidecar'}.
+
+    The sidecar is BEST-EFFORT (warning on stderr, never an exception): a metadata write
+    failure must never lose the .hip that is already on disk - same rule as the Blender
+    op_save_wip."""
     import hou
     if entity_name is None or step is None:
         ctx = parse_wip_context(hou.hipFile.path())
@@ -311,7 +572,105 @@ def save_wip(entity_name=None, step=None, project_root=None):
     path, version = next_wip_path(project_root, entity_name, step)
     path.parent.mkdir(parents=True, exist_ok=True)
     hou.hipFile.save(str(path))
-    return {"path": str(path), "version": version}
+    sidecar = None
+    try:
+        sidecar = write_wip_sidecar(path, comment)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"[warn] WIP sidecar not written ({path}{SIDECAR_SUFFIX}): {exc}\n")
+    return {"path": str(path), "version": version,
+            "sidecar": str(sidecar) if sidecar is not None else None}
+
+
+def create_scene(entity_name, step, project_root=None, comment=""):
+    """Creates a NEW authoring scene for <entity>/<step> in Houdini (plan-usable-v1 Phase
+    1.3) - the Houdini mirror of the Blender op_create_scene. The orchestrator decides WHAT
+    (cp.scene_starter_spec), starter_plan decides HOW (which LOP chain, which hip path), and
+    only THIS function touches hou.
+
+    Sequence (order matters): hipFile.clear -> context variables (a fresh hip resets $JOB)
+    -> fps / frame range -> LOP chain in /stage -> save the versioned hip -> sidecar, so
+    the scene shows up in create_project.list_scenefiles like any Save Version.
+
+    NEVER overwrites: the version comes from the spec (latest WIP on disk + 1, every .hip*
+    extension counted). Raises ValueError if the spec/plan refuses (unknown entity, step not
+    declared, license extension outside the spec's).
+
+    Returns {'ok', 'entity', 'step', 'version', 'path', 'sidecar', 'nodes' (created paths),
+    'warnings'}. 'warnings' is never silent: it is also printed on stderr - a starter that
+    could not create its camera must be visible, not disappear."""
+    import hou
+    if project_root is None:
+        project_root = active_project()
+    if project_root is None:
+        raise ValueError(
+            "No active project (~/.ylos/active_project) and project_root not provided."
+        )
+    spec = cp.scene_starter_spec(entity_name, step, "houdini", project_root=project_root)
+    # hou.licenseCategory() returns an enum value, hip_extension() expects its name.
+    plan = starter_plan(spec, hou.licenseCategory().name())
+    if not plan.get("ok"):
+        raise ValueError(plan.get("reason", "starter plan refused"))
+
+    hou.hipFile.clear(suppress_save_prompt=True)
+
+    for name, value in (plan.get("env") or {}).items():
+        if value:
+            hou.putenv(name, str(value))
+
+    if plan.get("fps"):
+        hou.setFps(float(plan["fps"]))
+    frame_range = plan.get("frame_range")
+    if frame_range:
+        start, end = float(frame_range[0]), float(frame_range[1])
+        hou.playbar.setFrameRange(start, end)
+        hou.playbar.setPlaybackRange(start, end)
+
+    stage = hou.node("/stage")
+    created, warnings = [], []
+    for entry in plan.get("nodes") or []:
+        try:
+            node = stage.createNode(entry["type"], entry["name"])
+        except hou.OperationFailed as exc:
+            warnings.append(
+                f"LOP {entry['type']!r} not created ({exc}) - starter incomplete."
+            )
+            continue
+        if created:
+            node.setInput(0, created[-1])
+        for parm_name, value in (entry.get("parms") or {}).items():
+            parm = node.parm(parm_name)
+            if parm is None:
+                warnings.append(
+                    f"{node.path()}: no {parm_name!r} parameter (check the Houdini version)."
+                )
+                continue
+            parm.set(value)
+        created.append(node)
+    if created:
+        stage.layoutChildren()
+        created[-1].setDisplayFlag(True)
+
+    target = Path(plan["target"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    hou.hipFile.save(str(target))
+    sidecar = None
+    try:
+        sidecar = write_wip_sidecar(target, comment)
+    except (OSError, ValueError) as exc:
+        warnings.append(f"WIP sidecar not written ({target}{SIDECAR_SUFFIX}): {exc}")
+    for w in warnings:
+        sys.stderr.write(f"[warn] create_scene {entity_name}/{step}: {w}\n")
+
+    return {
+        "ok": True,
+        "entity": plan["entity"],
+        "step": plan["step"],
+        "version": plan["version"],
+        "path": str(target),
+        "sidecar": str(sidecar) if sidecar is not None else None,
+        "nodes": [n.path() for n in created],
+        "warnings": warnings,
+    }
 
 
 def reference_asset(entity_name, project_root=None):
@@ -374,6 +733,52 @@ def sublayer_step_publish(entity_name, step, project_root=None):
             f"No 'complete' publish for step '{step}' of '{entity_name}'."
         )
     return _create_sublayer(f"{entity_name}_{step}", path)
+
+
+def create_publish_node(entity_name, step, project_root=None):
+    """Drops a ylos::publish HDA in /stage, pre-filled for <entity>/<step> and wired to the
+    current display node of /stage - the panel's 'Publish' button.
+
+    Does NOT publish: the two-phase contract stays a HUMAN gesture (the artist checks the
+    composed stage, then presses the HDA's own Publish button). The parameters are set in
+    this order on purpose: 'project_root' and 'asset_name' FIRST, because the
+    'publish_kind' menu is generated from the entity's manifest (kind_menu_items) and
+    would not contain <step> yet if the entity were unknown. Returns the node."""
+    import hou
+    if project_root is None:
+        project_root = active_project()
+    if project_root is None:
+        raise ValueError("No active project (~/.ylos/active_project).")
+    stage = hou.node("/stage")
+    node = None
+    for type_name in PUBLISH_HDA_TYPES:
+        try:
+            node = stage.createNode(type_name, f"publish_{entity_name}_{step}")
+            break
+        except hou.OperationFailed:
+            continue
+    if node is None:
+        raise RuntimeError(
+            f"Publish HDA not installed (tried {', '.join(PUBLISH_HDA_TYPES)}) - check that "
+            f"HOUDINI_OTLSCAN_PATH contains $YLOS_REPO/plugins/houdini/otls (package "
+            f"ylos.json) and that the .hdanc has been regenerated "
+            f"(hython tools/houdini/build_publish_hda.py)."
+        )
+    display = stage.displayNode()
+    if display is not None and display is not node:
+        node.setInput(0, display)
+    for parm_name, value in (("project_root", str(project_root)),
+                             ("asset_name", entity_name),
+                             ("publish_kind", step)):
+        parm = node.parm(parm_name)
+        if parm is not None:
+            parm.set(value)
+        else:
+            sys.stderr.write(
+                f"[warn] publish HDA without a {parm_name!r} parameter - not pre-filled "
+                f"(regenerate the HDA?).\n")
+    node.moveToGoodPosition()
+    return node
 
 
 def _first_shot_camera(node):
@@ -487,13 +892,27 @@ def _pick_entity(project_root, title, entities=None):
     return entities[idx] if idx is not None else None
 
 
+def _read_comment(title, message="Version comment (optional):"):
+    """Version comment typed by the user, or None if cancelled (empty string = accepted,
+    no comment). Shared by the Save Version / New Scene tools and the panel."""
+    import hou
+    ok, text = hou.ui.readInput(message, buttons=("Save", "Cancel"), close_choice=1,
+                                title=title, initial_contents="")
+    return None if ok != 0 else (text or "").strip()
+
+
 def tool_save_wip():
-    """Shelf 'Save WIP': version++ in the current hip context, or entity/step
-    choice if the hip is outside the pipeline."""
+    """Shelf 'Save Version': version++ in the current hip context, or entity/step
+    choice if the hip is outside the pipeline. Asks for a version comment (Prism-style),
+    stored in the sidecar '<hip>.json' read back by the web UI and the panel."""
     import hou
     try:
-        if parse_wip_context(hou.hipFile.path()) is not None:
-            info = save_wip()
+        ctx = parse_wip_context(hou.hipFile.path())
+        if ctx is not None:
+            comment = _read_comment("Save Version")
+            if comment is None:
+                return
+            info = save_wip(comment=comment)
         else:
             project_root = active_project()
             if project_root is None:
@@ -501,14 +920,17 @@ def tool_save_wip():
                     "No active project - set the project via the web UI (ylos_ui.py).",
                     severity=hou.severityType.Warning)
                 return
-            entity = _pick_entity(project_root, "Save WIP")
+            entity = _pick_entity(project_root, "Save Version")
             if entity is None:
                 return
             steps = entity["steps"]
-            idx = _pick_from_list("Save WIP", steps, "Step:")
+            idx = _pick_from_list("Save Version", steps, "Step:")
             if idx is None:
                 return
-            info = save_wip(entity["name"], steps[idx], project_root)
+            comment = _read_comment("Save Version")
+            if comment is None:
+                return
+            info = save_wip(entity["name"], steps[idx], project_root, comment=comment)
         hou.ui.displayMessage(
             f"WIP v{info['version']:03d} saved:\n{info['path']}")
     except (ValueError, FileNotFoundError, OSError) as exc:
@@ -726,3 +1148,107 @@ def tool_deliver_render():
         hou.ui.displayMessage(f"Render delivered:\n{dst}")
     except (ValueError, FileNotFoundError, OSError) as exc:
         hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+
+
+def tool_new_scene():
+    """Shelf 'New Scene': creates a NEW authoring scene (starter by department) for an
+    entity+step of the active project - the Houdini entry point of Phase 1.3. Confirms
+    BEFORE acting: create_scene() clears the current hip, an unsaved session must never be
+    lost by a mis-click."""
+    import hou
+    project_root = active_project()
+    if project_root is None:
+        hou.ui.displayMessage(
+            "No active project - set the project via the web UI (ylos_ui.py).",
+            severity=hou.severityType.Warning)
+        return
+    entity = _pick_entity(project_root, "New Scene")
+    if entity is None:
+        return
+    steps = entity["steps"]
+    idx = _pick_from_list("New Scene", steps, "Step:")
+    if idx is None:
+        return
+    step = steps[idx]
+    spec = cp.scene_starter_spec(entity["name"], step, "houdini", project_root=project_root)
+    if not spec.get("ok"):
+        hou.ui.displayMessage(spec.get("reason", "Starter refused."),
+                              severity=hou.severityType.Error)
+        return
+    summary = (f"{entity['name']} / {step} -> v{spec['wip']['version']:03d}\n"
+               f"{len(spec.get('references') or [])} assembly reference(s), "
+               f"camera: {'yes' if spec.get('camera') else 'no'}, "
+               f"light: {'yes' if spec.get('lighting') else 'no'}\n\n"
+               f"The current scene will be cleared. Continue?")
+    if not hou.ui.displayConfirmation(summary, title="New Scene"):
+        return
+    comment = _read_comment("New Scene", "Comment for this first version (optional):")
+    if comment is None:
+        return
+    try:
+        info = create_scene(entity["name"], step, project_root, comment=comment)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+        return
+    message = f"Scene v{info['version']:03d} created:\n{info['path']}"
+    if info["warnings"]:
+        message += "\n\nWarnings:\n- " + "\n- ".join(info["warnings"])
+    hou.ui.displayMessage(
+        message,
+        severity=hou.severityType.Warning if info["warnings"] else hou.severityType.Message)
+
+
+def tool_set_status():
+    """Shelf 'Set Status': sets the EXPLICIT production status of a step
+    (review / approved), or clears it back to the derived value (auto). Delegates to
+    create_project.set_step_status - the only writer of the schema 2.2 field."""
+    import hou
+    project_root = active_project()
+    if project_root is None:
+        hou.ui.displayMessage(
+            "No active project - set the project via the web UI (ylos_ui.py).",
+            severity=hou.severityType.Warning)
+        return
+    entity = _pick_entity(project_root, "Set Status")
+    if entity is None:
+        return
+    statuses = cp.get_step_status(project_root, entity["name"]) or {}
+    steps = list(statuses) or list(entity["steps"])
+    labels = [f"{s}  ({statuses.get(s, {}).get('status', 'empty')})" for s in steps]
+    idx = _pick_from_list("Set Status", labels, "Step:")
+    if idx is None:
+        return
+    step = steps[idx]
+    choices = [cp.STEP_STATUS_AUTO] + list(cp.STEP_STATUS_EXPLICIT)
+    cidx = _pick_from_list("Set Status", choices, f"Status for '{step}':")
+    if cidx is None:
+        return
+    try:
+        info = cp.set_step_status(project_root, entity["name"], step, choices[cidx])
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        hou.ui.displayMessage(str(exc), severity=hou.severityType.Error)
+        return
+    hou.ui.displayMessage(
+        f"{entity['name']} / {step}: {info['status']}"
+        f"{'' if info['explicit'] else ' (derived)'}")
+
+
+def tool_project_browser():
+    """Shelf 'Project Browser': opens the Ylos cockpit (Python Panel 'ylos_browser') in a
+    FLOATING pane so it never steals a pane of the working desktop. The interface is
+    resolved BY NAME (hou.pypanel.interfaceByName) - it is registered by
+    plugins/houdini/python_panels/ylos_browser.pypanel, found through HOUDINI_PATH
+    (package ylos.json). Explicit message if it is missing rather than a traceback:
+    the usual cause is a package not loaded / Houdini not restarted."""
+    import hou
+    interface = hou.pypanel.interfaceByName(PANEL_INTERFACE_NAME)
+    if interface is None:
+        hou.ui.displayMessage(
+            f"Python Panel '{PANEL_INTERFACE_NAME}' not found - check that HOUDINI_PATH "
+            f"contains $YLOS_REPO/plugins/houdini (package ylos.json) and restart Houdini.",
+            severity=hou.severityType.Error)
+        return None
+    panel = hou.ui.curDesktop().createFloatingPaneTab(
+        hou.paneTabType.PythonPanel, size=(1100, 700))
+    panel.setActiveInterface(interface)
+    return panel

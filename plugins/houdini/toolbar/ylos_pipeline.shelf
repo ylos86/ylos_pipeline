@@ -1,10 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Shelf pipeline Ylos Prod. Charge via HOUDINI_TOOLBAR_PATH (package ylos.json).
-     Les outils delegent tout a ylos_houdini.py (PYTHONPATH, meme package) - aucune
-     logique ici, le shelf n'est que le point d'entree UI. -->
+<!-- Ylos Prod pipeline shelf. Loaded via HOUDINI_TOOLBAR_PATH (package ylos.json).
+     The tools delegate everything to ylos_houdini.py (PYTHONPATH, same package) - no
+     logic here, the shelf is only the UI entry point. The Python Panel cockpit
+     (python_panels/ylos_browser.pypanel) is the other entry point: BOTH exist by design
+     (locked decision, docs/plan-usable-v1.md Phase 4.1), the panel does not replace the
+     shelf. -->
 <shelfDocument>
   <toolshelf name="ylos_pipeline" label="Ylos">
+    <memberTool name="ylos_project_browser"/>
+    <memberTool name="ylos_new_scene"/>
     <memberTool name="ylos_save_wip"/>
+    <memberTool name="ylos_set_status"/>
     <memberTool name="ylos_new_asset"/>
     <memberTool name="ylos_load_asset"/>
     <memberTool name="ylos_load_shot"/>
@@ -14,50 +20,68 @@
     <memberTool name="ylos_deliver_render"/>
   </toolshelf>
 
-  <tool name="ylos_save_wip" label="Save WIP" icon="MISC_python">
-    <helpText><![CDATA[Sauvegarde le hip courant comme prochaine version WIP (_vNNN) de l'entite/step du contexte. Hors contexte : propose entite + step du projet actif.]]></helpText>
+  <tool name="ylos_project_browser" label="Project Browser" icon="MISC_python">
+    <helpText><![CDATA[Opens the Ylos cockpit (Python Panel) in a floating pane: active project, entities with thumbnails, per-step status, scenefiles, products and dependencies.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_project_browser()]]></script>
+  </tool>
+
+  <tool name="ylos_new_scene" label="New Scene" icon="MISC_python">
+    <helpText><![CDATA[Creates a new authoring scene (starter by department) for an entity/step of the active project: assembly references, camera and frame range for a shot, versioned hip saved with its sidecar. Clears the current scene - confirmation required.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_new_scene()]]></script>
+  </tool>
+
+  <tool name="ylos_save_wip" label="Save Version" icon="MISC_python">
+    <helpText><![CDATA[Saves the current hip as the next WIP version (_vNNN) of the context entity/step, with a version comment stored in the sidecar. Outside a context: asks for the entity and step of the active project.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_save_wip()]]></script>
   </tool>
 
+  <tool name="ylos_set_status" label="Set Status" icon="MISC_python">
+    <helpText><![CDATA[Sets the explicit production status of a step (review / approved) or clears it back to the derived value (auto). Persisted in the entity manifest (schema 2.2), read by the web UI and the panel.]]></helpText>
+    <script scriptType="python"><![CDATA[import ylos_houdini
+ylos_houdini.tool_set_status()]]></script>
+  </tool>
+
   <tool name="ylos_new_asset" label="New Asset" icon="MISC_python">
-    <helpText><![CDATA[Cree une entite (asset/set/shot) dans le projet actif - meme validation de nommage TYPE_Nom_Variant que l'UI web et Blender.]]></helpText>
+    <helpText><![CDATA[Creates an entity (asset/set/shot) in the active project - same TYPE_Name_Variant naming validation as the web UI and Blender.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_new_asset()]]></script>
   </tool>
 
   <tool name="ylos_load_asset" label="Load Asset" icon="MISC_python">
-    <helpText><![CDATA[Reference l'asset_root.usda d'une entite dans /stage (chemin en $PROJ_ROOT quand possible).]]></helpText>
+    <helpText><![CDATA[References an entity's asset_root.usda into /stage (path in $PROJ_ROOT when possible).]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_load_asset()]]></script>
   </tool>
 
   <tool name="ylos_load_shot" label="Load Shot" icon="MISC_python">
-    <helpText><![CDATA[Sublayer le shot_root.usda d'un shot dans /stage (le shot EST le stage, root prim /ROOT) - compose tous les steps publies du shot, chemin en $PROJ_ROOT.]]></helpText>
+    <helpText><![CDATA[Sublayers a shot's shot_root.usda into /stage (the shot IS the stage, root prim /ROOT) - composes every published step of the shot, path in $PROJ_ROOT.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_load_shot()]]></script>
   </tool>
 
   <tool name="ylos_load_step_publish" label="Load Step Publish" icon="MISC_python">
-    <helpText><![CDATA[Sublayer le latest publish d'un step (entite + step au choix) dans /stage - composer manuellement quand on ne veut pas tout le shot_root.]]></helpText>
+    <helpText><![CDATA[Sublayers the latest publish of a step (entity + step of your choice) into /stage - to compose manually when you do not want the whole shot_root.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_load_step_publish()]]></script>
   </tool>
 
   <tool name="ylos_setup_filecache" label="Setup File Cache" icon="MISC_python">
-    <helpText><![CDATA[Pose 'basedir' du filecache SOP selectionne a $PROJ_CACHE/<projet>/houdini/<entite>/<step>/ (relocalisable) - contexte deduit du hip courant. Caches jetables, versioning natif du filecache.]]></helpText>
+    <helpText><![CDATA[Sets 'basedir' of the selected filecache SOP to $PROJ_CACHE/<project>/houdini/<entity>/<step>/ (relocatable) - context inferred from the current hip. Disposable caches, native filecache versioning.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_setup_filecache()]]></script>
   </tool>
 
   <tool name="ylos_render_shot" label="Render Shot" icon="MISC_python">
-    <helpText><![CDATA[Configure un usdrender_rop pour rendre un step de shot vers $PROJ_CACHE/<projet>/render/<shot>/<step>/v<NNN>/ (frame_range du manifeste, camera /ROOT/cameras/, output relocalisable). Propose de lancer le rendu.]]></helpText>
+    <helpText><![CDATA[Configures a usdrender_rop to render a shot step to $PROJ_CACHE/<project>/render/<shot>/<step>/v<NNN>/ (frame range from the manifest, camera under /ROOT/cameras/, relocatable output). Offers to launch the render.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_render_shot()]]></script>
   </tool>
 
   <tool name="ylos_deliver_render" label="Deliver Render" icon="MISC_python">
-    <helpText><![CDATA[Copie explicite d'un take de rendu valide (cache) vers delivery/render/<shot>/v<NNN>/. Seul chemin qui ecrit dans delivery/ - validation humaine.]]></helpText>
+    <helpText><![CDATA[Explicit copy of a valid render take (cache tier) to delivery/render/<shot>/<step>/v<NNN>/. The only path that writes into delivery/ - human validation.]]></helpText>
     <script scriptType="python"><![CDATA[import ylos_houdini
 ylos_houdini.tool_deliver_render()]]></script>
   </tool>

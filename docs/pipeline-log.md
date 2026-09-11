@@ -1080,3 +1080,125 @@ modal → vue entité → recherche (de l'intérieur vers l'extérieur), `/` foc
   l'e2e launcher sur un projet jetable, et côté serveur l'argv exact a été vérifié au curl.
 - `POST /api/reveal` répond 501 hors macOS — pas de branche Linux/Windows (`xdg-open`,
   `explorer`), à ajouter si le besoin apparaît.
+
+## Parité Prism — Houdini
+
+**2026-09-10** — Phases 1.3 (réalisation du Scene Creator) et 4.1 (Python Panel cockpit +
+shelf) du plan « utilisable v1 », côté Houdini. Branche `feat/prism-parity`.
+
+### Contrainte de départ : aucune licence Houdini sur la machine
+
+`hython` répond « No licenses could be found » et la GUI ne peut pas être pilotée. Rien de
+ce qui touche `hou` n'a donc pu être **exécuté** ici. Plutôt que de livrer du code non
+vérifié, tout l'incrément a été construit autour de cette contrainte :
+
+1. **Chaque feature = une fonction pure + une réalisation mince.** L'orchestrateur décide
+   *quoi* (`scene_starter_spec`), une fonction pure décide *comment* (`starter_plan` :
+   chaîne de LOP, chemin du hip, extension selon la licence **injectée**), et la fonction
+   `hou` ne fait qu'exécuter le plan. Les tests stdlib portent sur le plan, pas sur Houdini.
+2. **Le cockpit est coupé en trois** : `ylos_browser_model.py` (pur, zéro `hou`, zéro Qt —
+   toutes les lignes affichées viennent de `create_project`), `ylos_browser_panel.py` (Qt,
+   `import hou` paresseux), `ylos_houdini.py` (bridge). C'est ce découpage qui rend le
+   panel testable sans licence — ce n'est pas de la cosmétique d'architecture.
+3. **Revue statique outillée** au lieu d'une exécution : audit automatique des 40
+   références `hou.*` du code touché contre le stub `hou.py` de Houdini 21.0.631
+   (`.../python3.11libs/hou.py`) — toutes résolvent sauf `hou.ui.selectFile`, ajoutée au
+   runtime par `houpythonportion/ui.py` (signature vérifiée à la main dans ce fichier).
+   Idem pour les 20 symboles Qt, audités contre la whitelist de `hutil/Qt.py` (Qt.py ne
+   ré-exporte que ce qui existe dans tous les bindings) : tous présents. Les types de LOP
+   (`sublayer`, `reference`, `camera`, `domelight`) et le paramètre `primpath` ont été
+   vérifiés dans `houdini/help/nodes.zip`, pas supposés.
+4. **Garde de syntaxe** sur tout ce qui n'est pas exécutable ici : `py_compile` avec le
+   python 3.11.7 embarqué de Houdini. À noter : le binaire n'est **pas** sous
+   `Resources/bin/` mais sous
+   `Frameworks/Python.framework/Versions/3.11/bin/python3.11`. La garde couvre aussi ce
+   que `py_compile` ne voit jamais — le python encapsulé en CDATA du shelf et du
+   `.pypanel`, et le `PythonModule` embarqué du HDA (un littéral de chaîne dans
+   `build_publish_hda.py`), extraits puis compilés.
+
+### Ce qui a été livré
+
+**Scene starter (1.3).** `create_scene(entity, step, project_root, comment)` exécute
+`starter_plan(scene_starter_spec(...), hou.licenseCategory().name())` : `hipFile.clear` →
+variables de contexte (`YLOS_PROJECT`/`YLOS_ENTITY`/`YLOS_STEP` + `$JOB`) → fps et
+frame range du manifeste pour un shot → chaîne de LOP dans `/stage` → sauvegarde du hip
+versionné → sidecar. **L'ordre compte** : un hip neuf réinitialise `$JOB`, donc le
+`putenv` vient *après* le `clear`. La chaîne suit la famille : un shot est **sublayé**
+(le shot *est* le stage, root prim `/ROOT`), un asset/set est **référencé** sous son
+propre prim — la distinction de `docs/usd-convention.md`, pas une décision de plus.
+Aucun écrasement possible : la version vient de la spec (dernier WIP sur disque + 1,
+toutes extensions `.hip*` confondues).
+
+**Save Version avec commentaire.** `save_wip(..., comment="")` écrit `<hip>.json`
+(`comment`/`user`/`date`/`houdini_version`) — mêmes clés que le sidecar Blender, donc
+`list_scenefiles()` affiche les deux DCC de la même façon. Écriture **best-effort** avec
+avertissement sur stderr : un échec d'écriture de métadonnées ne doit jamais perdre le
+`.hip` déjà sur disque (même règle que `op_save_wip` côté Blender).
+
+**Cockpit (4.1).** Python Panel `ylos_browser` : projet actif + changement de projet
+(écrit `~/.ylos/active_project` exactement comme `ylos_ui._write_active`, et **refuse** un
+dossier sans `_pipeline/project.json` — pointer toute la machine sur un non-projet
+casserait tous les consommateurs d'un coup), entités par famille avec vignettes et
+recherche, steps avec statut coloré et combo de statut, scenefiles tous DCC (*Open*
+réservé aux `.hip*` : un `.blend` est **listé**, la tâche est partagée, mais Houdini ne
+propose pas de l'ouvrir), products avec *Sublayer* / *Reference into /stage*,
+dépendances « Used in » / « Uses » avec marqueur `UPDATE AVAILABLE`, et New Scene /
+Save Version / Publish. Le bouton Publish **ne publie pas** : il pose le nœud
+`ylos::publish` pré-rempli, l'artiste vérifie le stage puis presse *Publish* — le contrat
+deux-phases reste un geste humain.
+
+**Shelf + panel, les deux.** Décision verrouillée respectée : 3 outils ajoutés
+(*Project Browser*, *New Scene*, *Set Status*), les 8 existants conservés. Le shelf
+s'enregistre via `HOUDINI_TOOLBAR_PATH`, le panel via un `HOUDINI_PATH` ajouté au package
+(Houdini scanne `<HOUDINI_PATH>/python_panels/*.pypanel` au démarrage) — les entrées
+existantes de `ylos.json` sont intactes.
+
+**Dépendances enregistrées au publish.** Dans le callback du HDA, avant `finalize` :
+`stage_layer_paths(node.inputs()[0].stage())` → `dependencies_from_paths(...)` →
+`finalize_publish_version(dependencies=...)`. C'est le **stage d'entrée**, pas
+`node.stage()` : la branche interne du HDA ajoute la caméra de thumb et les edits du
+Configure Layer, seul ce qui entre dans le nœud est la composition de l'artiste.
+Best-effort par construction (un stage qui refuse l'introspection → clé non écrite, le
+publish continue) : une métadonnée ne doit jamais bloquer un publish valide.
+
+**Pourquoi cette brique compte particulièrement en Apprentice** : le scan de layers de
+`build_dependency_index()` ne lit que l'USD **ASCII**, et un publish Apprentice est
+`.usdnc`, chiffré. Côté Houdini, la liste enregistrée au manifeste est donc la **seule**
+source de dépendances fiable. `dependencies_from_paths` est bâtie sur
+`create_project._classify_project_path` — le mapper chemin→entité unique de
+l'orchestrateur — donc Houdini ne re-dérive jamais la structure du projet. Cas traités :
+`$PROJ_ROOT`/`${PROJ_ROOT}`, `$JOB`/`${JOB}`, `~`, chemins relatifs et `anon:` ignorés,
+hors projet ignoré, entité publiante exclue (son propre stack n'est pas une dépendance),
+publish LOP (step réservé `lop`), et **racine d'assemblage dépliée** : `asset_root.usda`
+est non-pinné alors que `finalize` exige un step, donc la racine est résolue en les
+publishes de step qu'elle compose réellement à cet instant.
+
+### Bugs trouvés et corrigés
+
+- **`_JOB_VAR_RE` (héritée de l'agent précédent)** : `\$\{?JOB\}?` matche aussi le
+  *préfixe* `$JOB` de `$JOBS/...` et réécrivait une variable étrangère en chemin
+  à moitié résolu. Corrigé avec une vraie frontière de mot, test dédié.
+- **Deux bugs du panel trouvés en l'*exécutant*** contre un stub Qt minimal
+  (`tests/test_houdini_browser_panel.py`) — le chemin de lecture du panel est
+  volontairement sans `hou`, ce qui le rend exécutable ici :
+  1. `textChanged.connect(self._reload_entities)` : le signal passe le texte, le slot
+     n'accepte aucun argument. Les bindings adaptent le nombre d'arguments différemment
+     (PySide2/PySide6/PyQt) — remplacé par un lambda explicite.
+  2. `refresh()` perdait le **step** sélectionné : `_on_entity_changed` remettait
+     `self._step = None` à chaque passage, or chaque action se termine par `refresh()`.
+     L'artiste était donc renvoyé au premier step après chaque Save Version / New Scene.
+     Le reset ne se fait plus que si l'entité a réellement changé.
+- **Garde de test non hermétique** : `test_no_hou_and_no_qt_pulled` testait
+  `sys.modules` du process, qu'un test voisin (qui injecte légitimement un faux
+  `hutil.Qt`) fait basculer. Une garde qu'un voisin peut retourner ne prouve rien →
+  posée dans un interpréteur neuf, en sous-process.
+- **Shelf en français** : les `helpText` existants violaient la règle « toutes les chaînes
+  vues par l'utilisateur en anglais » (décision 2026-09-09). Traduits avec l'ajout des
+  nouveaux outils, puisqu'on touchait le fichier.
+
+### Ce qui reste à valider à la main (licence revenue)
+
+Régénérer le HDA (`hython tools/houdini/build_publish_hda.py` — le `.hdanc` embarque son
+PythonModule, il n'y a pas d'autre moyen), puis : ouvrir le panel, faire un *New Scene*
+sur un step de shot et sur un step d'asset, un *Save Version* avec commentaire, et un
+publish → vérifier la clé `dependencies` dans le manifeste.

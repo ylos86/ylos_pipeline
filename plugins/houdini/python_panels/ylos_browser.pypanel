@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ylos Project Browser - Houdini Python Panel (plan-usable-v1 Phase 4.1).
+     Discovered through HOUDINI_PATH ($YLOS_REPO/plugins/houdini, package ylos.json):
+     Houdini scans <HOUDINI_PATH>/python_panels/*.pypanel at startup, so this file needs
+     no manual installation in the user's preferences.
+     No logic here: the script only wires the interface to ylos_browser_panel.py
+     (Qt view) which itself reads ylos_browser_model.py (pure) - same discipline as the
+     shelf, which delegates everything to ylos_houdini.py. -->
+<pythonPanelDocument>
+  <interface name="ylos_browser" label="Ylos Browser" icon="MISC_python" showNetworkNavigationBar="false" help_url="">
+    <script><![CDATA[import toolutils
+
+import ylos_houdini
+import ylos_browser_model
+import ylos_browser_panel
+
+# safe_reload() only reloads when HOUDINI_PYTHON_DEVELOPMENT=1 (free in production).
+# Reloaded dependencies first: the view holds a module reference to the model, which
+# importlib.reload mutates in place, so the chain stays consistent.
+toolutils.safe_reload(ylos_houdini)
+toolutils.safe_reload(ylos_browser_model)
+toolutils.safe_reload(ylos_browser_panel)
+
+
+def onCreateInterface():
+    return ylos_browser_panel.createInterface()
+]]></script>
+    <includeInPaneTabMenu menu_position="900" create_separator="false"/>
+    <help><![CDATA[Ylos pipeline cockpit: active project, entities by family with thumbnails, per-step status, scenefiles (all DCCs), published products and dependencies. Creates a new authoring scene, saves a version with a comment, and drops a pre-filled publish node.]]></help>
+  </interface>
+</pythonPanelDocument>
