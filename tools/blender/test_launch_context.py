@@ -59,11 +59,13 @@ def _blender_bin():
             or "/Applications/Blender.app/Contents/MacOS/Blender")
 
 
-def _run_launcher(blender, log_path, extra_args):
-    """Invokes Blender --background --python launcher -- <args>. Returns (returncode, log)."""
+def _run_launcher(blender, log_path, extra_args, env_extra=None):
+    """Invokes Blender --background --python launcher -- <args>. Returns (returncode, log).
+    'env_extra' seeds the CHILD environment (used to prove the per-session $PROJ_ROOT
+    override of Phase 0.2)."""
     cmd = [blender, "--background", "--factory-startup",
            "--python", LAUNCHER, "--"] + extra_args
-    env = {**os.environ, "YLOS_LAUNCH_LOG": log_path}
+    env = {**os.environ, "YLOS_LAUNCH_LOG": log_path, **(env_extra or {})}
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
     log = ""
     if os.path.isfile(log_path):
@@ -238,6 +240,62 @@ def main():
             _fail(f"invocation C: 'gltf_import' mode missing from the log (extension routing "
                   f"broken?):\n{log}")
         print("ok  invocation C: GLB routing -> import_scene.gltf traced in the log")
+
+        # 7. Invocation D - '--kind create' (New Scene, plan-usable-v1 Phase 1.4): NO
+        #    --path; the launcher sets the context then hands over to ylos.create_scene,
+        #    which reads scene_starter_spec() and allocates the WIP itself. Checked on a
+        #    step that PULLS THE ASSEMBLY IN (asset/lookdev, see
+        #    create_project._STARTER_ASSEMBLY_STEPS): the cube must land in the scene, so
+        #    a starter that opens empty is a failure, not a pass.
+        #    The child also gets a deliberately WRONG $PROJ_ROOT: the launcher must
+        #    override it per session (tension #1 of CLAUDE.md, Phase 0.2 acceptance).
+        create_step = "lookdev"
+        if create_step not in ent_manifest["steps"]:
+            _fail(f"fixture: step {create_step!r} not declared ({ent_manifest['steps']})")
+        spec = cp.scene_starter_spec(entity, create_step, "blender", project_root=project_dir)
+        if not spec.get("ok"):
+            _fail(f"invocation D: scene_starter_spec refused the fixture: {spec.get('reason')}")
+        expected_wip = spec["wip"]["path"]
+        if os.path.exists(expected_wip):
+            _fail(f"invocation D: the WIP already exists before the launch: {expected_wip}")
+
+        logD = os.path.join(work, "launchD.log")
+        rc, log = _run_launcher(
+            blender, logD,
+            ["--project", project_dir, "--entity", entity, "--step", create_step,
+             "--kind", "create"],
+            env_extra={"PROJ_ROOT": "/nonexistent/other/project/root"},
+        )
+        _assert_success(rc, log, "invocation D (--kind create)")
+        if "LAUNCH SUCCESS: [create]" not in log:
+            _fail(f"invocation D: mode 'create' missing from the success line:\n{log}")
+        if "create: ylos.create_scene OK" not in log:
+            _fail(f"invocation D: the operator was not the one that built the scene:\n{log}")
+        if not os.path.isfile(expected_wip):
+            _fail(f"invocation D: no WIP written at the path allocated by the spec: {expected_wip}")
+        print(f"ok  invocation D: create -> {os.path.basename(expected_wip)} written by ylos.create_scene")
+
+        # Per-session env: PROJ_ROOT is the PARENT of the project, and the inherited
+        # (wrong) value was replaced - two DCCs on two projects never collide.
+        expected_root = os.path.dirname(os.path.realpath(project_dir))
+        if f"env: PROJ_ROOT overridden for this session" not in log or expected_root not in log:
+            _fail(f"invocation D: $PROJ_ROOT not set per session to {expected_root!r}:\n{log}")
+        if "/nonexistent/other/project/root" not in log:
+            _fail(f"invocation D: the overridden shell value is not traced:\n{log}")
+        print(f"ok  invocation D: per-session PROJ_ROOT = {expected_root}")
+
+        # A second 'create' allocates the NEXT version, never an overwrite.
+        logE = os.path.join(work, "launchE.log")
+        rc, log = _run_launcher(blender, logE, [
+            "--project", project_dir, "--entity", entity, "--step", create_step,
+            "--kind", "create"])
+        _assert_success(rc, log, "invocation E (create v002)")
+        spec2 = cp.scene_starter_spec(entity, create_step, "blender", project_root=project_dir)
+        if spec2["wip"]["version"] != spec["wip"]["version"] + 2:
+            _fail(f"invocation E: versions not chained "
+                  f"(after 2 creates the next should be {spec['wip']['version'] + 2}, "
+                  f"got {spec2['wip']['version']})")
+        print("ok  invocation E: a 2nd create allocates the next version (no overwrite)")
 
         print("\nPASS: contextualized launcher e2e OK")
         sys.exit(0)

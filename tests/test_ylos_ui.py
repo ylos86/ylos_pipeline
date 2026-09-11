@@ -14,7 +14,13 @@ Covers:
   - POST /api/open-blender: 100% server-side resolution (create_project), never a path
     sent by the client — regression of the bug (missing 'assets/<entity>' segment on a
     naive project_root + rel concatenation) and verification that Import targets the
-    EXACT requested version, never 'latest'.
+    EXACT requested version, never 'latest'; plus the 'create' (New Scene, Phase 1.4) and
+    'scenefile' (open a specific WIP) verbs.
+  - _launch_env: PURE per-session env of a launched DCC (Phase 0.2) — PROJ_ROOT always
+    overridden with the PARENT of the project, PROJ_CACHE kept when the shell has one.
+  - POST /api/set-step-status + POST /api/reveal (schema 2.2 cockpit), and the cockpit
+    payloads of /api/assets and /api/asset/<name> (step_status, outdated, publishes,
+    dependencies, multi-DCC scenefiles).
 
 Usage: python3 tests/test_ylos_ui.py
     or: python3 -m unittest tests.test_ylos_ui
@@ -419,6 +425,69 @@ class TestBuildLaunchArgv(unittest.TestCase):
             self.assertIn("--path", argv)
             self.assertIn("--kind", argv)
 
+    def test_argv_create_verb_has_no_path(self):
+        """'create' (New Scene, Phase 1.4) is the only kind WITHOUT --path: the operator
+        ylos.create_scene allocates the WIP version itself from the orchestrator spec —
+        the server pre-allocating one would burn a version number per click."""
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = ylos_ui._build_launch_argv(
+                Path(tmp) / "b", Path(tmp) / "l.py", Path(tmp) / "Proj", None, "create",
+                entity="PROP_Foo_Default", step="modeling",
+            )
+            self.assertNotIn("--path", argv)
+            self.assertEqual(argv[-2:], ["--kind", "create"])
+            self.assertIn("--entity", argv)
+            self.assertIn("--step", argv)
+
+
+class TestLaunchEnv(unittest.TestCase):
+    """_launch_env — per-session DCC environment (plan-usable-v1 Phase 0.2, tension #1 of
+    CLAUDE.md). PURE function: it returns a COPY, never touches os.environ."""
+
+    def test_proj_root_is_the_parent_of_the_project(self):
+        # Contract: $PROJ_ROOT/<project> == project_dir (create_project._expand_proj_root /
+        # ylos_houdini.env_relative), so PROJ_ROOT is the PARENT folder.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "roots" / "MyProject"
+            project.mkdir(parents=True)
+            env = ylos_ui._launch_env(project, {})
+            self.assertEqual(env["PROJ_ROOT"], str(project.resolve().parent))
+            self.assertEqual(Path(env["PROJ_ROOT"]) / project.name, project.resolve())
+
+    def test_shell_proj_root_is_always_overridden(self):
+        # Two projects launched from the same UI must not share the shell's global value:
+        # an inherited PROJ_ROOT pointing elsewhere is replaced, never kept.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "B" / "ProjectB"
+            project.mkdir(parents=True)
+            env = ylos_ui._launch_env(project, {"PROJ_ROOT": "/somewhere/else"})
+            self.assertEqual(env["PROJ_ROOT"], str(project.resolve().parent))
+
+    def test_shell_proj_cache_kept_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "P"
+            project.mkdir()
+            env = ylos_ui._launch_env(project, {"PROJ_CACHE": "/Volumes/NVMe/cache"})
+            self.assertEqual(env["PROJ_CACHE"], "/Volumes/NVMe/cache")
+
+    def test_proj_cache_falls_back_to_orchestrator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "P"
+            project.mkdir()
+            with patch.object(cp, "resolve_cache", return_value=Path("/tmp/ylos_cache_x")):
+                env = ylos_ui._launch_env(project, {})
+            self.assertEqual(env["PROJ_CACHE"], "/tmp/ylos_cache_x")
+
+    def test_pure_copy_preserves_other_vars_and_leaves_base_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "P"
+            project.mkdir()
+            base = {"PATH": "/usr/bin", "HOME": "/Users/x"}
+            env = ylos_ui._launch_env(project, base)
+            self.assertEqual(env["PATH"], "/usr/bin")
+            self.assertEqual(env["HOME"], "/Users/x")
+            self.assertNotIn("PROJ_ROOT", base)  # the caller's env is never mutated
+
 
 class TestOpenBlenderResolution(ServerTestCase):
     """POST /api/open-blender — 100% server-side resolution (create_project), never a path
@@ -584,6 +653,401 @@ class TestSetFrameRange(ServerTestCase):
             "/api/set-frame-range", method="POST",
             body={"entity": "ANIMATION_Sh010_Default", "start": 1001})  # 'end' missing
         self.assertEqual(status, 400)
+
+
+class TestCockpitVerbs(ServerTestCase):
+    """The verbs the entity view drives (plan-usable-v1 Phases 1.4 / 2.2): 'New Scene'
+    (create) and 'open a specific WIP version' (scenefile). subprocess.Popen mocked — the
+    ARGV and the child ENV are the contract, never a real Blender instance."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_cockpit", root=str(cls._tmp / "croot"),
+                         cache=str(cls._tmp / "ccache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+        cls.steps = cp.resolve_entity(cls.project, "PROP_Tente_Default")["manifest"]["steps"]
+        cls.step = cls.steps[0]
+
+        wip = cls.project / "assets" / "PROP_Tente_Default" / cls.step / "wip"
+        wip.mkdir(parents=True, exist_ok=True)
+        for v in (1, 2):
+            (wip / f"PROP_Tente_Default_{cls.step}_v{v:03d}.blend").write_bytes(b"blend")
+        # A Houdini WIP sits in the same folder (multi-DCC listing) — Blender must refuse
+        # it explicitly rather than hand a .hipnc to open_mainfile.
+        (wip / f"PROP_Tente_Default_{cls.step}_v003.hipnc").write_bytes(b"hip")
+
+        cls._set_active(cls.project)
+        cls._fake_blender = cls._tmp / "fake_blender_cockpit"
+        cls._fake_blender.write_bytes(b"")
+        cls._fake_launcher = cls._tmp / "fake_launcher_cockpit.py"
+        cls._fake_launcher.write_bytes(b"")
+
+    def setUp(self):
+        self._popen = patch.object(ylos_ui.subprocess, "Popen").start()
+        self._patches = [
+            patch.object(ylos_ui, "BLENDER_APP", self._fake_blender),
+            patch.object(ylos_ui, "LAUNCHER", self._fake_launcher),
+            patch.object(ylos_ui, "YLOS_DIR", self._tmp / "ylos_home_c"),
+            patch.object(ylos_ui, "SERVER_LOG", self._tmp / "ylos_home_c" / "launch.log"),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        patch.stopall()
+
+    # --- 'New Scene' (create)
+
+    def test_create_launches_with_kind_create_and_no_path(self):
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": self.step, "create": True})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["kind"], "create")
+        self.assertIsNone(data["path"])
+        self.assertIn("--kind", data["argv"])
+        self.assertEqual(data["argv"][data["argv"].index("--kind") + 1], "create")
+        self.assertNotIn("--path", data["argv"])
+        self.assertEqual(data["step"], self.step)
+
+    def test_create_child_gets_per_session_proj_root(self):
+        """Phase 0.2 acceptance: the CHILD env carries this project's PROJ_ROOT, so two
+        Blenders launched from the same UI on two projects never collide."""
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": self.step, "create": True})
+        self.assertEqual(status, 200)
+        env = self._popen.call_args.kwargs["env"]
+        self.assertEqual(env["PROJ_ROOT"], str(self.project.resolve().parent))
+        self.assertTrue(env["PROJ_CACHE"])
+
+    def test_create_without_step_400(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "create": True})
+        self.assertEqual(status, 400)
+
+    def test_create_undeclared_step_400_with_orchestrator_reason(self):
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": "not_a_step", "create": True})
+        self.assertEqual(status, 400)
+        # The message is the orchestrator's own (scene_starter_spec reason), not a
+        # server-local rewording — single point of truth for the rule.
+        self.assertIn("not declared", json.loads(body)["error"])
+
+    def test_create_unknown_entity_404(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Fantome_Default", "step": self.step, "create": True})
+        self.assertEqual(status, 404)
+
+    # --- open a specific WIP version (version gallery / scenefiles list)
+
+    def test_scenefile_opens_the_exact_requested_version(self):
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": self.step, "scenefile": 1})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["kind"], "wip")
+        self.assertTrue(data["path"].endswith(f"_{self.step}_v001.blend"))
+
+    def test_scenefile_unknown_version_404(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": self.step, "scenefile": 99})
+        self.assertEqual(status, 404)
+
+    def test_scenefile_houdini_row_refused_400(self):
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": self.step, "scenefile": 3})
+        self.assertEqual(status, 400)
+        self.assertIn("houdini", json.loads(body)["error"].lower())
+
+    def test_scenefile_without_step_400(self):
+        status, _, _ = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "scenefile": 1})
+        self.assertEqual(status, 400)
+
+    def test_plain_open_still_gets_per_session_env(self):
+        """Existing contract untouched: 'Open the scene' keeps resolving server-side AND
+        now also inherits the per-session env."""
+        status, _, body = self._request(
+            "/api/open-blender", method="POST",
+            body={"entity": "PROP_Tente_Default", "step": self.step})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["kind"], "wip")
+        self.assertEqual(self._popen.call_args.kwargs["env"]["PROJ_ROOT"],
+                         str(self.project.resolve().parent))
+
+
+class TestStepStatusApi(ServerTestCase):
+    """POST /api/set-step-status — thin adapter to create_project.set_step_status (schema
+    2.2). Only 'review'/'approved' are persisted; everything else is derived from disk, so
+    the endpoint must refuse them rather than invent a second source of truth."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_status", root=str(cls._tmp / "stroot"),
+                         cache=str(cls._tmp / "stcache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+        cls.step = cp.resolve_entity(cls.project, "PROP_Tente_Default")["manifest"]["steps"][0]
+        cls._set_active(cls.project)
+
+    def tearDown(self):
+        # Leave the manifest clean for the next test (explicit status cleared).
+        try:
+            cp.set_step_status(self.project, "PROP_Tente_Default", self.step, cp.STEP_STATUS_AUTO)
+        except (ValueError, FileNotFoundError):
+            pass
+
+    def _set(self, **body):
+        return self._request("/api/set-step-status", method="POST", body=body)
+
+    def test_config_exposes_the_status_vocabulary(self):
+        # The selector in app.html must never hard-code the vocabulary (principle 5).
+        status, _, body = self._request("/api/config")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["step_statuses"], cp.STEP_STATUSES)
+        self.assertEqual(data["step_status_explicit"], list(cp.STEP_STATUS_EXPLICIT))
+        self.assertEqual(data["step_status_auto"], cp.STEP_STATUS_AUTO)
+
+    def test_set_review_persists_and_is_exposed(self):
+        status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                    status="review")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["step_status"]["status"], "review")
+        # Persisted in the manifest (source of truth, principle 3).
+        manifest = cp.resolve_entity(self.project, "PROP_Tente_Default")["manifest"]
+        self.assertEqual(manifest["step_status"][self.step], "review")
+        # Surfaced by both cockpit payloads.
+        _, _, detail = self._request("/api/asset/PROP_Tente_Default")
+        self.assertEqual(json.loads(detail)["step_status"][self.step],
+                         {"status": "review", "explicit": True, "derived": "empty"})
+        _, _, grid = self._request("/api/assets")
+        card = next(a for a in json.loads(grid)["assets"]
+                    if a["name"] == "PROP_Tente_Default")
+        self.assertEqual(card["step_status"][self.step], "review")
+
+    def test_auto_clears_back_to_the_derived_value(self):
+        self._set(entity="PROP_Tente_Default", step=self.step, status="approved")
+        status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                    status=cp.STEP_STATUS_AUTO)
+        self.assertEqual(status, 200)
+        result = json.loads(body)["step_status"]
+        self.assertFalse(result["explicit"])
+        self.assertEqual(result["status"], result["derived"])
+        manifest = cp.resolve_entity(self.project, "PROP_Tente_Default")["manifest"]
+        self.assertNotIn("step_status", manifest)  # key dropped, never left empty
+
+    def test_derived_status_cannot_be_set_400(self):
+        status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                    status="published")
+        self.assertEqual(status, 400)
+        self.assertIn("published", json.loads(body)["error"])
+
+    def test_undeclared_step_400(self):
+        status, _, body = self._set(entity="PROP_Tente_Default", step="not_a_step",
+                                    status="review")
+        self.assertEqual(status, 400)
+        self.assertIn("not declared", json.loads(body)["error"])
+
+    def test_unknown_entity_404(self):
+        status, _, _ = self._set(entity="PROP_Fantome_Default", step=self.step,
+                                 status="review")
+        self.assertEqual(status, 404)
+
+    def test_missing_fields_400(self):
+        self.assertEqual(self._set(step=self.step, status="review")[0], 400)
+        self.assertEqual(self._set(entity="PROP_Tente_Default", status="review")[0], 400)
+
+
+class TestRevealTarget(ServerTestCase):
+    """_reveal_target: the folder to reveal is resolved SERVER-SIDE from names only
+    (same rule as open-blender, INC-3) + POST /api/reveal (subprocess mocked)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_reveal", root=str(cls._tmp / "rvroot"),
+                         cache=str(cls._tmp / "rvcache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+        cls.step = cp.resolve_entity(cls.project, "PROP_Tente_Default")["manifest"]["steps"][0]
+        # Orphan (no manifest.json) — the 'broken' card must stay revealable so the user
+        # can go fix it in the Finder.
+        (cls.project / "sets" / "lecube" / "modeling").mkdir(parents=True, exist_ok=True)
+        cls._set_active(cls.project)
+
+    def test_entity_folder(self):
+        target = ylos_ui._reveal_target(self.project, "PROP_Tente_Default", None)
+        self.assertEqual(target, self.project / "assets" / "PROP_Tente_Default")
+
+    def test_declared_step_folder(self):
+        target = ylos_ui._reveal_target(self.project, "PROP_Tente_Default", self.step)
+        self.assertEqual(target, self.project / "assets" / "PROP_Tente_Default" / self.step)
+
+    def test_undeclared_step_refused(self):
+        self.assertIsNone(
+            ylos_ui._reveal_target(self.project, "PROP_Tente_Default", "not_a_step"))
+
+    def test_orphan_entity_is_revealable(self):
+        target = ylos_ui._reveal_target(self.project, "lecube", None)
+        self.assertEqual(target, self.project / "sets" / "lecube")
+        self.assertEqual(ylos_ui._reveal_target(self.project, "lecube", "modeling"),
+                         self.project / "sets" / "lecube" / "modeling")
+
+    def test_traversal_refused(self):
+        for entity, step in (("..", None), ("../..", None), ("a/b", None),
+                             ("PROP_Tente_Default", ".."), ("PROP_Tente_Default", "a/b")):
+            self.assertIsNone(ylos_ui._reveal_target(self.project, entity, step),
+                              f"traversal accepted for {entity!r}/{step!r}")
+
+    def test_unknown_entity_404(self):
+        status, _, _ = self._request("/api/reveal", method="POST",
+                                     body={"entity": "PROP_Fantome_Default"})
+        self.assertEqual(status, 404)
+
+    def test_missing_entity_400(self):
+        status, _, _ = self._request("/api/reveal", method="POST", body={})
+        self.assertEqual(status, 400)
+
+    def test_reveal_opens_the_resolved_folder(self):
+        if sys.platform != "darwin":
+            self.skipTest("reveal shells out to macOS 'open'")
+        with patch.object(ylos_ui.subprocess, "Popen") as popen:
+            status, _, body = self._request(
+                "/api/reveal", method="POST",
+                body={"entity": "PROP_Tente_Default", "step": self.step})
+        self.assertEqual(status, 200)
+        expected = str(self.project / "assets" / "PROP_Tente_Default" / self.step)
+        self.assertEqual(json.loads(body)["path"], expected)
+        self.assertEqual(popen.call_args.args[0], ["open", expected])
+
+
+class TestCockpitPayload(ServerTestCase):
+    """/api/assets and /api/asset/<name> as the entity view consumes them (Phase 2.x):
+    per-step status, enriched publishes, multi-DCC scenefiles, dependency view, and the
+    orphan still surfaced as a 'broken' card (never silently skipped)."""
+
+    @classmethod
+    def _publish(cls, entity, step, ext, comment=None, dependencies=None):
+        staging, final = cp.allocate_publish_version(cls.project, entity, comment="", kind=step)
+        version = cp.publish_version_from_dir(final)
+        stem = f"{entity}_{step}_v{version:03d}"
+        (staging / f"{stem}.{ext}").write_bytes(b"artifact")
+        (staging / "thumb.png").write_bytes(b"png")
+        cp.finalize_publish_version(cls.project, entity, staging, final, version,
+                                    expected_artifacts=[stem, "thumb.png"],
+                                    comment=comment, dependencies=dependencies)
+        return version
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_payload", root=str(cls._tmp / "pyroot"),
+                         cache=str(cls._tmp / "pycache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, "PROP_Tente_Default", asset_type="PROP")
+        cp.create_asset(cls.project, "ANIMATION_Sh010_Default",
+                        entity_type="shot", asset_type="ANIMATION")
+        cls.asset_step = cp.resolve_entity(
+            cls.project, "PROP_Tente_Default")["manifest"]["steps"][0]
+        cls.shot_step = cp.resolve_entity(
+            cls.project, "ANIMATION_Sh010_Default")["manifest"]["steps"][0]
+
+        cls.v1 = cls._publish("PROP_Tente_Default", cls.asset_step, "usd", comment="blocking")
+        cls.v2 = cls._publish("PROP_Tente_Default", cls.asset_step, "usd", comment="clean")
+        # The shot pins v1 of the asset -> 'update available' (v2 exists).
+        cls._publish("ANIMATION_Sh010_Default", cls.shot_step, "usd",
+                     dependencies=[{"entity": "PROP_Tente_Default",
+                                    "step": cls.asset_step, "version": cls.v1}])
+
+        # Multi-DCC WIPs on the asset (Houdini .hipnc listed next to .blend).
+        wip = cls.project / "assets" / "PROP_Tente_Default" / cls.asset_step / "wip"
+        wip.mkdir(parents=True, exist_ok=True)
+        (wip / f"PROP_Tente_Default_{cls.asset_step}_v001.blend").write_bytes(b"b")
+        (wip / f"PROP_Tente_Default_{cls.asset_step}_v002.hipnc").write_bytes(b"h")
+
+        # Orphan folder (real case of Ylos__Test: sets/lecube).
+        (cls.project / "sets" / "lecube" / "modeling" / "wip").mkdir(parents=True, exist_ok=True)
+        cls._set_active(cls.project)
+
+    def _detail(self, name):
+        status, _, body = self._request(f"/api/asset/{name}")
+        self.assertEqual(status, 200)
+        return json.loads(body)
+
+    def _cards(self):
+        status, _, body = self._request("/api/assets")
+        self.assertEqual(status, 200)
+        return {a["name"]: a for a in json.loads(body)["assets"]}
+
+    def test_grid_card_carries_status_and_outdated(self):
+        cards = self._cards()
+        self.assertIn(self.asset_step, cards["PROP_Tente_Default"]["step_status"])
+        self.assertEqual(cards["PROP_Tente_Default"]["step_status"][self.asset_step],
+                         "published")
+        self.assertEqual(cards["PROP_Tente_Default"]["outdated"], 0)
+        # The shot pins an outdated version of the asset -> badge on the shot card.
+        self.assertGreaterEqual(cards["ANIMATION_Sh010_Default"]["outdated"], 1)
+
+    def test_orphan_still_a_broken_card(self):
+        card = self._cards()["lecube"]
+        self.assertTrue(card["broken"])
+        self.assertEqual(card["step_status"], {})
+        self.assertEqual(card["outdated"], 0)
+        self.assertIn("modeling", card["steps"])   # disk sub-folders, no manifest
+
+    def test_detail_publishes_are_enriched_rows(self):
+        rows = self._detail("PROP_Tente_Default")["publishes"][self.asset_step]
+        self.assertEqual([r["version"] for r in rows], [self.v1, self.v2])
+        last = rows[-1]
+        self.assertEqual(last["status"], "complete")
+        self.assertEqual(last["ext"], "usd")
+        self.assertEqual(last["comment"], "clean")
+        self.assertTrue(last["exists"])
+        self.assertTrue(last["published_utc"])
+        self.assertTrue(last["thumb"].startswith("/thumb/PROP_Tente_Default/"))
+        # Never an absolute path: the client imports by {entity, step, version}.
+        self.assertNotIn("abs_path", last)
+
+    def test_detail_scenefiles_carry_every_dcc(self):
+        sf = self._detail("PROP_Tente_Default")["scenefiles"][self.asset_step]
+        self.assertEqual([(r["version"], r["dcc"]) for r in sf],
+                         [(1, "blender"), (2, "houdini")])
+        self.assertTrue(all("path" not in r for r in sf))  # no absolute path client-side
+
+    def test_detail_dependencies_uses_used_in_outdated(self):
+        shot = self._detail("ANIMATION_Sh010_Default")["dependencies"]
+        self.assertEqual([e["dependency"]["entity"] for e in shot["uses"]],
+                         ["PROP_Tente_Default"])
+        self.assertEqual(len(shot["outdated"]), 1)
+        asset = self._detail("PROP_Tente_Default")["dependencies"]
+        self.assertEqual([e["consumer"]["entity"] for e in asset["used_in"]],
+                         ["ANIMATION_Sh010_Default"])
+        self.assertEqual(asset["outdated"], [])
+
+    def test_detail_step_status_is_the_full_orchestrator_dict(self):
+        detail = self._detail("PROP_Tente_Default")
+        entry = detail["step_status"][self.asset_step]
+        self.assertEqual(set(entry), {"status", "explicit", "derived"})
+        self.assertFalse(entry["explicit"])
+
+    def test_detail_unknown_entity_404(self):
+        status, _, _ = self._request("/api/asset/PROP_Fantome_Default")
+        self.assertEqual(status, 404)
 
 
 if __name__ == "__main__":

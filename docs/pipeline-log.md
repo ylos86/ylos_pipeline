@@ -965,3 +965,118 @@ Tests : 226 stdlib (188 → +38 : `tests/test_step_status.py`, `tests/test_depen
 verts sous Python 3.14 local. Note environnement : **hython sans licence** sur la machine
 (`No licenses could be found`) → les e2e Houdini ne peuvent pas tourner dans cette session ;
 Blender 5.2 headless OK.
+
+## Parité Prism — web (Project Browser cockpit)
+
+**2026-09-10** — `ylos_ui.py`, `app.html`, `launch_ui.command`, `tests/test_ylos_ui.py`,
+`tools/blender/launch_context.py`, `tools/blender/test_launch_context.py`.
+
+Point de départ : la grille d'assets était plate, l'historique des WIP était enterré dans un
+modal (`js-modal-scenefiles`), et le seul moyen de créer une scène d'auteur restait de faire
+*Save Version* depuis Blender. Les données existaient déjà côté orchestrateur (schéma 2.2 du
+matin : `get/set_step_status`, `list_scenefiles` multi-DCC, `list_publishes`,
+`build_dependency_index`) — le travail est donc d'exposition et de navigation, pas de logique
+métier : **aucune règle n'a été ajoutée au serveur ni à `app.html`**, `create_project.py` n'a
+pas été touché.
+
+### Env par-session (phase 0.2) — la tension #1 est levée
+
+`$PROJ_ROOT`/`$PROJ_CACHE` étaient globaux au shell : deux DCC sur deux projets se marchaient
+dessus. Deux points, complémentaires :
+
+- `ylos_ui._launch_env(project_dir, base_env)` — fonction **pure**, ne touche jamais
+  `os.environ`, rend une copie de l'env avec `PROJ_ROOT` = **parent** du dossier projet
+  (contrat `$PROJ_ROOT/<projet> == project_dir`, cf. `_expand_proj_root` /
+  `ylos_houdini.env_relative`) — **toujours écrasé**, jamais la valeur héritée du shell — et
+  `PROJ_CACHE` conservé tel quel s'il existe, sinon `create_project.resolve_cache()`. Passé
+  au fils via `subprocess.Popen(env=...)`, jamais un export.
+- `launch_context._apply_session_env(project)` — même calcul **dans le process Blender**, au
+  premier tick, avant toute résolution. Couvre le lancement CLI (hors serveur) et surtout rend
+  la valeur **observable dans `~/.ylos/launch.log`** : c'est exactement le critère
+  d'acceptation de la phase 0.2 (« `os.environ['PROJ_ROOT']` distinct par process, vérifié au
+  1er tick »). L'override d'une valeur héritée divergente est loggé explicitement.
+
+Vérifié pour de vrai : `test_launch_context.py` invocation D lance Blender avec un
+`PROJ_ROOT=/nonexistent/other/project/root` délibérément faux et assère que le log porte
+l'override vers le parent réel du projet.
+
+### « Nouvelle scène » (phase 1.4) — le 3e verbe
+
+`POST /api/open-blender {entity, step, create: true}` :
+
+- le serveur **valide seulement** via `create_project.scene_starter_spec(...)` — 404 si
+  l'entité est inconnue (`resolve_entity is None`), 400 sinon, **avec la `reason` de
+  l'orchestrateur telle quelle** (le message « step 'zzz' not declared… » n'est pas réécrit
+  côté serveur : point unique) ;
+- il n'alloue **pas** la version WIP. C'était la décision structurante : `scene_starter_spec`
+  est appelée une deuxième fois par l'opérateur dans Blender, et pré-allouer côté serveur
+  aurait **brûlé un numéro de version par clic**. D'où `--kind create` **sans `--path`** —
+  seul kind dans ce cas, `_build_launch_argv` l'assume explicitement ;
+- `launch_context._do_create_scene()` pose le contexte (`_apply_context` : `open_context` +
+  les enums de scène que l'opérateur relit) puis délègue à l'opérateur **existant**
+  `ylos.create_scene` en `'EXEC_DEFAULT'` (ce qui saute son `invoke_confirm` GUI, comme son
+  propre commentaire l'anticipait). Le launcher ne redérive aucune règle de département.
+
+Un 4e verbe au passage : `{entity, step, scenefile: <version>}` ouvre **une** version WIP
+précise (résolue par `list_scenefiles`, jamais un chemin client). Une ligne `.hip*` est
+refusée en 400 explicite plutôt que passée à `open_mainfile`.
+
+### Statut par step + payload cockpit (phase 2.1)
+
+- `POST /api/set-step-status {entity, step, status}` → `create_project.set_step_status`.
+  `ValueError` → 400 (message de l'orchestrateur), `FileNotFoundError` → 404. `'auto'` efface
+  la valeur explicite et la clé disparaît du manifeste quand elle devient vide.
+- `GET /api/config` expose `step_statuses` / `step_status_explicit` / `step_status_auto` :
+  le sélecteur d'`app.html` ne code **rien** en dur — seuls `review`/`approved` sont
+  proposés, `empty`/`wip`/`published` restent dérivés.
+- `GET /api/asset/<name>` devient le payload unique du drill-down : `step_status` complet
+  (`{status, explicit, derived}`), `scenefiles` **tous DCC** (chaque ligne porte `dcc`,
+  le `path` absolu est retiré), `publishes` enrichis par step (version, statut, ext, URL de
+  vignette, commentaire, `published_utc`, `dependencies`, `exists`), `dependencies`
+  (`uses`/`used_in`/`outdated`).
+- `GET /api/assets` ajoute `step_status` et `outdated` par entité, avec **un seul**
+  `build_dependency_index()` par requête (il scanne tout le projet — un par entité aurait été
+  quadratique).
+- `POST /api/reveal {entity, step?}` : chemin résolu **serveur** (`_reveal_target`), jamais
+  envoyé par le client. Un orphelin (carte `broken`) reste révélable — c'est précisément
+  l'entité qu'on veut aller réparer dans le Finder. Traversal (`..`, `a/b`) et step non
+  déclaré refusés.
+
+### Cockpit (phases 2.2 / 2.3 / 3.2 / 2.4)
+
+Le modal `js-modal-scenefiles` est **supprimé** (markup + JS) et remplacé par une vraie vue
+dans le `<main>` : fil d'Ariane (retour Esc), en-tête (vignette, nom, famille/type, nombre de
+départements, chip frame range des shots réutilisant l'éditeur existant), colonne
+**Départements** (pastille de statut colorée, vignette du dernier publish, version), puis pour
+le step sélectionné : **galerie de versions** (vignettes côte à côte, mode comparaison A/B en
+grand avec version/date/commentaire, FIFO au 3e clic pour ne jamais bloquer le geste),
+**Scenefiles** (version, badge DCC, commentaire, user, date, « Open », « New Scene » en
+primaire), **Products** (version, ext, statut, date, commentaire, dépendances en tooltip,
+« Import into Blender », désactivé si l'artefact manque sur disque), **sélecteur de statut**,
+**Reveal in Finder**, et **Dependencies** « Uses » / « Used in » avec version épinglée → latest
+et badge « update ». Badge `↑ N updates` aussi sur les cartes de la grille quand `outdated > 0`.
+Palette, tokens et motion existants conservés — affinage, pas refonte. Clavier : Esc ferme
+modal → vue entité → recherche (de l'intérieur vers l'extérieur), `/` focalise la recherche
+(grille seulement, jamais en train de saisir).
+
+### Deux bugs trouvés et corrigés
+
+1. **Sélecteur CSS `header` nu** — l'app-bar était stylée par un `header { position: sticky;
+   height: 54px }` sans portée. Le `<header>` de la vue entité en héritait : ses boutons
+   débordaient par-dessus la colonne des départements. Vu à l'écran, pas dans les tests.
+   Corrigé en scopant à `body > header` (et l'`@supports` associé) plutôt qu'en renonçant à
+   la balise sémantique — le piège aurait re-mordu au prochain `<header>`.
+2. **Serveur fantôme sur le port 8765** — un `ylos_ui.py` d'une session morte tenait encore le
+   port, pointé sur un projet de démo dans un scratchpad. Tué avant de démarrer le mien.
+
+### Points laissés ouverts
+
+- `~/Ylos__Test` n'a **aucune arête de dépendance** (aucun publish n'y déclare de
+  `dependencies`) : les sections « Uses » / « Used in » et le badge `outdated` ont été validés
+  par tests stdlib (fixture shot → asset v001 avec v002 publiée) et par injection de payload
+  dans la page, pas sur le projet réel. À revoir au shakedown.
+- Le verbe `create` déclenché **depuis le navigateur** contre `~/Ylos__Test` n'a pas été joué
+  (le projet est en lecture seule pour ce chantier) : la chaîne complète est prouvée par
+  l'e2e launcher sur un projet jetable, et côté serveur l'argv exact a été vérifié au curl.
+- `POST /api/reveal` répond 501 hors macOS — pas de branche Linux/Windows (`xdg-open`,
+  `explorer`), à ajouter si le besoin apparaît.

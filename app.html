@@ -87,7 +87,11 @@
     ::-webkit-scrollbar-track { background: transparent; }
 
     /* ── Header ─────────────────────────────────── */
-    header {
+    /* SCOPED to the app bar (body > header) on purpose: a bare `header` selector also
+       caught the <header> of the entity view, which inherited position:sticky and
+       height:54px and spilled its buttons over the departments column. Any other
+       <header> in the page now styles itself. */
+    body > header {
       position: sticky; top: 0; z-index: 100;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 20px; height: 54px;
@@ -98,7 +102,7 @@
     }
     /* Solid fallback where backdrop-filter is unsupported — never a see-through bar. */
     @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-      header, .toolbar { background: var(--bg-2); }
+      body > header, .toolbar { background: var(--bg-2); }
     }
     .header-left  { display: flex; align-items: center; gap: 14px; }
     .header-right { display: flex; align-items: center; gap: 10px; }
@@ -544,7 +548,6 @@
     .ws-pin-row select:focus { border-color: var(--accent); outline: none; }
     .ws-pins-empty { font-size: 12.5px; color: var(--text-muted); }
 
-    /* Scenefiles (historique WIP + commentaires) */
     .icon-btn {
       display: flex; align-items: center; justify-content: center;
       width: 24px; height: 24px; padding: 0; flex-shrink: 0;
@@ -553,25 +556,196 @@
     }
     .icon-btn:hover { border-color: var(--accent); color: var(--text); }
 
-    .sf-body { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
-    .sf-step-label {
-      font-size: 11px; color: var(--text-dim); text-transform: uppercase;
-      letter-spacing: .5px; margin-bottom: 6px;
+    /* ── Step status (schema 2.2) ─────────────────────
+       ONE hue per status, reused identically on the grid card, the step column and the
+       selector — the colour IS the vocabulary, so it must never drift between views.
+       Vocabulary itself comes from /api/config (create_project.STEP_STATUSES). */
+    .st-pill {
+      display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+      font-size: 10px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 999px; border: 1px solid transparent;
+      background: var(--st-bg, rgba(255,255,255,.05));
+      color: var(--st-fg, var(--text-dim));
+      border-color: var(--st-bd, var(--border));
     }
-    .sf-row {
-      padding: 7px 10px; border-radius: 7px;
+    .st-empty     { --st-bg: rgba(255,255,255,.04); --st-fg: var(--text-dim);  --st-bd: var(--border); }
+    .st-wip       { --st-bg: rgba(251,146,60,.18);  --st-fg: #fdba74;          --st-bd: rgba(251,146,60,.4); }
+    .st-published { --st-bg: rgba(96,165,250,.18);  --st-fg: #93c5fd;          --st-bd: rgba(96,165,250,.4); }
+    .st-review    { --st-bg: rgba(251,191,36,.18);  --st-fg: #fcd34d;          --st-bd: rgba(251,191,36,.45); }
+    .st-approved  { --st-bg: rgba(52,211,153,.18);  --st-fg: #6ee7b7;          --st-bd: rgba(52,211,153,.4); }
+    .st-pill.explicit::before { content: '●'; font-size: 7px; line-height: 1; }
+
+    /* "Update available" — the dependency badge (Phase 3.2). Same hue everywhere it
+       appears (grid card, entity header, step row, Uses row). */
+    .upd-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+      background: rgba(251,191,36,.16); color: #fcd34d; border: 1px solid rgba(251,191,36,.42);
+    }
+    .card-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+
+    /* ── Entity view (cockpit drill-down, Phase 2.2) ───
+       Replaces the buried scenefiles modal: a real view in the main area, with a
+       breadcrumb back (Esc). Two columns: departments/steps on the left, the selected
+       step's panels on the right. */
+    .entity-view { animation: entityIn var(--dur) var(--ease-out) both; }
+    @keyframes entityIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .crumb { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 12.5px; }
+    .crumb-back {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text-muted); cursor: pointer; font: inherit;
+      transition: border-color var(--dur-fast), color var(--dur-fast), background var(--dur-fast);
+    }
+    .crumb-back:hover { border-color: var(--accent); color: var(--text); background: var(--bg-hover); }
+    .crumb-back:focus-visible { box-shadow: var(--ring); }
+    .crumb-sep  { color: var(--text-dim); }
+    .crumb-here { color: var(--text); font-weight: 600; }
+
+    .entity-head {
+      display: flex; gap: 18px; align-items: flex-start;
+      padding: 16px; margin-bottom: 18px;
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: var(--shadow-card);
+    }
+    .entity-head-thumb {
+      width: 132px; height: 92px; flex-shrink: 0; border-radius: 9px; overflow: hidden;
+      background: var(--bg-3); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .entity-head-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .entity-head-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+    .entity-title { font-size: 19px; font-weight: 650; letter-spacing: -.3px; word-break: break-all; }
+    .entity-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 6px;
+      background: var(--bg-3); border: 1px solid var(--border); color: var(--text-muted);
+    }
+    .entity-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+
+    .entity-body { display: grid; grid-template-columns: minmax(190px, 250px) 1fr; gap: 18px; align-items: start; }
+    @media (max-width: 860px) { .entity-body { grid-template-columns: 1fr; } }
+
+    .dept-col {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .col-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+      color: var(--text-dim); padding: 2px 6px 6px;
+    }
+    .dept-row {
+      display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+      padding: 7px 8px; border-radius: 8px; cursor: pointer; font: inherit;
+      background: transparent; border: 1px solid transparent; color: var(--text-muted);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+    }
+    .dept-row:hover { background: var(--bg-3); color: var(--text); }
+    .dept-row.active { background: var(--wine); border-color: var(--accent); color: var(--on-wine); }
+    .dept-row:focus-visible { box-shadow: var(--ring); }
+    .dept-thumb {
+      width: 34px; height: 24px; border-radius: 5px; flex-shrink: 0; object-fit: cover;
       background: var(--bg-3); border: 1px solid var(--border);
     }
-    .sf-row + .sf-row { margin-top: 5px; }
-    .sf-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .sf-ver {
-      font-size: 12px; color: var(--accent); font-weight: 600;
+    .dept-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+    .dept-name { flex: 1; min-width: 0; font-size: 12.5px; text-transform: capitalize;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dept-ver {
+      font-size: 11px; font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      color: var(--text-dim); flex-shrink: 0;
+    }
+    .dept-row.active .dept-ver { color: var(--on-wine); }
+    .dept-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--st-fg, var(--text-dim)); }
+
+    .panel-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .panel {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+    }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+    }
+    .panel-title { font-size: 13px; font-weight: 620; letter-spacing: -.1px; }
+    .panel-title .muted { color: var(--text-dim); font-weight: 400; margin-left: 6px; font-size: 11.5px; }
+    .panel-empty { font-size: 12.5px; color: var(--text-dim); font-style: italic; padding: 6px 0; }
+
+    .status-select {
+      background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+      border-radius: 7px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+    }
+    .status-select:hover { border-color: var(--border-hi); }
+    .status-select:focus { border-color: var(--accent); outline: none; }
+    .field-inline { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
+
+    /* Version rows (scenefiles + products share the geometry so the two panels read
+       as one family; only the trailing action differs). */
+    .vrow {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 8px;
+      background: var(--bg-3); border: 1px solid var(--border);
+    }
+    .vrow + .vrow { margin-top: 6px; }
+    .vrow:hover { border-color: var(--border-hi); }
+    .vrow-ver {
+      font-size: 12px; font-weight: 600; color: var(--accent); flex-shrink: 0;
       font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
     }
-    .sf-meta { font-size: 11px; color: var(--text-dim); }
-    .sf-comment { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
-    .sf-comment.sf-comment-empty { font-style: italic; color: var(--text-dim); }
-    .sf-empty { font-size: 12.5px; color: var(--text-muted); }
+    .vrow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .vrow-comment { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vrow-comment.empty { font-style: italic; color: var(--text-dim); }
+    .vrow-meta { font-size: 11px; color: var(--text-dim); display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag {
+      font-size: 9.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+      padding: 1px 6px; border-radius: 5px; flex-shrink: 0;
+      background: var(--bg-hover); color: var(--text-dim); border: 1px solid var(--border);
+    }
+    .tag.dcc-blender { color: #fdba74; border-color: rgba(251,146,60,.35); }
+    .tag.dcc-houdini { color: #93c5fd; border-color: rgba(96,165,250,.35); }
+    .tag.missing     { color: var(--red); border-color: rgba(248,113,113,.4); }
+    .btn-mini { font-size: 11.5px; padding: 4px 10px; flex-shrink: 0; }
+
+    /* Version gallery (Phase 2.3) — thumbnails side by side + 2-up compare. */
+    .gallery { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+    .gal-item {
+      width: 112px; flex-shrink: 0; padding: 0; cursor: pointer; font: inherit; text-align: center;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 9px; overflow: hidden;
+      color: var(--text-muted); transition: border-color var(--dur-fast), transform var(--dur-fast);
+    }
+    .gal-item:hover { border-color: var(--border-hi); transform: translateY(-2px); }
+    .gal-item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .gal-item:focus-visible { box-shadow: var(--ring); }
+    .gal-thumb {
+      width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; background: var(--bg);
+    }
+    .gal-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+    .gal-cap { padding: 5px 6px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+    .gal-ver { font-weight: 600; color: var(--text); font-family: 'SF Mono', ui-monospace, monospace; }
+    .gal-date { font-size: 10px; color: var(--text-dim); }
+    .gal-pick { font-size: 9.5px; color: var(--accent); font-weight: 700; }
+
+    .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+    @media (max-width: 640px) { .compare-grid { grid-template-columns: 1fr; } }
+    .cmp-card { background: var(--bg-3); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .cmp-card img { width: 100%; display: block; aspect-ratio: 4/3; object-fit: contain; background: var(--bg); }
+    .cmp-none { aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; color: var(--text-dim); background: var(--bg); }
+    .cmp-body { padding: 9px 11px; display: flex; flex-direction: column; gap: 3px; }
+    .cmp-ver { font-size: 12.5px; font-weight: 650; color: var(--accent); font-family: 'SF Mono', ui-monospace, monospace; }
+
+    /* Dependencies (Phase 3.2) */
+    .dep-row {
+      display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+      padding: 7px 10px; border-radius: 8px;
+      background: var(--bg-3); border: 1px solid var(--border);
+    }
+    .dep-row + .dep-row { margin-top: 6px; }
+    .dep-link {
+      font-size: 12.5px; font-weight: 600; color: var(--text); background: none; border: none;
+      padding: 0; cursor: pointer; font-family: inherit; text-align: left;
+    }
+    .dep-link:hover { color: var(--accent); text-decoration: underline; }
+    .dep-meta { font-size: 11px; color: var(--text-dim); }
+    .dep-pin { font-family: 'SF Mono', ui-monospace, monospace; font-size: 11px; color: var(--text-muted); }
 
     .hidden { display: none !important; pointer-events: none !important; }
 
@@ -704,6 +878,10 @@
     <p id="js-empty-reason">This project has no assets yet.</p>
   </div>
 
+  <!-- Entity view (cockpit drill-down, Phase 2.2). Filled by renderEntity(); replaces
+       the grid in place — the breadcrumb (or Esc) comes back. -->
+  <section class="entity-view hidden" id="js-entity" aria-label="Entity"></section>
+
 </main>
 
 <!-- ── Change-project modal ────────────────────────── -->
@@ -778,19 +956,6 @@
     <div class="modal-actions">
       <button class="btn btn-ghost"   type="button" id="js-ws-cancel">Cancel</button>
       <button class="btn btn-primary" type="button" id="js-ws-ok">Sync</button>
-    </div>
-  </div>
-</div>
-
-<!-- ── Scenefiles modal (WIP history + comments) ── -->
-<div class="modal-overlay hidden" id="js-modal-scenefiles">
-  <div class="modal">
-    <h2 id="js-sf-title">Scenefiles</h2>
-    <p class="subtitle">History of WIP versions (<code>.blend</code>), comment of
-      each <em>Save Version</em>.</p>
-    <div class="sf-body" id="js-sf-body"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" type="button" id="js-sf-close">Close</button>
     </div>
   </div>
 </div>
@@ -890,7 +1055,23 @@ const S = {
   // moving it on every poll would re-download all thumbnails in a loop.
   thumbToken:   Date.now(),
   _thumbSig:    null,
+  // ── Entity view (cockpit drill-down, Phase 2.2) ──
+  entity:       null,   // entity NAME currently drilled into (null = grid)
+  entityData:   null,   // last /api/asset/<name> payload
+  entityStep:   null,   // selected department/step inside that entity
+  comparePick:  [],     // version gallery: up to 2 picked versions (Phase 2.3)
 };
+
+// Step-status vocabulary — SERVER-OWNED (/api/config ← create_project.STEP_STATUSES).
+// The values below are only the offline fallback, same discipline as FAMILY_CONFIG:
+// with the server reachable they are overwritten. Never add a status here without
+// adding it in create_project.py first (principle 5).
+let STATUS_VOCAB = {
+  all:      ['empty', 'wip', 'published', 'review', 'approved'],
+  explicit: ['review', 'approved'],
+  auto:     'auto',
+};
+const statusLabel = s => (s || 'empty').replace(/^./, c => c.toUpperCase());
 let _pollTimer  = null;
 let _toastTimer = null;
 
@@ -904,6 +1085,7 @@ const ERR_BANNER   = el('js-error-banner');
 const TOOLBAR      = el('js-toolbar');
 const NO_PROJECT   = el('js-no-project');
 const GRID         = el('js-grid');
+const ENTITY       = el('js-entity');
 const EMPTY        = el('js-empty');
 const EMPTY_REASON = el('js-empty-reason');
 const COUNT        = el('js-count');
@@ -941,7 +1123,17 @@ let FAMILY_CONFIG = {
 async function loadConfig() {
   try {
     const { ok, data } = await api('/api/config');
-    if (ok && data.families) FAMILY_CONFIG = data.families;
+    if (!ok) return;
+    if (data.families) FAMILY_CONFIG = data.families;
+    // Status vocabulary (schema 2.2): 'all' = displayable, 'explicit' = settable, the
+    // rest is derived from disk by the orchestrator and never offered in the selector.
+    if (Array.isArray(data.step_statuses)) {
+      STATUS_VOCAB = {
+        all:      data.step_statuses,
+        explicit: data.step_status_explicit || [],
+        auto:     data.step_status_auto || 'auto',
+      };
+    }
   } catch { /* offline: the local fallback above stays in place */ }
 }
 
@@ -1042,6 +1234,11 @@ function gridSignature(list) {
   return list.map(a =>
     a.name + '|' + (a.broken ? 'B' : '') + '|' + (a.thumb || '') + '|' + (a.thumb_source || '') + '|' +
     (a.frame_range ? `${a.frame_range.start}-${a.frame_range.end}-${a.frame_range.fps}` : '') + '|' +
+    // Status per step + 'update available' count (schema 2.2 / Phase 3.2): both are drawn
+    // on the card, so both belong to its identity — otherwise a status change made from
+    // the entity view would not repaint the grid behind it.
+    Object.entries(a.step_status || {}).map(([s, v]) => `${s}=${v}`).sort().join(',') + '|' +
+    (a.outdated || 0) + '|' +
     Object.entries(a.last_versions || {})
       .map(([s, v]) => `${s}:${v.version || 0}:${v.ext || ''}:${v.thumb || ''}`).join(',')
   ).join('||') + '#' + S.thumbToken;
@@ -1050,13 +1247,18 @@ function gridSignature(list) {
 function render() {
   const hasProject = !!(S.project && S.online);
   const visible    = hasProject ? filtered() : [];
+  // The entity view takes over the main area: grid, empty state and toolbar filters
+  // step aside rather than stacking behind it (Phase 2.2 — a view, not a modal).
+  const inEntity   = hasProject && !!S.entity;
 
   NO_PROJECT.classList.toggle('hidden', hasProject || !S.online);
-  TOOLBAR   .classList.toggle('hidden', !hasProject);
-  GRID      .classList.toggle('hidden', !hasProject || visible.length === 0);
-  EMPTY     .classList.toggle('hidden', !hasProject || visible.length > 0);
+  TOOLBAR   .classList.toggle('hidden', !hasProject || inEntity);
+  GRID      .classList.toggle('hidden', !hasProject || inEntity || visible.length === 0);
+  EMPTY     .classList.toggle('hidden', !hasProject || inEntity || visible.length > 0);
+  ENTITY    .classList.toggle('hidden', !inEntity);
 
-  if (!hasProject) { S._gridSig = null; return; }
+  if (!hasProject) { S._gridSig = null; closeEntity({ silent: true }); return; }
+  if (inEntity) { S._gridSig = null; return; }
 
   COUNT.textContent = `${visible.length} / ${S.assets.length} asset${S.assets.length !== 1 ? 's' : ''}`;
 
@@ -1077,19 +1279,28 @@ function render() {
 
   GRID.innerHTML = visible.map((a, i) => cardHTML(a, i)).join('');
 
+  // A card is the door to the ENTITY VIEW (Phase 2.2 — the old buried scenefiles modal
+  // is gone). Its inner controls keep their own verbs and stop the propagation, so the
+  // card click never fights with "Open the scene" / "Import" / "Set frames".
+  GRID.querySelectorAll('[data-card-entity]').forEach(card => {
+    card.addEventListener('click', () => openEntity(card.dataset.cardEntity));
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); openEntity(card.dataset.cardEntity); }
+    });
+  });
+
   // Two verbs, never a path built here (see INC-3): the server resolves
   // {entity, step?} ('Open the scene') or {entity, step, version} ('Import').
   GRID.querySelectorAll('[data-open-entity]').forEach(btn =>
-    btn.addEventListener('click', () => openScene(btn.dataset.openEntity, btn.dataset.openStep))
-  );
-  GRID.querySelectorAll('[data-import-entity]').forEach(row =>
-    row.addEventListener('click', () => importPublish(
-      row.dataset.importEntity, row.dataset.importStep, row.dataset.importVersion))
-  );
-  GRID.querySelectorAll('[data-scenefiles-entity]').forEach(btn =>
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      openScenefilesModal(btn.dataset.scenefilesEntity);
+      openScene(btn.dataset.openEntity, btn.dataset.openStep);
+    })
+  );
+  GRID.querySelectorAll('[data-import-entity]').forEach(row =>
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      importPublish(row.dataset.importEntity, row.dataset.importStep, row.dataset.importVersion);
     })
   );
   GRID.querySelectorAll('[data-framerange-entity]').forEach(btn =>
@@ -1111,7 +1322,8 @@ const THUMB_TAGS = {
 };
 
 function cardHTML(asset, i = 0) {
-  const { name, family, type, last_versions = {}, frame_range, thumb, thumb_source, broken } = asset;
+  const { name, family, type, last_versions = {}, step_status = {}, outdated = 0,
+          frame_range, thumb, thumb_source, broken } = asset;
   const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
   const color = TYPE_COLORS[type] || '#9c9cc8';  // aligned with --text-muted (contrast fix 2026-08-03)
 
@@ -1134,9 +1346,11 @@ function cardHTML(asset, i = 0) {
         const rowThumb = v.thumb
           ? `<img class="step-thumb" src="${esc(thumbURL(v.thumb))}" alt="" loading="lazy">`
           : `<span class="step-thumb step-thumb-empty">${iconBox(11)}</span>`;
+        const st = step_status[step];
         return `<div class="step-row" data-import-entity="${esc(name)}" data-import-step="${esc(step)}" data-import-version="${v.version ?? ''}" title="Import ${esc(step)} ${ver} (new session)">
                   ${rowThumb}
                   <span class="step-name">${esc(step)}</span>
+                  ${st ? `<span class="dept-dot st-${esc(st)}" title="${esc(statusLabel(st))}"></span>` : ''}
                   ${v.ext ? `<span class="step-ext">${esc(v.ext.toUpperCase())}</span>` : ''}
                   <span class="step-ver">${esc(ver)}</span>
                 </div>`;
@@ -1161,18 +1375,26 @@ function cardHTML(asset, i = 0) {
        </button>`
     : '';
 
+  // 'Update available' (Phase 3.2): this entity pins, in its latest publish, a version
+  // older than the dependency's latest complete publish. Count computed server-side
+  // (entity_dependencies.outdated) — never re-derived here.
+  const updBadge = outdated > 0
+    ? `<span class="upd-badge" title="${outdated} dependenc${outdated > 1 ? 'ies' : 'y'} with a newer version available">
+         ${iconUp(10)} ${outdated} update${outdated > 1 ? 's' : ''}
+       </span>`
+    : '';
+
   return `
-    <div class="card${broken ? ' broken' : ''}" style="--i:${i}">
+    <div class="card${broken ? ' broken' : ''}" style="--i:${i}" data-card-entity="${esc(name)}"
+         role="button" tabindex="0" title="Open ${esc(name)}">
       <div class="card-thumb">${thumbSection}</div>
       <div class="card-body">
         <div class="card-head">
           <span class="card-name">${esc(name)}</span>
-          <button class="icon-btn" type="button" data-scenefiles-entity="${esc(name)}" title="Scenefiles (WIP history)" style="flex-shrink:0">
-            ${iconHistory(13)}
-          </button>
+          <span class="icon-btn" aria-hidden="true" title="Open the entity view">${iconChevron(13)}</span>
         </div>
         ${warnHTML}
-        ${frameChip}
+        ${(updBadge || frameChip) ? `<div class="card-badges">${updBadge}${frameChip}</div>` : ''}
         <div class="steps-list">${stepsSection}</div>
         <div class="card-footer">
           ${bestStep
@@ -1211,6 +1433,21 @@ function iconHistory(s) {
     <polyline points="3 4 3 9 8 9"/>
     <polyline points="12 7 12 12 16 14"/>
   </svg>`;
+}
+function iconChevron(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>`;
+}
+function iconBack(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>`;
+}
+function iconUp(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
+}
+function iconNew(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg>`;
+}
+function iconFolder(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
 }
 
 function esc(s) {
@@ -1273,6 +1510,22 @@ async function importPublish(entity, step, version) {
   await _launchDcc({ entity, step, version: Number(version) }, 'Import started (new session)');
 }
 
+// 'New Scene' (Scene Creator, Phase 1.4): a 3rd verb of the same endpoint. The server
+// validates through create_project.scene_starter_spec and launches the versioned launcher
+// with --kind create; the WIP version is allocated by the Blender operator itself.
+async function createScene(entity, step) {
+  if (!step) { toast('Pick a department first', 'err'); return; }
+  await _launchDcc({ entity, step, create: true },
+                   `New ${step} scene — Blender is starting`);
+}
+
+// Open ONE specific WIP version (version gallery / scenefiles list). The client sends a
+// version NUMBER, never a path: the server resolves it via create_project.list_scenefiles.
+async function openScenefile(entity, step, version) {
+  await _launchDcc({ entity, step, scenefile: Number(version) },
+                   `Opening v${String(version).padStart(3, '0')}`);
+}
+
 async function _launchDcc(payload, okMessage) {
   try {
     const { ok, data } = await api('/api/open-blender', {
@@ -1280,6 +1533,382 @@ async function _launchDcc(payload, okMessage) {
       body: JSON.stringify(payload),
     });
     ok ? toast(okMessage, 'ok') : toast(data.error || 'Error', 'err');
+  } catch {
+    toast('Server unavailable', 'err');
+  }
+}
+
+// ═════════════════════════════════════════════════════
+// Entity view — the cockpit drill-down (plan-usable-v1 Phase 2.2/2.3/3.2)
+//
+// One /api/asset/<name> call feeds everything below: per-step status (schema 2.2),
+// scenefiles of every DCC, enriched publishes and the dependency view. NOTHING is
+// re-derived client-side — the server is the only place that knows the rules
+// (principle 5); this module is presentation + verbs.
+// ═════════════════════════════════════════════════════
+
+async function openEntity(name, step) {
+  // An ORPHAN entity (broken card: no manifest.json) has nothing to drill into — the
+  // server rightly 404s on /api/asset. Say WHY here instead of opening an empty view.
+  const card = S.assets.find(a => a.name === name);
+  if (card && card.broken) { toast(card.broken, 'err'); return; }
+  S.entity = name;
+  S.entityStep = step || null;
+  S.comparePick = [];
+  ENTITY.innerHTML = `<div class="state-center"><h3>Loading ${esc(name)}…</h3></div>`;
+  render();
+  await loadEntity();
+}
+
+function closeEntity(opts = {}) {
+  if (!S.entity && opts.silent) return;
+  S.entity = null;
+  S.entityData = null;
+  S.entityStep = null;
+  S.comparePick = [];
+  ENTITY.innerHTML = '';
+  if (!opts.silent) { S._gridSig = null; render(); }
+}
+
+async function loadEntity() {
+  const name = S.entity;
+  if (!name) return;
+  try {
+    const { ok, data } = await api(`/api/asset/${encodeURIComponent(name)}`);
+    if (S.entity !== name) return;            // the user already navigated away
+    if (!ok) {
+      // A card can be stale (entity deleted / renamed on disk between two polls):
+      // say so and go back to the grid rather than leaving a dead view.
+      toast(data.error || 'Entity not found', 'err');
+      closeEntity();
+      return;
+    }
+    S.entityData = data;
+    const steps = entitySteps(data);
+    if (!S.entityStep || !steps.includes(S.entityStep)) S.entityStep = steps[0] || null;
+    renderEntity();
+  } catch {
+    setOnline(false);
+    toast('Server unavailable', 'err');
+  }
+}
+
+// Every step worth showing: those declared in the manifest first (the pipeline's own
+// order — never re-sorted alphabetically), then any step that carries publishes or
+// scenefiles without being declared (legacy entity, hand-made folder).
+function entitySteps(d) {
+  const steps = [...(d.steps || [])];
+  for (const s of [...Object.keys(d.publishes || {}), ...Object.keys(d.scenefiles || {})])
+    if (!steps.includes(s)) steps.push(s);
+  return steps;
+}
+
+const verLabel = v => (v || v === 0) ? `v${String(v).padStart(3, '0')}` : '—';
+const shortDate = s => (s || '').slice(0, 10);
+
+function selectStep(step) {
+  S.entityStep = step;
+  S.comparePick = [];
+  renderEntity();
+}
+
+function renderEntity() {
+  const d = S.entityData;
+  if (!d) return;
+  const steps  = entitySteps(d);
+  const step   = S.entityStep;
+  const status = d.step_status || {};
+  const deps   = d.dependencies || { uses: [], used_in: [], outdated: [] };
+
+  const thumb = d.thumb
+    ? `<img src="${esc(thumbURL(d.thumb))}" alt="${esc(d.name)}">`
+    : placeholderInner(d.type);
+
+  const fam = { assets: 'Asset', sets: 'Set', shots: 'Shot' }[d.family] || d.family;
+  const outdated = (deps.outdated || []).length;
+
+  const frameChip = d.family === 'shots'
+    ? `<button class="frame-chip${d.frame_range ? '' : ' unset'}" type="button"
+               data-framerange-entity="${esc(d.name)}" title="Edit the frame range">
+         ${d.frame_range
+            ? `${d.frame_range.start}–${d.frame_range.end}<span class="frame-fps">@${esc(String(d.frame_range.fps))}</span>`
+            : 'Set frames…'}
+       </button>`
+    : '';
+
+  const deptRows = steps.length ? steps.map(s => {
+    const st = (status[s] || {});
+    const cur = st.status || 'empty';
+    const latest = (d.publishes?.[s] || []).filter(p => p.status === 'complete').pop();
+    const t = latest?.thumb;
+    return `<button class="dept-row${s === step ? ' active' : ''}" type="button" data-step="${esc(s)}">
+              ${t ? `<img class="dept-thumb" src="${esc(thumbURL(t))}" alt="" loading="lazy">`
+                  : `<span class="dept-thumb dept-thumb-empty">${iconBox(11)}</span>`}
+              <span class="dept-name">${esc(s)}</span>
+              <span class="dept-dot st-${esc(cur)}" title="${esc(statusLabel(cur))}"></span>
+              <span class="dept-ver">${latest ? esc(verLabel(latest.version)) : '—'}</span>
+            </button>`;
+  }).join('') : '<div class="panel-empty">No department declared.</div>';
+
+  ENTITY.innerHTML = `
+    <nav class="crumb">
+      <button class="crumb-back" type="button" id="js-ent-back">${iconBack(12)} All entities</button>
+      <span class="crumb-sep">/</span>
+      <span class="crumb-here">${esc(d.name)}</span>
+      <span class="kbd" aria-hidden="true" style="margin-left:auto">Esc</span>
+    </nav>
+
+    <header class="entity-head">
+      <div class="entity-head-thumb">${thumb}</div>
+      <div class="entity-head-meta">
+        <div class="entity-title">${esc(d.name)}</div>
+        <div class="entity-chips">
+          <span class="chip">${esc(fam)}</span>
+          ${d.type ? `<span class="chip">${esc(d.type)}</span>` : ''}
+          <span class="chip">${steps.length} department${steps.length !== 1 ? 's' : ''}</span>
+          ${frameChip}
+          ${outdated ? `<span class="upd-badge">${iconUp(10)} ${outdated} update${outdated > 1 ? 's' : ''} available</span>` : ''}
+        </div>
+        <div class="entity-actions">
+          <button class="btn btn-primary" type="button" id="js-ent-new">${iconNew(13)} New Scene</button>
+          <button class="btn btn-secondary" type="button" id="js-ent-open">${iconPlay(12)} Open the scene</button>
+          <button class="btn btn-secondary" type="button" id="js-ent-reveal">${iconFolder(12)} Reveal in Finder</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="entity-body">
+      <aside class="dept-col">
+        <div class="col-label">Departments</div>
+        ${deptRows}
+      </aside>
+      <div class="panel-col">${step ? stepPanelsHTML(d, step) : ''}</div>
+    </div>`;
+
+  bindEntity();
+}
+
+// ── The selected step: status + gallery + scenefiles + products + dependencies ──
+function stepPanelsHTML(d, step) {
+  const st        = (d.step_status || {})[step] || {};
+  const cur       = st.status || 'empty';
+  const publishes = [...((d.publishes || {})[step] || [])].sort((a, b) => b.version - a.version);
+  const scenes    = [...((d.scenefiles || {})[step] || [])].sort((a, b) => b.version - a.version);
+  const deps      = d.dependencies || { uses: [], used_in: [] };
+
+  // Status selector: 'auto' (the orchestrator derives it from disk) + the explicit
+  // values only — 'empty'/'wip'/'published' are never settable, by contract.
+  const options = [
+    `<option value="${esc(STATUS_VOCAB.auto)}"${st.explicit ? '' : ' selected'}>Auto — ${esc(statusLabel(st.derived || cur))}</option>`,
+    ...STATUS_VOCAB.explicit.map(v =>
+      `<option value="${esc(v)}"${st.explicit && cur === v ? ' selected' : ''}>${esc(statusLabel(v))}</option>`),
+  ].join('');
+
+  return `
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">${esc(step)}
+          <span class="st-pill st-${esc(cur)}${st.explicit ? ' explicit' : ''}">${esc(statusLabel(cur))}</span>
+        </div>
+        <label class="field-inline">Status
+          <select class="status-select" id="js-ent-status">${options}</select>
+        </label>
+      </div>
+      ${galleryHTML(publishes)}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Scenefiles<span class="muted">work files (WIP)</span></div>
+        <button class="btn btn-primary btn-mini" type="button" id="js-ent-new-2">${iconNew(11)} New Scene</button>
+      </div>
+      ${scenes.length ? scenes.map(scenefileRowHTML).join('')
+                      : `<div class="panel-empty">No work file yet — “New Scene” builds the ${esc(step)} starter.</div>`}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Products<span class="muted">published versions</span></div>
+      </div>
+      ${publishes.length ? publishes.map(productRowHTML).join('')
+                         : '<div class="panel-empty">Nothing published for this department yet.</div>'}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title">Dependencies<span class="muted">entity-wide</span></div></div>
+      <div class="col-label" style="padding-left:0">Uses</div>
+      ${depListHTML(deps.uses, 'dependency')}
+      <div class="col-label" style="padding-left:0;padding-top:12px">Used in</div>
+      ${depListHTML(deps.used_in, 'consumer')}
+    </section>`;
+}
+
+function scenefileRowHTML(v) {
+  const meta = [v.dcc_version || v.blender_version, v.user, shortDate(v.date)].filter(Boolean);
+  return `<div class="vrow">
+            <span class="vrow-ver">${esc(verLabel(v.version))}</span>
+            <span class="tag dcc-${esc(v.dcc || 'unknown')}">${esc(v.dcc || 'unknown')}</span>
+            <div class="vrow-main">
+              <div class="vrow-comment${v.comment ? '' : ' empty'}">${esc(v.comment || 'No comment')}</div>
+              ${meta.length ? `<div class="vrow-meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}</div>` : ''}
+            </div>
+            <button class="btn btn-secondary btn-mini" type="button"
+                    data-open-scenefile="${v.version}" ${v.dcc === 'blender' ? '' : 'disabled title="Blender cannot open this file"'}>Open</button>
+          </div>`;
+}
+
+function productRowHTML(p) {
+  const nDeps = (p.dependencies || []).length;
+  const meta = [
+    p.ext ? p.ext.toUpperCase() : null,
+    shortDate(p.published_utc),
+    nDeps ? `${nDeps} dependenc${nDeps > 1 ? 'ies' : 'y'}` : null,
+    p.legacy ? 'legacy' : null,
+  ].filter(Boolean);
+  const depTitle = nDeps
+    ? p.dependencies.map(x => `${x.entity} / ${x.step} ${verLabel(x.version)}`).join('\n')
+    : '';
+  const bad = p.status !== 'complete' || !p.exists;
+  return `<div class="vrow">
+            <span class="vrow-ver">${esc(verLabel(p.version))}</span>
+            <span class="tag${bad ? ' missing' : ''}">${esc(p.exists ? (p.status || '—') : 'missing')}</span>
+            <div class="vrow-main"${depTitle ? ` title="${esc(depTitle)}"` : ''}>
+              <div class="vrow-comment${p.comment ? '' : ' empty'}">${esc(p.comment || 'No comment')}</div>
+              ${meta.length ? `<div class="vrow-meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}</div>` : ''}
+            </div>
+            <button class="btn btn-secondary btn-mini" type="button" data-import-version="${p.version}"
+                    ${p.exists ? '' : 'disabled title="Artifact missing on disk"'}>Import into Blender</button>
+          </div>`;
+}
+
+// ── Version gallery (Phase 2.3) — thumbnails side by side, 2-up compare ──
+function galleryHTML(publishes) {
+  if (!publishes.length)
+    return '<div class="panel-empty">No published version to compare yet.</div>';
+  const picked = S.comparePick;
+  const items = publishes.map(p => {
+    const i = picked.indexOf(p.version);
+    return `<button class="gal-item${i >= 0 ? ' picked' : ''}" type="button" data-gallery-version="${p.version}"
+                    title="Click to compare (2 max)">
+              ${p.thumb ? `<img class="gal-thumb" src="${esc(thumbURL(p.thumb))}" alt="${esc(verLabel(p.version))}" loading="lazy">`
+                        : `<span class="gal-thumb gal-thumb-empty">${iconBox(22)}</span>`}
+              <span class="gal-cap">
+                <span class="gal-ver">${esc(verLabel(p.version))}</span>
+                <span class="gal-date">${esc(shortDate(p.published_utc) || '—')}</span>
+                ${i >= 0 ? `<span class="gal-pick">${i === 0 ? 'A' : 'B'}</span>` : ''}
+              </span>
+            </button>`;
+  }).join('');
+
+  const cmp = picked.length
+    ? `<div class="compare-grid">${picked.map((v, i) =>
+         compareCardHTML(publishes.find(p => p.version === v), i === 0 ? 'A' : 'B')).join('')}
+         ${picked.length === 1 ? '<div class="cmp-card"><div class="cmp-none">Pick a second version</div></div>' : ''}
+       </div>`
+    : '';
+
+  return `<div class="gallery">${items}</div>${cmp}`;
+}
+
+function compareCardHTML(p, slot) {
+  if (!p) return '';
+  return `<div class="cmp-card">
+            ${p.thumb ? `<img src="${esc(thumbURL(p.thumb))}" alt="${esc(verLabel(p.version))}">`
+                      : `<div class="cmp-none">${iconBox(28)}</div>`}
+            <div class="cmp-body">
+              <div class="cmp-ver">${slot} · ${esc(verLabel(p.version))}</div>
+              <div class="vrow-meta"><span>${esc(shortDate(p.published_utc) || '—')}</span>${p.ext ? `<span>·</span><span>${esc(p.ext.toUpperCase())}</span>` : ''}</div>
+              <div class="vrow-comment${p.comment ? '' : ' empty'}" style="white-space:normal">${esc(p.comment || 'No comment')}</div>
+            </div>
+          </div>`;
+}
+
+// ── Dependencies (Phase 3.2) ──
+// 'side' says which end of the edge to name: on "Uses" the interesting entity is the
+// dependency, on "Used in" it is the consumer. The pinned version vs the dependency's
+// latest is what makes an edge actionable.
+function depListHTML(edges, side) {
+  if (!edges || !edges.length)
+    return `<div class="panel-empty">${side === 'dependency' ? 'This entity pulls in no published product.' : 'Nothing references this entity yet.'}</div>`;
+  return edges.map(e => {
+    const other = side === 'dependency' ? e.dependency : e.consumer;
+    const dep = e.dependency;
+    const pinned = verLabel(dep.version);
+    const latest = verLabel(dep.latest_version);
+    const stale = dep.outdated;
+    return `<div class="dep-row">
+              <button class="dep-link" type="button" data-dep-entity="${esc(other.entity)}"
+                      ${other.step ? `data-dep-step="${esc(other.step)}"` : ''}>${esc(other.entity)}</button>
+              <span class="dep-meta">${esc(other.step || 'root')}</span>
+              <span class="dep-pin">${esc(pinned)}${stale ? ` → ${esc(latest)}` : ''}</span>
+              ${stale ? `<span class="upd-badge">${iconUp(9)} update</span>` : ''}
+              <span class="dep-meta" style="margin-left:auto">${esc(e.source)}</span>
+            </div>`;
+  }).join('');
+}
+
+// ── Bindings of the entity view (rebuilt with the DOM, never stacked) ──
+function bindEntity() {
+  const d = S.entityData, step = S.entityStep;
+  el('js-ent-back').addEventListener('click', () => closeEntity());
+  ENTITY.querySelectorAll('[data-step]').forEach(b =>
+    b.addEventListener('click', () => selectStep(b.dataset.step)));
+
+  el('js-ent-open').addEventListener('click', () => openScene(d.name, step));
+  el('js-ent-reveal').addEventListener('click', () => revealEntity(d.name, step));
+  for (const id of ['js-ent-new', 'js-ent-new-2']) {
+    const b = el(id);
+    if (b) b.addEventListener('click', () => createScene(d.name, step));
+  }
+
+  const sel = el('js-ent-status');
+  if (sel) sel.addEventListener('change', () => setStepStatus(d.name, step, sel.value));
+
+  ENTITY.querySelectorAll('[data-open-scenefile]').forEach(b =>
+    b.addEventListener('click', () => openScenefile(d.name, step, b.dataset.openScenefile)));
+  ENTITY.querySelectorAll('[data-import-version]').forEach(b =>
+    b.addEventListener('click', () => importPublish(d.name, step, b.dataset.importVersion)));
+  ENTITY.querySelectorAll('[data-gallery-version]').forEach(b =>
+    b.addEventListener('click', () => togglePick(Number(b.dataset.galleryVersion))));
+  ENTITY.querySelectorAll('[data-dep-entity]').forEach(b =>
+    b.addEventListener('click', () => openEntity(b.dataset.depEntity, b.dataset.depStep)));
+  ENTITY.querySelectorAll('[data-framerange-entity]').forEach(b =>
+    b.addEventListener('click', () => openFrameRangeModal(b.dataset.framerangeEntity)));
+}
+
+// Compare mode: at most two picks; picking a third drops the oldest (FIFO) so the
+// gesture never dead-ends on "deselect first".
+function togglePick(version) {
+  const i = S.comparePick.indexOf(version);
+  if (i >= 0) S.comparePick.splice(i, 1);
+  else {
+    S.comparePick.push(version);
+    if (S.comparePick.length > 2) S.comparePick.shift();
+  }
+  renderEntity();
+}
+
+async function setStepStatus(entity, step, status) {
+  try {
+    const { ok, data } = await api('/api/set-step-status', {
+      method: 'POST', body: JSON.stringify({ entity, step, status }),
+    });
+    if (!ok) { toast(data.error || 'Error', 'err'); await loadEntity(); return; }
+    toast(`${step}: ${statusLabel(data.step_status?.status)}`, 'ok');
+    await loadEntity();
+    await loadAssets();    // the grid card behind carries the same status dot
+  } catch {
+    toast('Server unavailable', 'err');
+  }
+}
+
+async function revealEntity(entity, step) {
+  try {
+    const body = step ? { entity, step } : { entity };
+    const { ok, data } = await api('/api/reveal', {
+      method: 'POST', body: JSON.stringify(body),
+    });
+    ok ? toast('Revealed in Finder', 'ok') : toast(data.error || 'Error', 'err');
   } catch {
     toast('Server unavailable', 'err');
   }
@@ -1308,6 +1937,7 @@ async function confirmModal() {
     if (ok) {
       closeModal();
       S.assets = [];
+      closeEntity({ silent: true });   // a project change invalidates the drill-down
       await checkServer();
       await loadAssets();
       await loadRecent();
@@ -1346,6 +1976,9 @@ function startPoll() {
   _pollTimer = setInterval(async () => {
     await checkServer();
     await loadAssets();
+    // The entity view is a live view too: a publish or a Save Version done in a DCC
+    // while it is open must show up without a manual refresh.
+    if (S.entity) await loadEntity();
   }, POLL_MS);
 }
 
@@ -1372,6 +2005,12 @@ GRID.addEventListener('error', e => {
     const ph = e.target.nextElementSibling;
     if (ph && ph.classList.contains('thumb-placeholder')) ph.style.display = 'flex';
   }
+}, true);
+
+// Same guard for the entity view: a thumbnail deleted on disk between two polls must
+// leave a tidy empty slot, not a broken-image glyph. Attached once, in capture.
+ENTITY.addEventListener('error', e => {
+  if (e.target.tagName === 'IMG') e.target.style.visibility = 'hidden';
 }, true);
 
 function setDensity(d) {
@@ -1425,19 +2064,34 @@ async function manualRefresh() {
   S._gridSig = null;
   await checkServer();
   await loadAssets();
+  if (S.entity) await loadEntity();
 }
 
 // ── Keyboard shortcuts (macos-design: every primary action has a key) ──
 const _anyModalOpen = () => document.querySelector('.modal-overlay:not(.hidden)');
+const _typingInField = () => {
+  const t = document.activeElement;
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+                 || t.isContentEditable);
+};
 document.addEventListener('keydown', e => {
   const mod = e.metaKey || e.ctrlKey;
 
-  // Esc — close any open modal; otherwise clear/blur search.
+  // Esc — close any open modal; then leave the entity view; then clear/blur search.
+  // (Ordered inside-out: Esc always closes the innermost layer first.)
   if (e.key === 'Escape') {
     const open = document.querySelectorAll('.modal-overlay:not(.hidden)');
     if (open.length) { open.forEach(m => m.classList.add('hidden')); return; }
+    if (S.entity) { closeEntity(); return; }
     if (S.search) { clearSearch(); return; }
     if (document.activeElement === SEARCH) SEARCH.blur();
+    return;
+  }
+
+  // '/' — focus the search (the reflex of every browser-like tool). Only on the grid,
+  // and never while typing in a field.
+  if (e.key === '/' && !mod && !_anyModalOpen() && !_typingInField()) {
+    if (S.project && S.online && !S.entity) { e.preventDefault(); focusSearch(); }
     return;
   }
 
@@ -1559,6 +2213,7 @@ async function confirmNewProject() {
     if (ok) {
       closeNewProjectModal();
       S.assets = [];
+      closeEntity({ silent: true });   // a project change invalidates the drill-down
       await checkServer();
       await loadConfig();
       await loadAssets();
@@ -1752,59 +2407,6 @@ el('js-ws-target').addEventListener('keydown', e => {
   if (e.key === 'Enter') confirmWebSync(); if (e.key === 'Escape') closeWebSyncModal();
 });
 
-// ── Scenefiles (WIP history + comments, INC-4) ─
-const MODAL_SF = el('js-modal-scenefiles');
-
-function openScenefilesModal(entity) {
-  el('js-sf-title').textContent = `Scenefiles — ${entity}`;
-  el('js-sf-body').innerHTML = '<div class="sf-empty">Loading…</div>';
-  MODAL_SF.classList.remove('hidden');
-  loadScenefiles(entity);
-}
-function closeScenefilesModal() { MODAL_SF.classList.add('hidden'); }
-
-async function loadScenefiles(entity) {
-  try {
-    const { ok, data } = await api(`/api/asset/${encodeURIComponent(entity)}`);
-    if (!ok) {
-      el('js-sf-body').innerHTML = `<div class="sf-empty">${esc(data.error || 'Error')}</div>`;
-      return;
-    }
-    renderScenefiles(data.scenefiles || {});
-  } catch {
-    el('js-sf-body').innerHTML = '<div class="sf-empty">Server unavailable</div>';
-  }
-}
-
-function renderScenefiles(scenefiles) {
-  const steps = Object.keys(scenefiles).sort();
-  if (!steps.length) {
-    el('js-sf-body').innerHTML = '<div class="sf-empty">No WIP saved for this entity.</div>';
-    return;
-  }
-  el('js-sf-body').innerHTML = steps.map(step => {
-    const versions = [...scenefiles[step]].sort((a, b) => b.version - a.version);
-    const rows = versions.map(v => {
-      const ver = `v${String(v.version).padStart(3, '0')}`;
-      const meta = [v.user, v.date].filter(Boolean).join(' · ');
-      const comment = v.comment
-        ? `<div class="sf-comment">${esc(v.comment)}</div>`
-        : '<div class="sf-comment sf-comment-empty">No comment</div>';
-      return `<div class="sf-row">
-                <div class="sf-row-head">
-                  <span class="sf-ver">${esc(ver)}</span>
-                  <span class="sf-meta">${esc(meta)}</span>
-                </div>
-                ${comment}
-              </div>`;
-    }).join('');
-    return `<div><div class="sf-step-label">${esc(step)}</div>${rows}</div>`;
-  }).join('');
-}
-
-el('js-sf-close').addEventListener('click', closeScenefilesModal);
-MODAL_SF.addEventListener('click', e => { if (e.target === MODAL_SF) closeScenefilesModal(); });
-
 // ── Frame range (shots, schema 2.1) ─────────────────
 const MODAL_FR = el('js-modal-framerange');
 let _frEntity = null;
@@ -1851,6 +2453,7 @@ async function saveFrameRange() {
     if (ok) {
       closeFrameRangeModal();
       await loadAssets();
+      if (S.entity) await loadEntity();   // the chip lives in the entity header too
       toast('Frame range saved', 'ok');
     } else {
       el('js-fr-err').textContent = data.error || 'Unknown error';
@@ -1915,6 +2518,7 @@ async function setProject(path) {
     });
     if (ok) {
       S.assets = [];
+      closeEntity({ silent: true });   // a project change invalidates the drill-down
       await checkServer();
       await loadConfig();
       await loadAssets();

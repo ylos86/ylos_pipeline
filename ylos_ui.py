@@ -19,14 +19,25 @@ Usage:
 Endpoints:
     GET  /api/project          returns project.json of the active project
     GET  /api/config           types/steps per family (single source: create_project.py,
-                               steps overridden by the active project's pipeline)
-    GET  /api/assets           lists assets/* sets/* shots/* (manifest + latest version + thumb)
-    GET  /api/asset/<name>     detail + all versions per step + scenefiles (WIP,
-                               comment/user/date from the sidecar '<wip>.blend.json')
+                               steps overridden by the active project's pipeline) + the
+                               step-status vocabulary (schema 2.2)
+    GET  /api/assets           lists assets/* sets/* shots/* (manifest + latest version + thumb
+                               + status per step + 'outdated' dependency count)
+    GET  /api/asset/<name>     detail: status per step, scenefiles (every DCC, sidecar merged),
+                               publishes per step (enriched), dependencies (uses / used_in /
+                               outdated), thumbnail
     POST /api/open-blender     {entity, step?} opens the scene (WIP-first) OR
-                               {entity, step, version} imports a specific publish —
-                               resolved server-side (create_project), never a path
-                               sent by the client (non-blocking)
+                               {entity, step, scenefile} opens a specific WIP version OR
+                               {entity, step, version} imports a specific publish OR
+                               {entity, step, create: true} builds a NEW department starter
+                               scene (Scene Creator) — all resolved server-side
+                               (create_project), never a path sent by the client
+                               (non-blocking). The child Blender gets a per-session
+                               $PROJ_ROOT/$PROJ_CACHE (never a global export).
+    POST /api/set-step-status  {entity, step, status} persists an explicit step status
+                               (review|approved) or clears it ('auto') — schema 2.2
+    POST /api/reveal           {entity, step?} reveals the entity/step folder in the Finder
+                               (path resolved server-side, never sent by the client)
     POST /api/set-project      {path} sets the active project
     POST /api/set-web-target   {target_dir} persists project.json["web"]["target_dir"]
     GET  /api/web-pins         current pins + available GLB publishes per asset
@@ -43,7 +54,6 @@ import json
 import mimetypes
 from email.utils import formatdate
 import os
-import re
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -178,121 +188,146 @@ def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict
     return result
 
 
-_WIP_VER_RE = re.compile(r"_v(\d{3})\.blend$")
+def _artifact_ext(artifact: str | None) -> str | None:
+    """Extension label of a publish artifact ('usd', 'glb', 'bgeo.sc'...) — the longest
+    known PUBLISH_ARTIFACT_EXTENSIONS suffix wins, so a compound extension is not cut."""
+    if not artifact:
+        return None
+    low = artifact.lower()
+    known = sorted(create_project.PUBLISH_ARTIFACT_EXTENSIONS, key=len, reverse=True)
+    for ext in known:
+        if low.endswith(ext):
+            return ext.lstrip(".")
+    return os.path.splitext(artifact)[1].lstrip(".").lower() or None
 
 
-def _list_scenefiles(asset_dir: Path, steps: list) -> dict:
-    """{step: [{version, filename, comment, user, date, blender_version}]} — disk scan of
-    <asset_dir>/<step>/wip/*.blend (read-only, never a manifest: a WIP is not a
-    versioned pipeline datum, see CLAUDE.md). Sidecar '<wip>.blend.json' (written by
-    ylos.save_wip, INC-4) merged when present — absent/unreadable -> empty fields, never
-    an exception (same tolerance as the rest of the module)."""
-    result: dict = {}
-    for step in steps:
-        wip_dir = asset_dir / step / "wip"
-        if not wip_dir.is_dir():
-            continue
-        versions = []
-        for f in sorted(wip_dir.iterdir()):
-            if not f.is_file():
-                continue
-            m = _WIP_VER_RE.search(f.name)
-            if not m:
-                continue
-            sidecar = f.with_name(f.name + ".json")
-            meta: dict = {}
-            if sidecar.is_file():
-                try:
-                    meta = json.loads(sidecar.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    meta = {}
-            versions.append({
-                "version": int(m.group(1)),
-                "filename": f.name,
-                "comment": meta.get("comment", ""),
-                "user": meta.get("user", ""),
-                "date": meta.get("date", ""),
-                "blender_version": meta.get("blender_version", ""),
-            })
-        if versions:
-            result[step] = sorted(versions, key=lambda v: v["version"])
-    return result
+def _publish_rows(project_dir: Path, entity_name: str, step: str) -> list[dict]:
+    """Enriched publish rows of ONE step for the cockpit (Products tab / version gallery),
+    read through create_project.list_publishes (two-phase + legacy merged, principle 5).
+    CANONICAL data only — version, status, ext, thumb URL, comment, dates, dependencies,
+    exists — never an absolute path (the client imports through
+    POST /api/open-blender {entity, step, version}, resolved at click time)."""
+    rows = []
+    for e in create_project.list_publishes(project_dir, entity_name, step):
+        artifact = e.get("artifact") or ""
+        thumb_rel = e.get("thumbnail") or e.get("thumb")
+        rows.append({
+            "version": e.get("version"),
+            "status": e.get("status"),
+            "ext": _artifact_ext(artifact),
+            "filename": os.path.basename(artifact) if artifact else None,
+            "thumb": f"/thumb/{entity_name}/{thumb_rel}" if thumb_rel else None,
+            "comment": e.get("comment") or "",
+            "published_utc": e.get("published_utc"),
+            "reserved_utc": e.get("reserved_utc"),
+            "dependencies": list(e.get("dependencies") or []),
+            "exists": bool(e.get("exists")),
+            "legacy": bool(e.get("legacy")),
+        })
+    return rows
+
+
+def _scenefile_rows(project_dir: Path, entity_name: str) -> dict:
+    """{step: [scenefile...]} from create_project.list_scenefiles (every DCC of
+    SCENEFILE_EXTENSIONS — Houdini .hip* WIPs appear next to .blend ones, each row carries
+    'dcc'). The absolute 'path' is stripped: the client opens a WIP through
+    POST /api/open-blender {entity, step, scenefile: <version>}, resolved server-side."""
+    out = {}
+    for step, rows in create_project.list_scenefiles(project_dir, entity_name).items():
+        out[step] = [{k: v for k, v in r.items() if k != "path"} for r in rows]
+    return out
 
 
 def _list_assets(project_dir: Path) -> list[dict]:
+    """Grid cards — thin adapter over create_project.list_entities (single listing, orphans
+    flagged). ORPHAN entity (folder under assets/sets/shots WITHOUT a readable
+    manifest.json — never went through create_asset(): invalid naming, undeclared steps,
+    never publishable): surfaced as a 'broken' card, never silently skipped — a ghost
+    folder the tool hides is worse than a flagged one (the Blender panel scans the disk
+    and lists it). Per-step status (schema 2.2) and the 'outdated' dependency count are
+    added for every created entity; the dependency index is built ONCE per request
+    (build_dependency_index scans the whole project), never once per entity."""
+    index = create_project.build_dependency_index(project_dir)
     result: list[dict] = []
-    for family in ("assets", "sets", "shots"):
-        family_dir = project_dir / family
-        if not family_dir.is_dir():
-            continue
-        for asset_dir in sorted(family_dir.iterdir()):
-            if not asset_dir.is_dir() or asset_dir.name.startswith("."):
-                continue
-            manifest = _read_asset_manifest(asset_dir)
-            if manifest is None:
-                # ORPHAN entity: a folder exists under assets/sets/shots but without a
-                # manifest.json — so it never went through create_asset() (invalid naming,
-                # undeclared steps, never publishable). Real case observed: a WIP saved under
-                # a hand-typed entity name creates the tree on the fly.
-                # It was SILENTLY skipped here: invisible on the web side while the
-                # Blender panel listed it (it scans the disk). A ghost folder
-                # the tool refuses to display is worse than a flagged one — we
-                # surface it flagged, the UI makes it actionable.
-                thumb, source = _find_thumb(project_dir, asset_dir.name)
-                result.append({
-                    "name": asset_dir.name,
-                    "family": family,
-                    "entity_type": None,
-                    "type": None,
-                    "steps": sorted(d.name for d in asset_dir.iterdir()
-                                    if d.is_dir() and not d.name.startswith(".")),
-                    "last_versions": {},
-                    "thumb": f"/thumb/{thumb}" if thumb else None,
-                    "thumb_source": source,
-                    "broken": "manifest.json missing — entity never created by the pipeline "
-                              "(create_asset), not publishable as-is",
-                })
-                continue
-            thumb, source = _find_thumb(project_dir, asset_dir.name)
+    for ent in create_project.list_entities(project_dir):
+        name = ent["name"]
+        family = create_project.ENTITY_DIR[ent["family"]]   # 'assets'|'sets'|'shots' (web contract)
+        thumb, source = _find_thumb(project_dir, name)
+        if ent["broken"]:
             result.append({
-                "name": asset_dir.name,
+                "name": name,
                 "family": family,
-                "entity_type": manifest.get("entity_type"),
-                "type": manifest.get("type"),
-                "steps": manifest.get("steps", []),
-                "last_versions": _last_versions(project_dir, asset_dir.name, manifest),
-                "frame_range": manifest.get("frame_range"),  # shots only; None for asset/set
+                "entity_type": None,
+                "type": None,
+                "steps": ent["steps"],            # disk sub-folders (no manifest)
+                "last_versions": {},
+                "step_status": {},
+                "outdated": 0,
                 "thumb": f"/thumb/{thumb}" if thumb else None,
                 "thumb_source": source,
-                "broken": None,
+                "broken": ent["broken"],
             })
+            continue
+        manifest = ent["manifest"]
+        statuses = create_project.get_step_status(project_dir, name) or {}
+        deps = create_project.entity_dependencies(project_dir, name, index)
+        result.append({
+            "name": name,
+            "family": family,
+            "entity_type": manifest.get("entity_type"),
+            "type": manifest.get("type"),
+            "steps": ent["steps"],
+            "last_versions": _last_versions(project_dir, name, manifest),
+            "step_status": {s: v["status"] for s, v in statuses.items()},
+            "outdated": len(deps["outdated"]),
+            "frame_range": manifest.get("frame_range"),  # shots only; None for asset/set
+            "thumb": f"/thumb/{thumb}" if thumb else None,
+            "thumb_source": source,
+            "broken": None,
+        })
     return result
 
 
 def _asset_detail(project_dir: Path, name: str) -> dict | None:
-    for family in ("assets", "sets", "shots"):
-        asset_dir = project_dir / family / name
-        if not asset_dir.is_dir():
-            continue
-        manifest = _read_asset_manifest(asset_dir)
-        if manifest is None:
-            return None
-        steps = manifest.get("steps", [])
-        return {
-            "name": name,
-            "family": family,
-            "path": str(asset_dir),
-            "entity_type": manifest.get("entity_type"),
-            "type": manifest.get("type"),
-            "steps": steps,
-            "publishes": manifest.get("publishes", {}),
-            "step_publishes": manifest.get("step_publishes", {}),
-            "frame_range": manifest.get("frame_range"),  # shots only (schema 2.1); None otherwise
-            "scenefiles": _list_scenefiles(asset_dir, steps),
-            "created_utc": manifest.get("created_utc"),
-            "modified_utc": manifest.get("modified_utc"),
-        }
-    return None
+    """Entity cockpit payload (Phase 2.2): everything the drill-down needs in ONE call, all
+    of it read through the orchestrator — status per step (get_step_status), scenefiles of
+    every DCC (list_scenefiles), enriched publishes per step (list_publishes), dependency
+    view (entity_dependencies: uses / used_in / outdated) and the thumbnail cascade.
+    None for an unknown or orphan entity (no manifest -> nothing to drill into)."""
+    resolved = create_project.resolve_entity(project_dir, name)
+    if resolved is None:
+        return None
+    manifest = resolved["manifest"]
+    steps = list(manifest.get("steps") or [])
+    publish_steps = list(steps)
+    for s in list(manifest.get("step_publishes") or {}) + list(manifest.get("publishes") or {}):
+        if s not in publish_steps:
+            publish_steps.append(s)
+    publishes = {}
+    for s in publish_steps:
+        rows = _publish_rows(project_dir, name, s)
+        if rows:
+            publishes[s] = rows
+    thumb, source = _find_thumb(project_dir, name)
+    return {
+        "name": name,
+        "family": create_project.ENTITY_DIR[resolved["family"]],
+        "path": resolved["dir"],
+        "entity_type": manifest.get("entity_type"),
+        "type": manifest.get("type"),
+        "steps": steps,
+        "step_status": create_project.get_step_status(project_dir, name) or {},
+        "publishes": publishes,
+        "step_publishes": manifest.get("step_publishes", {}),
+        "last_versions": _last_versions(project_dir, name, manifest),
+        "frame_range": manifest.get("frame_range"),  # shots only (schema 2.1); None otherwise
+        "scenefiles": _scenefile_rows(project_dir, name),
+        "dependencies": create_project.entity_dependencies(project_dir, name),
+        "thumb": f"/thumb/{thumb}" if thumb else None,
+        "thumb_source": source,
+        "created_utc": manifest.get("created_utc"),
+        "modified_utc": manifest.get("modified_utc"),
+    }
 
 
 def _glb_publishes(manifest: dict) -> dict:
@@ -350,18 +385,66 @@ def _resolve_publish_entry(project_dir: Path, entity: str, step: str, version: i
     return None
 
 
-def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: str, kind: str,
-                       entity: str | None = None, step: str | None = None) -> list[str]:
+def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: str | None,
+                       kind: str, entity: str | None = None,
+                       step: str | None = None) -> list[str]:
     """Argv of the Blender subprocess — PURE function: 'path' is already a canonical
     ABSOLUTE path provided by the caller (resolve_open_target / list_publishes), no path
-    resolution or concatenation here."""
+    resolution or concatenation here. 'path' None (kind 'create': the launcher builds a NEW
+    starter scene, the operator allocates the WIP itself) -> no '--path' argument."""
     argv = [str(blender_app), "--python", str(launcher), "--", "--project", str(project)]
     if entity:
         argv += ["--entity", str(entity)]
     if step:
         argv += ["--step", str(step)]
-    argv += ["--path", str(path), "--kind", kind]
+    if path:
+        argv += ["--path", str(path)]
+    argv += ["--kind", kind]
     return argv
+
+
+def _launch_env(project_dir: Path, base_env) -> dict:
+    """Per-session environment of a launched DCC (plan-usable-v1 Phase 0.2) — PURE function,
+    never touches os.environ. Returns a COPY of 'base_env' with:
+      - PROJ_ROOT  = the PARENT of the project folder — the contract is
+                     '$PROJ_ROOT/<project> == project_dir' (see
+                     create_project._expand_proj_root / ylos_houdini.env_relative). ALWAYS
+                     overridden: two Blender sessions launched on two projects from the same
+                     UI must never share the shell's global value (tension #1 of CLAUDE.md);
+      - PROJ_CACHE = the shell's value when set (kept verbatim), otherwise the orchestrator
+                     fallback create_project.resolve_cache().
+    The child inherits it through subprocess.Popen(env=...) only — never an export."""
+    env = dict(base_env)
+    env[create_project.ENV_ROOT] = str(Path(project_dir).resolve().parent)
+    if not env.get(create_project.ENV_CACHE):
+        env[create_project.ENV_CACHE] = str(create_project.resolve_cache())
+    return env
+
+
+def _reveal_target(project_dir: Path, entity: str, step: str | None) -> Path | None:
+    """Folder to reveal for {entity, step?} — resolved SERVER-SIDE only (the client never
+    sends a path). A created entity resolves through the orchestrator (resolve_entity);
+    an ORPHAN folder (no manifest.json — the 'broken' card) is still revealable so the
+    user can fix it in the Finder. 'step' must be a declared step (created entity) or an
+    existing sub-folder (orphan). None when nothing matches."""
+    if not entity or "/" in entity or "\\" in entity or entity in (".", ".."):
+        return None
+    resolved = create_project.resolve_entity(project_dir, entity)
+    declared = None
+    if resolved is not None:
+        entity_dir = Path(resolved["dir"])
+        declared = list(resolved["manifest"].get("steps") or [])
+    else:
+        entity_dir = next((project_dir / fam / entity for fam in create_project.ENTITY_DIR.values()
+                           if (project_dir / fam / entity).is_dir()), None)
+        if entity_dir is None:
+            return None
+    if not step:
+        return entity_dir
+    if "/" in step or "\\" in step or step in (".", "..") or (declared is not None and step not in declared):
+        return None
+    target = entity_dir / step
+    return target if target.is_dir() else None
 
 
 # -------------------------------------------------------------------------------------
@@ -434,6 +517,10 @@ class YlosHandler(BaseHTTPRequestHandler):
         p = self.path
         if p == "/api/open-blender":
             self._post_open_blender()
+        elif p == "/api/set-step-status":
+            self._post_set_step_status()
+        elif p == "/api/reveal":
+            self._post_reveal()
         elif p == "/api/set-project":
             self._post_set_project()
         elif p == "/api/create-project":
@@ -487,7 +574,11 @@ class YlosHandler(BaseHTTPRequestHandler):
         come from the module (the only source validation knows); steps from the
         active project's pipeline if readable, otherwise from the module defaults — same
         resolution as create_project._project_steps, so the 'new asset' modal
-        proposes exactly what create_asset() will do."""
+        proposes exactly what create_asset() will do. Also exposes the step-status
+        vocabulary (schema 2.2) so the cockpit's status selector is never hard-coded
+        client-side: 'step_statuses' = every value that can be DISPLAYED,
+        'step_status_explicit' = the only ones that can be SET (the rest are derived),
+        'step_status_auto' = the sentinel that clears an explicit value."""
         families = {
             "asset": {"types": list(create_project.ASSET_TYPES),
                       "steps": list(create_project.DEFAULT_ASSET_STEPS)},
@@ -507,7 +598,13 @@ class YlosHandler(BaseHTTPRequestHandler):
                 steps = pipeline.get(key)
                 if steps:
                     families[family]["steps"] = list(steps)
-        _json(self, 200, {"families": families})
+        _json(self, 200, {
+            "families": families,
+            "step_statuses": list(create_project.STEP_STATUSES),
+            "step_status_explicit": list(create_project.STEP_STATUS_EXPLICIT),
+            "step_status_auto": create_project.STEP_STATUS_AUTO,
+            "schema_version": create_project.SCHEMA_VERSION,
+        })
 
     def _get_project(self):
         project_dir = self._active()
@@ -693,14 +790,20 @@ class YlosHandler(BaseHTTPRequestHandler):
     # --- POST handlers
 
     def _post_open_blender(self):
-        """POST /api/open-blender - two verbs depending on the body, NEVER a path sent by
+        """POST /api/open-blender - FOUR verbs depending on the body, NEVER a path sent by
         the client (see INC-3):
-          - {entity, step?}          -> 'Open the scene' (WIP-first, resolve_open_target).
-          - {entity, step, version}  -> 'Import' a SPECIFIC version (list_publishes).
+          - {entity, step?}            -> 'Open the scene' (WIP-first, resolve_open_target).
+          - {entity, step, scenefile}  -> open a SPECIFIC WIP version (list_scenefiles).
+          - {entity, step, version}    -> 'Import' a SPECIFIC publish (list_publishes).
+          - {entity, step, create}     -> 'New Scene': the department STARTER
+                                          (scene_starter_spec validates, the launcher runs
+                                          ylos.create_scene which allocates the WIP itself
+                                          -> no '--path', kind 'create').
         The versioned launcher (tools/blender/launch_context.py) carries ALL DCC opening:
         pipeline context set + ops deferred to the first timer tick (context ready) +
         logging. The SERVER resolves a canonical ABSOLUTE path before building
-        the argv (_build_launch_argv, pure function) - no manual reconstruction."""
+        the argv (_build_launch_argv, pure function) - no manual reconstruction. The child
+        gets a PER-SESSION $PROJ_ROOT/$PROJ_CACHE (_launch_env), never a global export."""
         body = self._body()
         if body is None:
             _json(self, 400, {"error": "Invalid JSON in the body"})
@@ -709,6 +812,8 @@ class YlosHandler(BaseHTTPRequestHandler):
         entity = body.get("entity")
         step = body.get("step")
         version = body.get("version")
+        scenefile = body.get("scenefile")
+        create = bool(body.get("create"))
         project = body.get("project")
 
         if not entity:
@@ -737,7 +842,26 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 500, {"error": f"Launcher not found: {LAUNCHER}"})
             return
 
-        if version is not None:
+        if create:
+            # 'New Scene' (Scene Creator, plan-usable-v1 Phase 1.4). The SERVER only
+            # VALIDATES here (scene_starter_spec, the same pure spec the operator will
+            # re-read in Blender) - it never allocates the WIP version itself: two
+            # allocations for one click would burn a version number. Hence no '--path'.
+            if not step:
+                _json(self, 400, {"error": "Field 'step' required with 'create' (New Scene)"})
+                return
+            spec = create_project.scene_starter_spec(
+                entity, step, "blender", project_root=project_dir,
+            )
+            if not spec.get("ok"):
+                # Unknown entity -> 404 (nothing to create for); declared-step / project
+                # problem -> 400 (client input), with the orchestrator's own reason.
+                unknown = create_project.resolve_entity(project_dir, entity) is None
+                _json(self, 404 if unknown else 400,
+                      {"error": spec.get("reason") or f"Cannot create a scene for {entity!r}"})
+                return
+            path, kind, resolved_step = None, "create", step
+        elif version is not None:
             try:
                 version = int(version)
             except (TypeError, ValueError):
@@ -753,6 +877,34 @@ class YlosHandler(BaseHTTPRequestHandler):
                 })
                 return
             path, kind, resolved_step = entry["abs_path"], "publish", step
+        elif scenefile is not None:
+            # Open a SPECIFIC WIP version of the version gallery. Resolved through
+            # create_project.list_scenefiles (single scan point, every DCC) - the client
+            # sends a version NUMBER, never a path.
+            try:
+                sf_version = int(scenefile)
+            except (TypeError, ValueError):
+                _json(self, 400, {"error": f"invalid 'scenefile': {scenefile!r}"})
+                return
+            if not step:
+                _json(self, 400, {"error": "Field 'step' required with 'scenefile'"})
+                return
+            rows = create_project.list_scenefiles(project_dir, entity, step).get(step, [])
+            match = next((r for r in rows if r.get("version") == sf_version), None)
+            if match is None:
+                _json(self, 404, {
+                    "error": f"Scenefile not found: {entity}/{step} v{sf_version:03d}",
+                })
+                return
+            if match.get("dcc") != "blender":
+                # A .hip* WIP is listed by the cockpit (multi-DCC) but Blender cannot
+                # open it - explicit refusal rather than a launcher that fails silently.
+                _json(self, 400, {
+                    "error": f"{match['filename']} is a {match.get('dcc')} scenefile — "
+                             f"Blender cannot open it.",
+                })
+                return
+            path, kind, resolved_step = match["path"], "wip", step
         else:
             target = create_project.resolve_open_target(
                 entity, "blender", step, project_root=project_dir,
@@ -771,12 +923,88 @@ class YlosHandler(BaseHTTPRequestHandler):
         try:
             YLOS_DIR.mkdir(parents=True, exist_ok=True)
             with open(SERVER_LOG, "a", encoding="utf-8") as log_fh:  # inherited by the child, no more DEVNULL
-                subprocess.Popen(args, stdout=log_fh, stderr=log_fh)
+                subprocess.Popen(args, stdout=log_fh, stderr=log_fh,
+                                 env=_launch_env(project_dir, os.environ))
             _json(self, 200, {"ok": True, "path": path, "kind": kind,
                               "project": str(project_dir), "entity": entity,
                               "step": resolved_step, "argv": args})
         except OSError as e:
             _json(self, 500, {"error": f"Cannot launch Blender: {e}"})
+
+    def _post_set_step_status(self):
+        """POST /api/set-step-status {entity, step, status} — persist an EXPLICIT step
+        status (schema 2.2) or clear it ('auto'). Thin adapter → create_project.
+        set_step_status (single point: validation + atomic write under the manifest flock).
+        A business refusal (unknown step, status outside STEP_STATUS_EXPLICIT) is a
+        ValueError → 400 with the orchestrator's message; an unknown entity is a
+        FileNotFoundError → 404."""
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "Invalid JSON in the body"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "No active project"})
+            return
+        entity = (body.get("entity") or "").strip()
+        step = (body.get("step") or "").strip()
+        if not entity:
+            _json(self, 400, {"error": "Missing 'entity' field"})
+            return
+        if not step:
+            _json(self, 400, {"error": "Missing 'step' field"})
+            return
+        status = body.get("status")
+        if status is not None:
+            status = str(status).strip()
+        try:
+            result = create_project.set_step_status(project_dir, entity, step, status)
+        except ValueError as e:
+            _json(self, 400, {"error": str(e)})
+            return
+        except FileNotFoundError as e:
+            _json(self, 404, {"error": str(e)})
+            return
+        except OSError as e:
+            _json(self, 500, {"error": str(e)})
+            return
+        _json(self, 200, {"ok": True, "entity": entity, "step": step,
+                          "step_status": result})
+
+    def _post_reveal(self):
+        """POST /api/reveal {entity, step?} — reveal the entity (or one of its steps) in
+        the Finder. The path is resolved SERVER-SIDE (_reveal_target: orchestrator for a
+        created entity, disk for an orphan 'broken' card) — the client only ever sends
+        names, never a path (same rule as open-blender, INC-3). macOS 'open' only:
+        elsewhere the endpoint answers 501 rather than shelling out blindly."""
+        body = self._body()
+        if body is None:
+            _json(self, 400, {"error": "Invalid JSON in the body"})
+            return
+        project_dir = self._active()
+        if project_dir is None:
+            _json(self, 404, {"error": "No active project"})
+            return
+        entity = (body.get("entity") or "").strip()
+        if not entity:
+            _json(self, 400, {"error": "Missing 'entity' field"})
+            return
+        step = (body.get("step") or "").strip() or None
+        target = _reveal_target(project_dir, entity, step)
+        if target is None:
+            _json(self, 404, {"error": f"Nothing to reveal for {entity!r}"
+                                       + (f" / {step!r}" if step else "")})
+            return
+        if sys.platform != "darwin":
+            _json(self, 501, {"error": "Reveal in Finder is macOS-only",
+                              "path": str(target)})
+            return
+        try:
+            subprocess.Popen(["open", str(target)])
+        except OSError as e:
+            _json(self, 500, {"error": f"Cannot reveal {target}: {e}"})
+            return
+        _json(self, 200, {"ok": True, "path": str(target)})
 
     def _post_set_project(self):
         body = self._body()
