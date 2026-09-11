@@ -387,7 +387,7 @@ def _resolve_publish_entry(project_dir: Path, entity: str, step: str, version: i
 
 def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: str | None,
                        kind: str, entity: str | None = None,
-                       step: str | None = None) -> list[str]:
+                       step: str | None = None, version: int | None = None) -> list[str]:
     """Argv of the Blender subprocess — PURE function: 'path' is already a canonical
     ABSOLUTE path provided by the caller (resolve_open_target / list_publishes), no path
     resolution or concatenation here. 'path' None (kind 'create': the launcher builds a NEW
@@ -399,6 +399,10 @@ def _build_launch_argv(blender_app: Path, launcher: Path, project: Path, path: s
         argv += ["--step", str(step)]
     if path:
         argv += ["--path", str(path)]
+    if version is not None:
+        # Import verb: the launcher routes through ylos.import_product with this exact
+        # version (tagged collection) - never 'latest' when the user picked a version.
+        argv += ["--version", str(int(version))]
     argv += ["--kind", kind]
     return argv
 
@@ -918,7 +922,8 @@ class YlosHandler(BaseHTTPRequestHandler):
             resolved_step = target.get("step") or step
 
         args = _build_launch_argv(BLENDER_APP, LAUNCHER, project_dir, path, kind,
-                                  entity=entity, step=resolved_step)
+                                  entity=entity, step=resolved_step,
+                                  version=version if kind == "publish" else None)
 
         try:
             YLOS_DIR.mkdir(parents=True, exist_ok=True)

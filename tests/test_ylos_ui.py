@@ -401,7 +401,7 @@ class TestBuildLaunchArgv(unittest.TestCase):
 
             argv = ylos_ui._build_launch_argv(
                 blender, launcher, project, path, "publish",
-                entity="PROP_Foo_Default", step="modeling",
+                entity="PROP_Foo_Default", step="modeling", version=3,
             )
 
             self.assertEqual(argv, [
@@ -410,6 +410,7 @@ class TestBuildLaunchArgv(unittest.TestCase):
                 "--entity", "PROP_Foo_Default",
                 "--step", "modeling",
                 "--path", path,
+                "--version", "3",
                 "--kind", "publish",
             ])
 
@@ -573,6 +574,9 @@ class TestOpenBlenderResolution(ServerTestCase):
         self.assertEqual(data["kind"], "publish")
         self.assertEqual(Path(data["path"]), self.pub_v1)
         self.assertNotEqual(Path(data["path"]), self.pub_v2)
+        # the exact version travels to the launcher (ylos.import_product, tagged import)
+        argv = data["argv"]
+        self.assertEqual(argv[argv.index("--version") + 1], "1")
 
     def test_import_publish_nonexistent_version_404(self):
         status, _, _ = self._request(

@@ -25,7 +25,11 @@ tick of a timer (context ready) and logs each step.
 
 Imposed opening order:
   * .blend -> wm.open_mainfile FIRST (the open replaces the scene), then context.
-  * USD    -> context FIRST (open_context + enums), then wm.usd_import (merge).
+  * USD/GLB -> context FIRST (open_context + enums), then the pipeline importer
+    ylos.import_product (tagged collection: Check Updates and the publish 'dependencies'
+    see it; USD goes through core/usd_convention). Raw wm.usd_import / import_scene.gltf
+    only as a fallback when the product cannot be mapped by the orchestrator (explicit
+    --path on a hand-made layout) or when no --entity/--step is given.
 
 Observability: each step is logged to ~/.ylos/launch.log (timestamp, argv,
 success/failure + full traceback) AND printed. No exception leaves the timer.
@@ -256,6 +260,34 @@ def _do_create_scene(args):
     return 0
 
 
+def _import_product(entity, step, version, path):
+    """Import through the pipeline operator ylos.import_product (tagged, versioned,
+    convention-aware). Returns True when the operator imported the product; False to let
+    the caller fall back to a raw import - operator unavailable, product unknown to the
+    manifest (e.g. hand-made publish layout), or operator cancelled. Logged, never raises."""
+    ops = getattr(bpy.ops, "ylos", None)
+    if ops is None or not hasattr(ops, "import_product"):
+        _log("import_product: operator unavailable -> raw import")
+        return False
+    wanted = int(version or 0)
+    try:
+        result = bpy.ops.ylos.import_product("EXEC_DEFAULT", entity=entity, step=step,
+                                             version=wanted)
+    except Exception:
+        _log(f"import_product({entity!r}, {step!r}, v{wanted}) raised -> raw import", exc=True)
+        return False
+    if "FINISHED" not in result:
+        _log(f"import_product({entity!r}, {step!r}, v{wanted}) -> {sorted(result)} -> raw import")
+        return False
+    tagged = next((c for c in bpy.data.collections
+                   if c.get("ylos_import_entity") == entity and c.get("ylos_import_step") == step),
+                  None)
+    _log(f"open: import_product({entity!r}, {step!r}, v{wanted}) OK -> "
+         f"tagged={tagged.name if tagged else None!r} "
+         f"version={tagged.get('ylos_import_version') if tagged else None!r} path={path!r}")
+    return True
+
+
 def _do_launch(args):
     """Opens the resolved file in the imposed order, contextualizes, logs. Returns an
     exit code (0 success, 1 failure) for background mode. Never raises."""
@@ -279,12 +311,16 @@ def _do_launch(args):
             # USD/GLB: context FIRST (open_context + enums), then import (merge into the
             # scene) - same order for both, only the import operator differs.
             _apply_context(args.project, args.entity, args.step)
-            if is_usd:
-                bpy.ops.wm.usd_import(filepath=path)
-                _log(f"open: usd_import({path!r}) OK")
-            else:
-                bpy.ops.import_scene.gltf(filepath=path)
-                _log(f"open: import_scene.gltf({path!r}) OK")
+            imported = False
+            if args.entity and args.step:
+                imported = _import_product(args.entity, args.step, args.version, path)
+            if not imported:
+                if is_usd:
+                    bpy.ops.wm.usd_import(filepath=path)
+                    _log(f"open: usd_import({path!r}) OK")
+                else:
+                    bpy.ops.import_scene.gltf(filepath=path)
+                    _log(f"open: import_scene.gltf({path!r}) OK")
         else:
             # .blend: open_mainfile FIRST (replaces the scene), then context.
             bpy.ops.wm.open_mainfile(filepath=path)
@@ -296,6 +332,8 @@ def _do_launch(args):
 
     n_objects = len(bpy.data.objects)
     mode = "usd_import" if is_usd else ("gltf_import" if is_glb else "mainfile")
+    if (is_usd or is_glb) and imported:
+        mode = "import_product/" + mode
     _log(f"LAUNCH SUCCESS: [{mode}] {path} objects={n_objects}")
     return 0
 
@@ -312,6 +350,8 @@ def _parse_args():
     p.add_argument("--entity", help="Entity name (asset/set/shot).")
     p.add_argument("--step", help="Targeted step (default: 1st step declared in the manifest).")
     p.add_argument("--path", help="File to open; absent -> resolve_open_target.")
+    p.add_argument("--version", type=int, default=None,
+                   help="Publish version to import (kind 'publish'); absent/0 = latest.")
     p.add_argument("--kind", choices=("wip", "publish", "scene_default", "create"),
                    help="Nature of the launch: 'create' BUILDS a new starter scene "
                         "(ylos.create_scene, no --path); the others are a hint about the "

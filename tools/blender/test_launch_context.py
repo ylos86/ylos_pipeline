@@ -168,13 +168,19 @@ def main():
             ent_manifest = json.load(fh)
         step = ent_manifest["steps"][0]
 
-        # 2a. Nested publish containing a .usda cube (two-phase contract: one folder per version).
-        versioned = f"{entity}_{step}_v001"
-        pub_dir = os.path.join(project_dir, "assets", entity, step, "publish", versioned)
-        os.makedirs(pub_dir)
-        cube_pub = os.path.join(pub_dir, f"{versioned}.usda")
-        with open(cube_pub, "w", encoding="utf-8") as fh:
+        # 2a. REAL two-phase publish of a .usda cube (allocate -> artifact + thumb ->
+        #     finalize): the manifest knows it, so the launcher's import goes through
+        #     ylos.import_product (tagged collection) and not the raw fallback.
+        staging, final = cp.allocate_publish_version(project_dir, entity, comment="", kind=step)
+        versioned = os.path.basename(str(final))
+        with open(os.path.join(str(staging), f"{versioned}.usda"), "w", encoding="utf-8") as fh:
             fh.write(CUBE_USDA)
+        with open(os.path.join(str(staging), "thumb.png"), "wb") as fh:
+            fh.write(b"png")
+        cp.finalize_publish_version(project_dir, entity, staging, final,
+                                    cp.publish_version_from_dir(final),
+                                    expected_artifacts=[versioned, "thumb.png"])
+        cube_pub = os.path.join(str(final), f"{versioned}.usda")
 
         # 2b. asset_root.usda (stub written by create_asset) replaced by the cube: the
         #     resolved default scene (scene_default) then actually populates the scene.
@@ -186,8 +192,12 @@ def main():
         logA = os.path.join(work, "launchA.log")
         rc, log = _run_launcher(blender, logA, [
             "--project", project_dir, "--entity", entity, "--step", step,
-            "--path", cube_pub, "--kind", "publish"])
+            "--path", cube_pub, "--kind", "publish", "--version", "1"])
         _assert_success(rc, log, "invocation A (--path nested publish)")
+        if "import_product/usd_import" not in log or "tagged='" not in log or "version=1" not in log:
+            _fail(f"invocation A: the import did not go through ylos.import_product "
+                  f"(tagged collection, version 1):\n{log}")
+        print("ok  invocation A: import routed through ylos.import_product (tagged v001)")
 
         # 4. Invocation B - without --path: resolution via resolve_open_target (scene_default).
         logB = os.path.join(work, "launchB.log")
@@ -239,7 +249,10 @@ def main():
         if "gltf_import" not in log:
             _fail(f"invocation C: 'gltf_import' mode missing from the log (extension routing "
                   f"broken?):\n{log}")
-        print("ok  invocation C: GLB routing -> import_scene.gltf traced in the log")
+        if "import_product/gltf_import" not in log or "tagged='" not in log:
+            _fail(f"invocation C: the GLB import did not go through ylos.import_product "
+                  f"(tagged collection):\n{log}")
+        print("ok  invocation C: GLB routing -> ylos.import_product (tagged) traced in the log")
 
         # 7. Invocation D - '--kind create' (New Scene, plan-usable-v1 Phase 1.4): NO
         #    --path; the launcher sets the context then hands over to ylos.create_scene,
