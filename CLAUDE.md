@@ -59,24 +59,44 @@ create_project.py     ORCHESTRATEUR. Source de vérité UNIQUE, stdlib seule. Co
                       specs DCC-agnostiques (scene_starter_spec, playblast_spec, render_spec),
                       dépendances (build_dependency_index, entity_dependencies).
 ylos_ui.py            Serveur HTTP local + API REST (/api/*). Adaptateur mince → create_project.
-app.html              Web UI (Project Browser). Config via GET /api/config (jamais codée en dur).
+                      Verbes open-blender : ouvrir (WIP-first) / scenefile / import (version exacte) /
+                      create (Scene Creator) ; set-step-status ; reveal ; env par-session (_launch_env).
+app.html              Web UI (Project Browser cockpit : grille → vue entité en drill-down, steps +
+                      statut, galerie de versions A/B, scenefiles multi-DCC, products, dépendances).
+                      Config via GET /api/config (jamais codée en dur).
 migrate_to_2.0.py     Migration legacy → convention TYPE_Nom_Variant (dispo si vrai projet legacy).
 README.md             Arborescence d'un projet CRÉÉ sur disque (source + cache) — ne pas la redupliquer.
 
 plugins/blender/      Addon (symlink dans scripts/addons/ylos_pipeline, JAMAIS une copie).
   __init__.py           register/unregister ; purge sys.modules de create_project au (un)register.
-  core/                 vocab.py (SEUL home des EnumProperty items), asset.py, project.py,
-                        thumbnails.py, states.py, entity_thumbs.py, usd_composer.py, scene_checker.py.
-  operators/            op_publish (cœur publish_entity_step), op_state_manager, op_save_wip,
-                        op_new_asset/project, op_open_context, op_import_product, op_io, op_scene_check…
-  ui/                   panel.py (N-panel unifié), menu.py (top bar), state_manager.py, io_panel.py.
-plugins/houdini/      ylos_publish.hdanc (HDA, régénéré JAMAIS édité en GUI), python/ylos_houdini.py
-                      (bridge : caches, render Karma, deliver), toolbar/ shelf, ylos.json.
+  core/                 vocab.py (SEUL home des EnumProperty items, dont STEP_STATUS_ITEMS), asset.py
+                        (wrappers minces sur list_scenefiles/list_entities/resolve_entity — plus aucun
+                        scan wip/ local), project.py, thumbnails.py, states.py, entity_thumbs.py,
+                        usd_convention.py (SEULE traduction de docs/usd-convention.md en kwargs RNA,
+                        filtrés contre le Blender qui tourne), usd_composer.py, scene_checker.py.
+  operators/            op_publish (cœur publish_entity_step, dependencies= depuis les collections
+                        d'import taguées, impact downstream), op_state_manager, op_save_wip,
+                        op_create_scene / op_playblast / op_render (specs orchestrateur),
+                        op_step_status (ylos.set_step_status), op_new_asset/project, op_open_context,
+                        op_import_product (famille via resolve_entity), op_update_imports, op_io…
+  ui/                   panel.py (N-panel unifié, compteurs d'en-tête), menu.py (top bar),
+                        state_manager.py, io_panel.py, panel_asset_list.py (statut par step).
+plugins/houdini/      ylos_publish.hdanc (HDA, régénéré JAMAIS édité en GUI ; embarque son
+                      PythonModule depuis tools/houdini/build_publish_hda.py), python/ylos_houdini.py
+                      (bridge : WIP + sidecar, create_scene = réalisation de scene_starter_spec via
+                      starter_plan pur, caches, render Karma, deliver, dependencies_from_paths),
+                      python/ylos_browser_model.py (PUR : ni hou ni Qt, nourri par l'orchestrateur),
+                      python/ylos_browser_panel.py (vue Qt via hutil.Qt, hou paresseux),
+                      python_panels/ylos_browser.pypanel (cockpit), toolbar/ shelf (11 outils),
+                      ylos.json (HOUDINI_PATH / OTLSCAN / PYTHONPATH / TOOLBAR).
 
-tools/blender/        launch_context.py (launcher versionné — TOUT lancement Blender passe par lui),
-                      backfill_thumbnails.py, test_*_headless.py (Blender réel, HORS CI stdlib).
+tools/blender/        launch_context.py (launcher versionné — TOUT lancement Blender passe par lui ;
+                      --kind wip|publish|scene_default|create, --version ; import via
+                      ylos.import_product, env par-session), backfill_thumbnails.py,
+                      test_*_headless.py (Blender réel, HORS CI stdlib — 20 scripts).
 tools/houdini/        build_publish_hda.py (source scriptée du HDA), test_*_e2e.py (hython, hors CI).
-tests/                Suite stdlib CI (python3 -m unittest, sans DCC). ~150+ tests.
+tests/                Suite stdlib CI (python3 -m unittest, sans DCC). ~340 tests (dont
+                      test_step_status, test_dependency_index, test_houdini_browser_*).
 docs/                 usd-convention.md, migration-*.md, plan-houdini-shots.md, ui-workstream.md,
                       pipeline-log.md (journal détaillé archivé).
 ```
@@ -95,6 +115,10 @@ done
 hython tools/houdini/test_shot_workflow_e2e.py
 # Régénérer le HDA après TOUT changement de son build (jamais d'édition GUI) :
 hython tools/houdini/build_publish_hda.py
+# Garde de compilation Houdini SANS licence (le Python embarqué est sous Frameworks/Python.framework,
+# PAS sous Resources/bin) :
+/Applications/Houdini/Houdini21.0.631/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
+  -m py_compile plugins/houdini/python/*.py tools/houdini/*.py
 # Lancer l'UI web (Project Browser) :
 python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Finder)
 ```
@@ -136,8 +160,21 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
   + timecodes du `frame_range`). Un publish **LOP** ou un **cache** (VDB/GLB) n'entre JAMAIS dans
   la compo (`_latest_by_step` filtre par `_is_usd_layer`). Convention figée : `docs/usd-convention.md`.
 - **Format d'artifact = décision d'orchestrateur** (`PROD_TYPE_TO_TARGET`) : cible `web`
-  (XR/AR/VR/GAME) → `.glb` ; `offline` (FILM/SERIES) → `.usd`. `op_publish` est format-aware
-  via `get_pipeline_target`. Un publish émet **un** artefact selon la cible.
+  (XR/AR/VR/GAME) → `.glb` ; `offline` (FILM/SERIES) → **`.usdc`** (le `.usd` nu est banni par
+  la convention). `op_publish` est format-aware via `get_pipeline_target`. Un publish émet
+  **un** artefact selon la cible.
+- **USD côté Blender = `plugins/blender/core/usd_convention.py`**, point unique : tout export/import
+  USD (`op_publish`, `op_io`, `op_import_product`) passe par ses kwargs (Y-up, `metersPerUnit`
+  de l'orchestrateur, root prim `/<Entité>` pour asset/set et `/ROOT` pour shot, `defaultPrim`),
+  filtrés contre la RNA du Blender qui tourne. Aller-retour Y-up vérifié sans perte (5.2).
+- **Env par-session (tension levée)** : tout lancement DCC reçoit `$PROJ_ROOT` (= **parent** du
+  dossier projet, contrat `$PROJ_ROOT/<projet> == project_dir`) et `$PROJ_CACHE` dans le process
+  **enfant** uniquement (`ylos_ui._launch_env`, ré-affirmé par `launch_context._apply_session_env`,
+  tracé dans `~/.ylos/launch.log`). **Jamais un export global.**
+- **Import depuis le cockpit = `ylos.import_product`** (collection taguée
+  `ylos_import_entity/step/version`, version exacte) — jamais `wm.usd_import` /
+  `import_scene.gltf` en direct : un import non tagué est invisible de Check Updates et absent
+  des `dependencies` du prochain publish.
 - **Caches** : scratch jetables sous `$PROJ_CACHE/.../<step>/<label>/` (versioning natif du
   filecache SOP, aucun manifeste) ; caches *consommables* (FX publié) = contrat deux-phases
   `kind=<step>` dans la source. Rendus Karma → tier cache, `deliver_render()` est le **seul**
@@ -172,6 +209,10 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
    **`soho_foreground=1`**. (Filet indépendant : `finalize` exige `expected_artifacts`.)
 6. `item_generator_script` d'un menu dynamique = mode **`eval`** (une expression qui *retourne*
    la liste plate, ni `return` ni `menu=`) → déléguer à `hdaModule().kind_menu_items(...)`.
+7. **UI Houdini testable sans licence** = découpage en trois : modèle **pur** (ni `hou` ni Qt,
+   nourri par l'orchestrateur, testé en stdlib) / vue Qt (`hutil.Qt`, PySide6 sous H21) / pont
+   `hou` paresseux. Pattern à reproduire pour tout futur panel DCC. `hou.ui.selectFile` n'est pas
+   dans `hou.py` (ajouté à l'exécution par `houpythonportion/ui.py`).
 
 **Blender** (miroir, cf. `plugins/blender/core/`) :
 1. **5.x a retiré `BLENDER_EEVEE_NEXT`** → tout moteur de rendu se **probe par affectation
@@ -182,6 +223,14 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
    `ylos_pipeline` + sous-modules. **Vérif avant tout diagnostic** : `inspect.getsource()` lit le
    *fichier* et peut mentir ; `f.__code__.co_consts/co_names` montrent le *bytecode chargé* — comparer les deux.
 3. Caméra neuve = `clip_end=1000` en dur → dériver les plans de clipping de la distance de cadrage.
+4. **`bpy.utils.unregister_class()` sur une classe non enregistrée LÈVE** (pas de no-op) ;
+   `<UIType>.remove(<func absente>)` ne lève pas. L'addon est joignable sous **deux identités
+   d'import** (`ylos_pipeline` via le symlink addons, `blender`/`plugins.blender` via le chemin
+   repo — ce que font les tests headless) : enregistrer la seconde dé-enregistre implicitement la
+   première (les lignes Info « has been registered before » sont le symptôme) et la fermeture
+   levait `missing bl_rna`. **`register()`/`unregister()` sont pilotés par l'état**
+   (`_registered_classes`, gardes `is_registered`, libération de l'identité jumelle), jamais par
+   le tuple statique `_classes`. Test : `test_addon_registration_headless.py`.
 - **Rechargement addon propre** : `__init__.py` purge `create_project` de `sys.modules` au
   (un)register ; un launcher/addon passe par un **symlink**, jamais une copie (résolution `_REPO_ROOT`).
 
@@ -200,14 +249,22 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
   anim ajoutés à la main) — à traiter avant un usage intensif.
 - **Variantes dans le composeur unique** : `refresh_entity_root` ne les gère pas encore ;
   `plugins/blender/core/usd_composer.py` (logique de variantes dupliquée) reste à résorber.
-- **Env par-session** (cf. Tensions) : launcher posant `$PROJ_ROOT`/`$PROJ_CACHE` par process.
 - **Cycle de vie des caches** : TTL / sweep / quotas du tier régénérable (aujourd'hui jamais purgé).
-- **Multi-séquences** de shots ; **tooling comp 2D** ; **up-axis Blender↔USD** à vérifier à l'usage.
+- **Multi-séquences** de shots ; **tooling comp 2D**.
+- **HDA `ylos_publish.hdanc` à régénérer** (`hython tools/houdini/build_publish_hda.py`) dès qu'une
+  licence Houdini est disponible : la source (`dependencies=` au publish) a changé, le `.hdanc`
+  embarque encore l'ancien PythonModule. Puis validation manuelle : panel, New Scene (shot + asset),
+  Save Version + commentaire, publish → clé `dependencies` dans le manifeste.
+- **Shakedown réel (plan 5a)** : `~/Ylos__Test` n'a encore aucune arête de dépendances (aucun
+  publish n'en déclare) ; nettoyage Phase 0.1 (orphelin `sets/lecube`, publish vide
+  `CHARACTER_Sissa02_Default/modeling/v001`) = décision utilisateur, données de test.
 
 ## Tensions connues
-- **Collision d'env vars** : `$PROJ_ROOT`/`$PROJ_CACHE` sont globaux au shell. Houdini +
-  Blender sur deux projets simultanés → conflit. Piste : env posée **par-session** par le
-  launcher. À résoudre avant que le multi-projet simultané devienne réel.
+- **Collision d'env vars** — **levée** côté lancements web/launcher (env par-session, cf.
+  Contrats). Reste vrai pour un Houdini lancé **à la main** depuis un shell : `ylos.json` ne pose
+  pas `$PROJ_ROOT` ; le panel/bridge lisent `~/.ylos/active_project`.
+- **Licence Houdini** : `hython` sans licence sur la machine (serveur `localhost:1715` muet) →
+  aucun e2e Houdini ni régénération de HDA possible tant qu'elle n'est pas renouvelée.
 
 ## Mode de collaboration attendu
 - **Lis avant d'écrire** : mappe l'état réel du repo avant toute mutation.
