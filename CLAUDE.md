@@ -73,7 +73,8 @@ Ylos.app/             Coquille double-clic SANS Terminal : retrouve le repo, dé
                       de lancement propre ; chaque double-clic laisse une trace dans ~/.ylos/launcher.log
                       (sans Terminal, un échec silencieux est indiagnosticable). Icône :
                       tools/macos/make_app_icon.py (Pillow, outil dev ; l'.icns est committé ;
-                      --style fullbleed macOS 26 / classic macOS ≤ 15).
+                      --style fullbleed macOS 26 / classic macOS ≤ 15). Déplacer le repo :
+                      tools/macos/relocate_repo.sh (copie vérifiée, liens re-pointés, rien supprimé).
 migrate_to_2.0.py     Migration legacy → convention TYPE_Nom_Variant (dispo si vrai projet legacy).
 README.md             Arborescence d'un projet CRÉÉ sur disque (source + cache) — ne pas la redupliquer.
 
@@ -227,8 +228,17 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
   (`Operation not permitted`, **sans invite**) tout fichier sous `~/Desktop`, `~/Documents`,
   `~/Downloads`, iCloud Drive et les volumes externes / réseau — constaté sur macOS 27, repo sous
   `~/Desktop`. Le serveur relit `app.html` à chaque requête : il lui faut l'accès pendant toute sa vie.
-  Repo et projets que le serveur lit : hors de ces zones (ex. `~/Developer`) ; sinon lancer via
-  `launch_ui.command` dans le Terminal (qui détient la permission). Diagnostic : `~/.ylos/launcher.log`.
+  Repo et projets que le serveur lit : hors de ces zones ; sinon lancer via `launch_ui.command` dans
+  le Terminal (qui détient la permission). Diagnostic : `~/.ylos/launcher.log`. **Emplacement du
+  repo : `~/Developer/YlosPipeline`** (décision Sébastien 2026-10-02 : le Bureau était en plus
+  synchronisé par iCloud, pas un endroit pour un `.git`). Un déplacement passe par
+  `tools/macos/relocate_repo.sh` : il re-pointe le lien de l'addon Blender, le package Houdini
+  (`YLOS_REPO` de `plugins/houdini/ylos.json`) et `~/.ylos/repo_path`, et garde l'ancien dossier.
+  **Les DCC héritent de cette limite** (probable, non vérifié) : le cockpit lance Blender en process
+  enfant (`subprocess.Popen`), qui hérite donc de l'identité TCC du lanceur du serveur. Lancé par
+  `Ylos.app`, Blender ne lirait pas non plus le Bureau, Documents, Téléchargements ni un disque
+  externe : tout ce qu'une scène référence vit dans le projet. Les projets sur le NVMe externe
+  exigeront une vraie app (identité TCC propre, invite normale).
 - **Langue** : le **français** est réservé à la **communication avec Sébastien** et à la
   **doc** (`docs/`, ce fichier). **Tout le reste est en anglais** : le code (identifiants,
   noms de fichiers, commentaires, docstrings) ET **toutes les chaînes vues par l'utilisateur**
@@ -313,6 +323,9 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **À trancher** : nommage des shots (`TYPE_Name_Variant` fige un département dans le nom,
   `ANIMATION_Sh010`) ; `comp` dans `SHOT_DOWNSTREAM_ORDER` contre `composite` dans les steps de
   `_TEST` (un layer USD de composite serait empilé en dernier, le plus faible).
+- **Lanceur = vraie app** (applet ou exécutable natif, identité TCC propre) avant de servir des
+  projets du NVMe externe : `Ylos.app` (script) y sera refusé, et Blender lancé depuis le cockpit
+  avec lui.
 
 ## Tensions connues
 - **Collision d'env vars** — **levée** côté lancements web/launcher (env par-session, cf.

@@ -26,12 +26,12 @@ le cockpit **testable sans licence Houdini** (`tests/test_houdini_browser_model.
 
 ```bash
 mkdir -p "$HOME/Library/Preferences/houdini/21.0/packages"
-ln -sf "$HOME/Desktop/Claude/YlosPipeline/plugins/houdini/ylos.json" \
+ln -sf "$HOME/Developer/YlosPipeline/plugins/houdini/ylos.json" \
        "$HOME/Library/Preferences/houdini/21.0/packages/ylos.json"
 ```
 
 `YLOS_REPO` est défini dans `ylos.json` — l'ajuster si le repo n'est pas sous
-`$HOME/Desktop/Claude/YlosPipeline`. Redémarrer Houdini après toute modification du
+`$HOME/Developer/YlosPipeline` (`tools/macos/relocate_repo.sh` le fait lors d'un déplacement). Redémarrer Houdini après toute modification du
 package (les variables d'environnement ne sont lues qu'au démarrage).
 
 ## Utilisation
