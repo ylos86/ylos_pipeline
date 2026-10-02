@@ -1497,3 +1497,10 @@ macOS 26).
   `snapshot/2026-10-02-before-schema-2.3`. Incident : le dossier connecté du pont Cowork refusait la
   suppression, git a laissé `.git/index.lock` (bloquant aussi sur le Mac) ; suppression autorisée,
   verrou et 33 objets temporaires retirés, `git fsck` propre.
+- **Publication GitHub** : premier push refusé (« Claude doesn't have GitHub access ») ; Sébastien
+  installe l'app GitHub Claude sur `ylos86/ylos_pipeline`. Poussés ensuite depuis la session :
+  `feat/schema-2.3-step-status` et `main` → `79ccbd4` (avance rapide depuis `de571a3`). Le tag
+  `snapshot/2026-10-02-before-schema-2.3` reste refusé (HTTP 403) depuis la session, et le premier
+  push qui le mêlait aux deux branches a échoué en bloc : tag à pousser depuis le Mac. PR #1
+  `feat/schema-2.3-step-status` → `main`, ouverte par l'API REST (GraphQL refusé) : première
+  exécution de ce code sous Python 3.9.

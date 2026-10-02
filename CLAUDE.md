@@ -287,8 +287,9 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **Incrément = branche + tag de l'état d'avant** (décision Sébastien 2026-10-02) : avant un
   changement de contrat, l'état courant est commité **tel quel** et tagué
   `snapshot/<date>-before-<sujet>`, puis le travail se fait sur `feat/<sujet>` et ne rejoint
-  `main` qu'après validation. Premier cas : `snapshot/2026-10-02-before-schema-2.3` +
-  `feat/schema-2.3-step-status`.
+  `main` qu'après validation, par une PR `feat/<sujet>` → `main` : c'est elle qui lance la CI
+  (3.9 / 3.11 / 3.13) ; une branche poussée seule n'est pas testée. Premier cas :
+  `snapshot/2026-10-02-before-schema-2.3` + `feat/schema-2.3-step-status` (PR #1).
 
 ## Chantiers ouverts (hors scope actuel — cf. `pipeline-log.md` pour le détail)
 - **Update Import = remplacement pur (v1)** : aucun remap des overrides (matériaux, contraintes,
@@ -331,4 +332,9 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **Git depuis une session Claude reliée au Mac (pont Cowork)** : le dossier connecté refuse la
   suppression tant qu'elle n'est pas autorisée, or git doit supprimer ses verrous et objets
   temporaires → il laisse `.git/index.lock`, qui bloque git **aussi sur le Mac**. Autoriser la
-  suppression AVANT toute commande git qui écrit. Le remote est en SSH : pousser depuis le Mac.
+  suppression AVANT toute commande git qui écrit. Le pont ne pousse jamais (ni clés ni réseau SSH).
+- **Pousser vers GitHub** (vérifié 2026-10-02) : l'app GitHub Claude est installée sur
+  `ylos86/ylos_pipeline` → une session Claude pousse les **branches** (`main` compris) depuis son
+  clone, en HTTPS, et ouvre les PR par l'API REST (`gh api`, GraphQL refusé). Les **tags** y sont
+  refusés (HTTP 403), et un push qui mêle branches et tag échoue **en bloc** : pousser les branches
+  seules, puis le tag depuis le Mac (remote SSH).
