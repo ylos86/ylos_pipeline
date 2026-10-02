@@ -7,6 +7,7 @@
 # can never start the server. A Desktop synced by iCloud is no place for a .git directory either.
 #
 # Usage:  bash tools/macos/relocate_repo.sh [DEST]        (default: ~/Developer/YlosPipeline)
+#         or double-click a .command that runs it: Terminal keeps the report on screen.
 #
 # Nothing is deleted. In this order, stopping at the first problem:
 #   1. refuse if DEST exists or sits in a protected place, or if Blender / Houdini run (they
@@ -20,7 +21,7 @@
 #      link(s) (a package file that is a copy gets its path rewritten, .bak kept), YLOS_REPO in
 #      the copy's plugins/houdini/ylos.json, ~/.ylos/repo_path;
 #   6. rename the old folder "<name> (old copy - moved to <parent of DEST>)": a backup, to
-#      delete by hand once everything works.
+#      delete by hand once everything works; then reveal Ylos.app and start it from the new place.
 #
 # bash 3.2-clean: this runs under the /bin/bash of macOS.
 
@@ -203,7 +204,10 @@ fi
 
 say ""
 say "Done. The repo now lives in $DEST"
-say "Next: double-click Ylos in the Finder window that opens (drag it to the Dock to keep it)."
+say "Ylos now starts from there. Drag it from the Finder window to the Dock to keep it."
 say "If an older Ylos is in the Dock, remove it: it points at the old folder."
-if [ "$(uname -s)" = Darwin ]; then open -R "$DEST/Ylos.app"; fi
+if [ "$(uname -s)" = Darwin ]; then
+    open -R "$DEST/Ylos.app"
+    open "$DEST/Ylos.app"      # the first launch from the new place: server + browser
+fi
 exit 0
