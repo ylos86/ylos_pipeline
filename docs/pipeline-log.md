@@ -1467,3 +1467,33 @@ l'essai suivant.
 GNU et Debian bloqués par la politique d'egress) ; le comportement TCC d'un serveur détaché une fois l'app
 fermée ; le rendu de l'icône sur macOS 27 (la règle « bord opaque » documentée plus haut vaut pour
 macOS 26).
+
+## Schéma 2.3 : un statut explicite porte sa version (2026-10-02)
+
+- **Constat** (pendant la refonte UI, sur les données réelles de `Ylos__Test`) : en 2.2,
+  l'explicite gagne toujours dans `get_step_status` et `finalize_publish_version` ne touche jamais
+  `step_status`. Une approbation s'étendait donc en silence à toute publication suivante.
+- **Décision** (Sébastien) : l'approbation porte sa version. Implémentation **additive** : table
+  voisine `step_status_meta` `{step: {version, set_utc}}`, `step_status` inchangé. Un outil 2.2 relit
+  un manifeste 2.3 sans perdre une approbation : retour arrière sûr sur le tag
+  `snapshot/2026-10-02-before-schema-2.3`. Rejeté : un objet dans `step_status` (le code 2.2 l'aurait
+  lu comme valeur inconnue et serait retombé en silence sur le dérivé).
+- `set_step_status(..., version=None)` : sans version → dernière version `complete` (manifeste seul,
+  les réservations `pending` exclues) ; avec version → doit être un publish `complete` du step, sinon
+  `ValueError` sans écriture. Effacer retire les deux entrées ; une version passée en effaçant est
+  refusée.
+- `get_step_status` : clés ajoutées `version`, `set_utc`, `latest_version`, `behind`. Le statut n'est
+  jamais rétrogradé par un publish : `behind` sert aux UI.
+- Adaptateurs : `version` optionnel sur `POST /api/set-step-status` (passé tel quel) ; CLI
+  `set-step-status ... --version N`. Blender et Houdini inchangés : ils enregistrent la dernière version.
+- Tests : `TestVersionBoundStatus` (+13) dans `tests/test_step_status.py` ; `tests/test_ylos_ui.py`
+  (+2, et trois comparaisons de dict complet mises à la forme 2.3). Suite stdlib : 395 OK (1 skip),
+  Python 3.10 ; modules touchés verts en 3.11 et 3.13 ; `vermin` : minimum 3.7, donc compatible 3.9.
+- **Non fait** : affichage de `behind` dans les trois UI (incrément suivant). Tests headless Blender et
+  e2e Houdini non relancés (ni Blender ni licence Houdini dans l'environnement) ; aucun appelant DCC ne
+  change de signature.
+- **Avant ce travail** : le travail du 2026-10-01 (browser Blender, publish check, `Ylos.app`) n'avait
+  jamais été commité. Il l'a été tel quel (`79ccbd4`, sur `main`) et tagué
+  `snapshot/2026-10-02-before-schema-2.3`. Incident : le dossier connecté du pont Cowork refusait la
+  suppression, git a laissé `.git/index.lock` (bloquant aussi sur le Mac) ; suppression autorisée,
+  verrou et 33 objets temporaires retirés, `git fsck` propre.
