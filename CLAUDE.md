@@ -337,4 +337,7 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
   `ylos86/ylos_pipeline` → une session Claude pousse les **branches** (`main` compris) depuis son
   clone, en HTTPS, et ouvre les PR par l'API REST (`gh api`, GraphQL refusé). Les **tags** y sont
   refusés (HTTP 403), et un push qui mêle branches et tag échoue **en bloc** : pousser les branches
-  seules, puis le tag depuis le Mac (remote SSH).
+  seules, puis le tag depuis le Mac (remote SSH). Retour vers le Mac : le pont **lit** GitHub en
+  HTTPS (dépôt public) → `git fetch https://github.com/ylos86/ylos_pipeline.git
+  +refs/heads/<b>:refs/remotes/origin/<b>` puis `merge --ff-only` ; les outils de fichiers du pont
+  refusent toute écriture dans `.git` (pas de bundle dans ce sens).

@@ -1502,5 +1502,7 @@ macOS 26).
   `feat/schema-2.3-step-status` et `main` → `79ccbd4` (avance rapide depuis `de571a3`). Le tag
   `snapshot/2026-10-02-before-schema-2.3` reste refusé (HTTP 403) depuis la session, et le premier
   push qui le mêlait aux deux branches a échoué en bloc : tag à pousser depuis le Mac. PR #1
-  `feat/schema-2.3-step-status` → `main`, ouverte par l'API REST (GraphQL refusé) : première
-  exécution de ce code sous Python 3.9.
+  `feat/schema-2.3-step-status` → `main`, ouverte par l'API REST (GraphQL refusé) : CI verte en
+  3.9 / 3.11 / 3.13 (première exécution de ce code sous 3.9), comme le push de `main`. Mac
+  resynchronisé par un fetch HTTPS depuis le pont (écrire un bundle dans `.git` est refusé) ; ancien
+  bundle de transfert supprimé.
