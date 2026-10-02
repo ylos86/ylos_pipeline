@@ -181,17 +181,20 @@ d'exemple), langage de statut, contrat d'écran (chaque écran : sa question, se
 | Décision | Statut |
 |---|---|
 | Une approbation porte sa version | Implémenté : schéma 2.3 (`docs/migration-2.2-to-2.3.md`), branche `feat/schema-2.3-step-status` |
-| Une cellule de step montre le rendu de SA version ; l'image d'entité peut rester un preview, étiqueté et capturé sans overlays | Adopté, pas encore codé. Constat : la cascade « custom > publish » montre le personnage de Sissa02 à côté d'un v001 au rendu vide |
-| Direction C = base de la refonte web | Adopté |
+| Une cellule de step montre le rendu de SA version ; l'image d'entité peut rester un preview, étiqueté et capturé sans overlays | Implémenté côté web : `entity_overview` apparie version et rendu, la cellule et l'aperçu affichent la paire ; l'image d'entité porte son étiquette (« Publish render », « Preview · custom », « Legacy publish », « WIP thumbnail ») |
+| Direction C = base de la refonte web | Implémenté : `app.html` (branche `feat/ui-direction-c`, PR #3) ; l'ancien cockpit reste servi à `/classic` |
 | Image d'entité = pointeur dans le manifeste vers un rendu de publish, plutôt qu'un `preview.png` copié | Proposé |
 
-Prochains incréments, dans l'ordre :
-1. Afficher `behind` (web, Blender, Houdini) et l'accueil en matrice ; la donnée existe déjà dans
-   `/api/assets` (statut et dernière version par step, avec vignette).
-2. Exposer depuis l'orchestrateur les signaux d'intégrité : réservations abandonnées
-   (`clean_stale_staging` en dry run), rendu de publish vide.
+Incréments :
+1. ~~Accueil en matrice et `behind` côté web~~ — fait (2026-10-02, PR #3). Reste `behind` et la
+   vue d'ensemble dans les browsers Blender et Houdini, depuis le même `entity_overview`.
+2. Signaux d'intégrité : ~~réservations abandonnées~~ — fait (`abandoned_reservations`, lecture
+   seule, partage `_pending_reservations` avec `clean_stale_staging`). Reste : rendu de publish
+   vide (le v001 de Sissa02), réservations LOP dans l'aperçu.
 3. Page shot : ordre de composition de `shot_root`, playblasts, rendus du cache, livraisons ;
    `deliver_render` à déplacer du bridge Houdini vers `create_project.py` (il est pur : shutil, sans `hou`).
+   Pas commencé : l'accueil des shots montre un état vide avec « New shot ».
+4. Pré-production (References, Boards) : entrées « planned » dans la navigation, rien derrière.
 
 Ouvert : nommage des shots (`TYPE_Name_Variant` fige un département) ; `comp` vs `composite` ;
 commentaire de publish vide en dur dans `op_publish.execute`.

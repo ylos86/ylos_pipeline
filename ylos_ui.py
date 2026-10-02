@@ -189,16 +189,24 @@ def _last_versions(project_root: Path, entity_name: str, manifest: dict) -> dict
 
 
 def _artifact_ext(artifact: str | None) -> str | None:
-    """Extension label of a publish artifact ('usd', 'glb', 'bgeo.sc'...) — the longest
-    known PUBLISH_ARTIFACT_EXTENSIONS suffix wins, so a compound extension is not cut."""
-    if not artifact:
+    """Extension label of a publish artifact — thin adapter to
+    create_project.artifact_extension (the rule lives in the orchestrator)."""
+    return create_project.artifact_extension(artifact)
+
+
+def _overview_payload(entity_name: str, overview: dict | None) -> dict | None:
+    """create_project.entity_overview with each step's render turned into a /thumb/ URL — the
+    only web-specific part. Nothing is re-derived here (principle 5): the shown version and
+    its render arrive paired from the orchestrator."""
+    if overview is None:
         return None
-    low = artifact.lower()
-    known = sorted(create_project.PUBLISH_ARTIFACT_EXTENSIONS, key=len, reverse=True)
-    for ext in known:
-        if low.endswith(ext):
-            return ext.lstrip(".")
-    return os.path.splitext(artifact)[1].lstrip(".").lower() or None
+    steps = {}
+    for step, info in overview.get("steps", {}).items():
+        row = dict(info)
+        rel = row.pop("shown_thumb", None)
+        row["shown_thumb"] = f"/thumb/{entity_name}/{rel}" if rel else None
+        steps[step] = row
+    return {"last_activity_utc": overview.get("last_activity_utc"), "steps": steps}
 
 
 def _publish_rows(project_dir: Path, entity_name: str, step: str) -> list[dict]:
@@ -266,11 +274,13 @@ def _list_assets(project_dir: Path) -> list[dict]:
                 "thumb": f"/thumb/{thumb}" if thumb else None,
                 "thumb_source": source,
                 "broken": ent["broken"],
+                "overview": None,
             })
             continue
         manifest = ent["manifest"]
         statuses = create_project.get_step_status(project_dir, name) or {}
         deps = create_project.entity_dependencies(project_dir, name, index)
+        overview = _overview_payload(name, create_project.entity_overview(project_dir, name))
         result.append({
             "name": name,
             "family": family,
@@ -284,6 +294,9 @@ def _list_assets(project_dir: Path) -> list[dict]:
             "thumb": f"/thumb/{thumb}" if thumb else None,
             "thumb_source": source,
             "broken": None,
+            # Home of direction C: per step the shown version WITH its own render, newer
+            # unpublished work, abandoned reservations, and the entity's last activity.
+            "overview": overview,
         })
     return result
 
@@ -327,6 +340,7 @@ def _asset_detail(project_dir: Path, name: str) -> dict | None:
         "thumb_source": source,
         "created_utc": manifest.get("created_utc"),
         "modified_utc": manifest.get("modified_utc"),
+        "overview": _overview_payload(name, create_project.entity_overview(project_dir, name)),
     }
 
 
@@ -489,6 +503,9 @@ class YlosHandler(BaseHTTPRequestHandler):
         p = self.path
         if p in ("/", "/app.html"):
             self._get_app_html()
+        elif p in ("/classic", "/classic/", "/app_classic.html"):
+            # The cockpit before direction C, kept reachable while the new one beds in.
+            self._get_app_html("app_classic.html")
         elif p == "/api/project":
             self._get_project()
         elif p == "/api/config":
@@ -560,12 +577,12 @@ class YlosHandler(BaseHTTPRequestHandler):
 
     # --- GET handlers
 
-    def _get_app_html(self):
-        f = Path(__file__).parent / "app.html"
+    def _get_app_html(self, filename: str = "app.html"):
+        f = Path(__file__).parent / filename
         try:
             data = f.read_bytes()
         except OSError:
-            _json(self, 404, {"error": "app.html not found"}); return
+            _json(self, 404, {"error": f"{filename} not found"}); return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -608,6 +625,9 @@ class YlosHandler(BaseHTTPRequestHandler):
             "step_status_explicit": list(create_project.STEP_STATUS_EXPLICIT),
             "step_status_auto": create_project.STEP_STATUS_AUTO,
             "schema_version": create_project.SCHEMA_VERSION,
+            # New-project choices (the web never hard-codes pipeline vocabulary).
+            "prod_types": list(create_project.PROD_TYPES),
+            "prod_type_targets": dict(create_project.PROD_TYPE_TO_TARGET),
         })
 
     def _get_project(self):

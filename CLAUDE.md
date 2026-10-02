@@ -57,13 +57,24 @@ create_project.py     ORCHESTRATEUR. Source de vérité UNIQUE, stdlib seule. Co
                       scenefiles multi-DCC (list_scenefiles), statut par step lié à une version
                       2.3 (get/set_step_status), listing d'entités (list_entities, orphelins flaggés),
                       specs DCC-agnostiques (scene_starter_spec, playblast_spec, render_spec),
-                      dépendances (build_dependency_index, entity_dependencies).
+                      dépendances (build_dependency_index, entity_dependencies), vue d'ensemble
+                      d'entité (entity_overview : par step la version montrée AVEC son rendu, travail
+                      non publié, réservations abandonnées via abandoned_reservations, dernière
+                      activité), libellé d'extension d'artifact (artifact_extension).
 ylos_ui.py            Serveur HTTP local + API REST (/api/*). Adaptateur mince → create_project.
                       Verbes open-blender : ouvrir (WIP-first) / scenefile / import (version exacte) /
                       create (Scene Creator) ; set-step-status ; reveal ; env par-session (_launch_env).
-app.html              Web UI (Project Browser cockpit : grille → vue entité en drill-down, steps +
-                      statut, galerie de versions A/B, scenefiles multi-DCC, products, dépendances).
-                      Config via GET /api/config (jamais codée en dur).
+                      /api/assets et /api/asset portent `overview` (entity_overview, rendu → URL
+                      /thumb/) ; `/classic` sert app_classic.html.
+app.html              Web UI « direction C » : accueil = matrice entités × steps (ou galerie), aperçu
+                      rapide, Intégrité (orphelins, réservations abandonnées, approbations en retard,
+                      imports périmés), Web pins ; page entité = onglets de steps, versions + compare,
+                      scenefiles, statut lié à sa version, dépendances. Lit `overview` et
+                      GET /api/config (vocabulaire jamais codé en dur), ne recalcule aucune règle.
+                      Servie par un serveur plus ancien (cartes sans `overview`) : bandeau « Restart »
+                      et repli qui n'apparie jamais une version à un rendu que le serveur n'a pas apparié.
+app_classic.html      Ancien cockpit (grille → drill-down), servi à /classic. Gelé : ni évolution ni
+                      suppression tant que la direction C n'est pas validée à l'usage.
 launch_ui.command     MOTEUR de lancement de l'UI (bash 3.2) : sans option = foreground (Terminal) ;
                       --detach (arrière-plan, log ~/.ylos/ui-server.log) | --stop | --status
                       (stopped / running / stale / blocked). « Est-ce Ylos ? » = process (listener du
@@ -110,8 +121,9 @@ tools/blender/        launch_context.py (launcher versionné — TOUT lancement 
                       ylos.import_product, env par-session), backfill_thumbnails.py,
                       test_*_headless.py (Blender réel, HORS CI stdlib — 20 scripts).
 tools/houdini/        build_publish_hda.py (source scriptée du HDA), test_*_e2e.py (hython, hors CI).
-tests/                Suite stdlib CI (python3 -m unittest, sans DCC). ~340 tests (dont
-                      test_step_status, test_dependency_index, test_houdini_browser_*).
+tests/                Suite stdlib CI (python3 -m unittest, sans DCC). ~430 tests (dont
+                      test_step_status, test_dependency_index, test_entity_overview,
+                      test_houdini_browser_*).
 docs/                 usd-convention.md, migration-*.md, plan-houdini-shots.md, ui-workstream.md,
                       pipeline-log.md (journal détaillé archivé).
 ```
@@ -141,6 +153,7 @@ hython tools/houdini/build_publish_hda.py
 ./launch_ui.command --stop
 ./launch_ui.command                     # foreground : le Terminal EST le serveur (ou double-clic Finder)
 python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
+# Ancien cockpit (gelé) : http://127.0.0.1:8765/classic
 ```
 
 ## Contrats & conventions
@@ -160,6 +173,13 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
   arrière sûr). Un publish ne réinitialise **jamais** un statut : `get_step_status` expose
   `version`, `latest_version` et `behind` (publish plus récent que la version approuvée) — c'est
   aux UI de signaler le retard, jamais à l'orchestrateur de rétrograder le statut.
+- **Une version ne voyage qu'avec son rendu** : `entity_overview()` apparie pour chaque step
+  `shown_version` et `shown_thumb` (la version d'un statut explicite si elle est publiée, sinon le
+  dernier publish `complete`) ; une UI affiche la paire telle quelle, jamais un numéro de statut à
+  côté de la vignette d'une autre version. Même lecture prévue pour les browsers Blender / Houdini.
+  `newer_wip` = scenefile sauvée plus de `NEWER_WIP_GRACE_S` (120 s) après le dernier publish ;
+  `abandoned` = réservations `pending` sans staging, ou dont le process créateur est mort (lecture
+  seule : balayer reste le rôle de `clean_stale_staging`, rien ne réécrit l'entrée du manifeste).
 - **Dépendances** : `finalize_publish_version(..., dependencies=[{entity, step, version}])`
   enregistre ce que le DCC avait importé ; `build_dependency_index()` fusionne cette source
   (manifeste) avec le scan des layers USD **ASCII** (`@…@`, `$PROJ_ROOT` expansé). Jamais de
@@ -315,9 +335,12 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **Shakedown réel (plan 5a)** : `~/Ylos__Test` n'a encore aucune arête de dépendances (aucun
   publish n'en déclare) ; nettoyage Phase 0.1 (orphelin `sets/lecube`, publish vide
   `CHARACTER_Sissa02_Default/modeling/v001`) = décision utilisateur, données de test.
-- **Refonte web « direction C »** (maquettes validées, cf. `docs/ui-workstream.md`) : afficher
-  `behind` dans les trois UI + accueil en matrice entités × steps ; exposer depuis l'orchestrateur
-  les réservations abandonnées (`clean_stale_staging` en dry run) et le rendu de publish vide.
+- **Refonte « direction C »** (cf. `docs/ui-workstream.md`) : cockpit web livré sur
+  `feat/ui-direction-c` (PR #3), ancien cockpit à `/classic`. Reste : `behind` et la vue d'ensemble
+  dans les browsers Blender / Houdini (même `entity_overview`) ; page shot (ordre de compo de
+  `shot_root`, playblasts, rendus, livraisons ; `deliver_render` à remonter du bridge Houdini dans
+  l'orchestrateur) ; détection du rendu de publish vide ; réservations LOP (`kind="lop"`) dans
+  l'aperçu ; modules de pré-production (References, Boards, affichés « planned »).
 - **Commentaire de publish perdu côté Blender** : `op_publish.execute` passe `comment=""` en dur,
   alors que le contrat l'accepte (`allocate_publish_version(comment=…)`).
 - **À trancher** : nommage des shots (`TYPE_Name_Variant` fige un département dans le nom,
