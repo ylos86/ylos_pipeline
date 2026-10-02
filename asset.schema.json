@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://ylos.pipeline/asset.schema.json",
   "title": "Ylos Prod - manifeste d'entite (asset/set/shot)",
-  "description": "Manifeste par entite, pose dans <entite>/manifest.json. Source de verite de ses etapes (steps) et de ses publishes versionnes USD. Les dossiers de step sont generes depuis 'steps'. Clarifie l'usage des projets reels ou 'entity_type' (la famille) et 'type' (le sous-type metier) etaient confondus. Tout changement = bump schema_version + migration (2.2 : step_status + dependencies des publishes, additif). additionalProperties=true pour extension par les plugins.",
+  "description": "Manifeste par entite, pose dans <entite>/manifest.json. Source de verite de ses etapes (steps) et de ses publishes versionnes USD. Les dossiers de step sont generes depuis 'steps'. Clarifie l'usage des projets reels ou 'entity_type' (la famille) et 'type' (le sous-type metier) etaient confondus. Tout changement = bump schema_version + migration (2.2 : step_status + dependencies des publishes, additif ; 2.3 : step_status_meta, additif). additionalProperties=true pour extension par les plugins.",
   "type": "object",
   "required": ["schema_version", "name", "entity_type", "type", "steps"],
   "additionalProperties": true,
@@ -53,8 +53,20 @@
     },
     "step_status": {
       "type": "object",
-      "description": "Statut EXPLICITE par step (schema 2.2, optionnel). Seules les valeurs 'review' et 'approved' sont persistees ici ; 'empty' / 'wip' / 'published' sont DERIVEES du disque a la lecture (create_project.get_step_status) et jamais ecrites. Cle absente ou step absent -> statut derive ; les consommateurs traitent l'absence par le fallback derive, jamais par un crash. Ecrit uniquement par create_project.set_step_status (point unique).",
+      "description": "Statut EXPLICITE par step (schema 2.2, optionnel). Seules les valeurs 'review' et 'approved' sont persistees ici ; 'empty' / 'wip' / 'published' sont DERIVEES du disque a la lecture (create_project.get_step_status) et jamais ecrites. Cle absente ou step absent -> statut derive ; les consommateurs traitent l'absence par le fallback derive, jamais par un crash. Ecrit uniquement par create_project.set_step_status (point unique). Depuis 2.3, la version publiee a laquelle chaque statut s'applique vit dans 'step_status_meta' : ce champ garde sa forme 2.2 et reste lisible par un outil 2.2.",
       "additionalProperties": {"type": "string", "enum": ["review", "approved"]}
+    },
+    "step_status_meta": {
+      "type": "object",
+      "description": "Schema 2.3, optionnel. Ce a quoi s'applique chaque statut EXPLICITE de 'step_status' : memes cles (noms de step), ecrit uniquement par create_project.set_step_status, avec 'step_status', sous le meme flock. 'version' = version 'complete' du step au moment du statut (par defaut la derniere ; null si rien n'etait publie) ; 'set_utc' = date du statut. Un publish ne modifie jamais cette table : get_step_status signale 'behind' quand un publish plus recent existe. Entree absente (statut pose avant 2.3) -> version inconnue ; entree sans statut correspondant -> ignoree a la lecture.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "version": {"type": ["integer", "null"], "minimum": 1},
+          "set_utc": {"type": "string", "format": "date-time"}
+        }
+      }
     },
     "step_publishes": {
       "type": "object",

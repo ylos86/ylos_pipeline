@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 tests/test_step_status.py — stdlib tests (unittest) for the schema 2.2 per-step status
-(create_project.get_step_status / set_step_status) and the multi-DCC scenefile listing
-(create_project.list_scenefiles) - plan-usable-v1 Phase 2.1.
+(create_project.get_step_status / set_step_status), bound to a publish version since schema
+2.3, and the multi-DCC scenefile listing (create_project.list_scenefiles) - plan-usable-v1
+Phase 2.1.
 
 Locks: derived statuses (empty -> wip -> published) read from disk + manifest, explicit
 values (review / approved) persisted by the single writer and overriding derivation,
-'auto' clearing, unknown step/status refused, never-raises read contract, and the
-sidecar merge / DCC detection of the scenefile scan.
+'auto' clearing, unknown step/status refused, never-raises read contract, the 2.3 version
+binding (default = latest complete publish, explicit version validated, 'behind' when a
+newer publish exists, 'step_status' kept in its 2.2 shape for rollback), and the sidecar
+merge / DCC detection of the scenefile scan.
 
 Usage: python3 tests/test_step_status.py
     or: python3 -m unittest tests.test_step_status
@@ -64,7 +67,9 @@ class TestDerivedStatus(_BaseCase):
         statuses = cp.get_step_status(self.project, "CHARACTER_Lina_Default")
         self.assertEqual(set(statuses), set(self._manifest()["steps"]))
         for step, info in statuses.items():
-            self.assertEqual(info, {"status": "empty", "explicit": False, "derived": "empty"}, step)
+            self.assertEqual(info, {"status": "empty", "explicit": False, "derived": "empty",
+                                    "version": None, "set_utc": None,
+                                    "latest_version": None, "behind": False}, step)
 
     def test_wip_scenefile_derives_wip_for_blender_and_houdini(self):
         self._wip("modeling", "CHARACTER_Lina_Default_modeling_v001.blend")
@@ -115,7 +120,9 @@ class TestExplicitStatus(_BaseCase):
     def test_set_persists_and_overrides_derivation(self):
         self._publish("modeling")
         info = cp.set_step_status(self.project, "CHARACTER_Lina_Default", "modeling", "review")
-        self.assertEqual(info, {"status": "review", "explicit": True, "derived": "published"})
+        self.assertIsInstance(info.pop("set_utc"), str)
+        self.assertEqual(info, {"status": "review", "explicit": True, "derived": "published",
+                                "version": 1, "latest_version": 1, "behind": False})
         self.assertEqual(self._manifest()["step_status"], {"modeling": "review"})
         self.assertEqual(self._manifest()["schema_version"], cp.SCHEMA_VERSION)
 
@@ -157,6 +164,136 @@ class TestExplicitStatus(_BaseCase):
         self.assertEqual(cp.STEP_STATUSES, ["empty", "wip", "published", "review", "approved"])
         self.assertEqual(set(cp.STEP_STATUS_EXPLICIT), {"review", "approved"})
         self.assertTrue(set(cp.STEP_STATUS_EXPLICIT) <= set(cp.STEP_STATUSES))
+
+
+class TestVersionBoundStatus(_BaseCase):
+    """Schema 2.3 - an explicit status records the publish version it applies to
+    (manifest['step_status_meta']). A later publish is reported as 'behind', never
+    silently covered by the old approval, and 'step_status' keeps its 2.2 shape."""
+
+    E = "CHARACTER_Lina_Default"
+
+    def _write(self, manifest):
+        (self.entity_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_default_version_is_the_latest_complete_publish(self):
+        self._publish("modeling")
+        self._publish("modeling")
+        # A pending reservation (allocated, never finalized) is not a publish.
+        cp.allocate_publish_version(self.project, self.E, comment="", kind="modeling")
+        info = cp.set_step_status(self.project, self.E, "modeling", "approved")
+        self.assertEqual((info["version"], info["latest_version"], info["behind"]), (2, 2, False))
+        meta = self._manifest()[cp.STEP_STATUS_META_KEY]["modeling"]
+        self.assertEqual(meta["version"], 2)
+        self.assertEqual(meta["set_utc"], info["set_utc"])
+
+    def test_newer_publish_is_reported_behind_and_never_downgrades(self):
+        self._publish("modeling")
+        cp.set_step_status(self.project, self.E, "modeling", "approved")
+        self._publish("modeling")
+        info = cp.get_step_status(self.project, self.E, "modeling")
+        self.assertEqual(info["status"], "approved")
+        self.assertEqual((info["version"], info["latest_version"], info["behind"]), (1, 2, True))
+
+    def test_explicit_older_version_is_accepted_and_behind(self):
+        self._publish("modeling")
+        self._publish("modeling")
+        info = cp.set_step_status(self.project, self.E, "modeling", "review", version=1)
+        self.assertEqual((info["status"], info["version"], info["behind"]), ("review", 1, True))
+
+    def test_version_must_be_a_complete_publish_of_the_step(self):
+        self._publish("modeling")                                                # v1 complete
+        cp.allocate_publish_version(self.project, self.E, comment="", kind="modeling")  # v2 pending
+        self._publish("rigging")                                                 # rigging v1
+        before = self._manifest()
+        for bad in (2, 9, 0, -1, "1", 1.0, True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                cp.set_step_status(self.project, self.E, "modeling", "approved", version=bad)
+        with self.assertRaises(ValueError):   # rigging's v1 is not a lookdev publish
+            cp.set_step_status(self.project, self.E, "lookdev", "approved", version=1)
+        self.assertEqual(self._manifest(), before)   # a refused call writes nothing
+
+    def test_version_is_refused_when_clearing(self):
+        self._publish("modeling")
+        with self.assertRaises(ValueError):
+            cp.set_step_status(self.project, self.E, "modeling", cp.STEP_STATUS_AUTO, version=1)
+        self.assertNotIn(cp.STEP_STATUS_META_KEY, self._manifest())
+
+    def test_status_without_any_publish_records_no_version(self):
+        self._wip("modeling", "CHARACTER_Lina_Default_modeling_v001.blend")
+        info = cp.set_step_status(self.project, self.E, "modeling", "review")
+        self.assertEqual((info["status"], info["version"], info["latest_version"], info["behind"]),
+                         ("review", None, None, False))
+        self.assertIsNone(self._manifest()[cp.STEP_STATUS_META_KEY]["modeling"]["version"])
+
+    def test_clearing_drops_both_maps(self):
+        self._publish("modeling")
+        cp.set_step_status(self.project, self.E, "modeling", "approved")
+        cp.set_step_status(self.project, self.E, "modeling", cp.STEP_STATUS_AUTO)
+        manifest = self._manifest()
+        self.assertNotIn(cp.STEP_STATUS_KEY, manifest)
+        self.assertNotIn(cp.STEP_STATUS_META_KEY, manifest)
+
+    def test_step_status_keeps_its_22_shape(self):
+        # Rollback safety: a 2.2 reader (tag snapshot/2026-10-02-before-schema-2.3) must still
+        # see every review/approved of a manifest written in 2.3.
+        self._publish("modeling")
+        cp.set_step_status(self.project, self.E, "modeling", "approved")
+        cp.set_step_status(self.project, self.E, "rigging", "review")
+        self.assertEqual(self._manifest()[cp.STEP_STATUS_KEY],
+                         {"modeling": "approved", "rigging": "review"})
+
+    def test_status_set_before_23_has_an_unknown_version(self):
+        self._publish("modeling")
+        self._publish("modeling")
+        manifest = self._manifest()
+        manifest[cp.STEP_STATUS_KEY] = {"modeling": "approved"}   # written by a 2.2 tool
+        self._write(manifest)
+        info = cp.get_step_status(self.project, self.E, "modeling")
+        self.assertEqual((info["status"], info["explicit"], info["version"], info["set_utc"],
+                          info["latest_version"], info["behind"]),
+                         ("approved", True, None, None, 2, False))
+
+    def test_meta_without_a_status_is_ignored(self):
+        # A 2.2 tool cleared the status but left the 2.3 meta behind.
+        self._publish("modeling")
+        cp.set_step_status(self.project, self.E, "modeling", "approved")
+        manifest = self._manifest()
+        del manifest[cp.STEP_STATUS_KEY]
+        self._write(manifest)
+        info = cp.get_step_status(self.project, self.E, "modeling")
+        self.assertEqual((info["status"], info["explicit"], info["version"], info["behind"]),
+                         ("published", False, None, False))
+
+    def test_malformed_meta_never_raises(self):
+        self._publish("modeling")
+        manifest = self._manifest()
+        manifest[cp.STEP_STATUS_KEY] = {"modeling": "approved", "rigging": "review"}
+        manifest[cp.STEP_STATUS_META_KEY] = {"modeling": {"version": "1", "set_utc": 5},
+                                             "rigging": "not a dict"}
+        self._write(manifest)
+        statuses = cp.get_step_status(self.project, self.E)
+        self.assertEqual((statuses["modeling"]["version"], statuses["modeling"]["set_utc"]),
+                         (None, None))
+        self.assertIsNone(statuses["rigging"]["version"])
+        manifest[cp.STEP_STATUS_META_KEY] = ["not", "a", "dict"]
+        self._write(manifest)
+        self.assertIsNone(cp.get_step_status(self.project, self.E, "modeling")["version"])
+
+    def test_derived_status_reports_the_latest_version(self):
+        self._publish("modeling")
+        info = cp.get_step_status(self.project, self.E, "modeling")
+        self.assertEqual((info["status"], info["version"], info["latest_version"], info["behind"]),
+                         ("published", None, 1, False))
+
+    def test_asset_schema_documents_the_meta_map(self):
+        schema = json.loads((_REPO_ROOT / "asset.schema.json").read_text(encoding="utf-8"))
+        meta = schema["properties"][cp.STEP_STATUS_META_KEY]
+        self.assertEqual(meta["additionalProperties"]["properties"]["version"]["type"],
+                         ["integer", "null"])
+        # 'step_status' itself is unchanged from 2.2: plain strings, explicit values only.
+        self.assertEqual(schema["properties"][cp.STEP_STATUS_KEY]["additionalProperties"]["enum"],
+                         list(cp.STEP_STATUS_EXPLICIT))
 
 
 class TestListScenefiles(_BaseCase):

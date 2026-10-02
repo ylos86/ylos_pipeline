@@ -171,3 +171,27 @@ Ouvert : modèle de browser pur partagé avec Houdini (`ylos_browser_model.py`) 
   30 checks) ; `test_panel_draw_headless.py` couvre check_publish + Import scopé. Suite stdlib : 380 OK.
 - **Limites** : ne vérifie pas shading/normales/rig ; la perte d'exporteur est simulée par monkeypatch.
   `ylos.check_publish` lève une erreur bpy (RuntimeError) quand le dry run trouve des erreurs bloquantes (contrat voulu).
+
+## 2026-10-02 — Web : refonte « direction C » (maquettes) et schéma 2.3
+
+Maquettes sur les données réelles de `Ylos__Test` (canvas Claude « Ylos Prod Home Mockup ») :
+accueil en matrice entités × steps avec panneau d'aperçu, page entité, page shot (données
+d'exemple), langage de statut, contrat d'écran (chaque écran : sa question, ses données, ses actions).
+
+| Décision | Statut |
+|---|---|
+| Une approbation porte sa version | Implémenté : schéma 2.3 (`docs/migration-2.2-to-2.3.md`), branche `feat/schema-2.3-step-status` |
+| Une cellule de step montre le rendu de SA version ; l'image d'entité peut rester un preview, étiqueté et capturé sans overlays | Adopté, pas encore codé. Constat : la cascade « custom > publish » montre le personnage de Sissa02 à côté d'un v001 au rendu vide |
+| Direction C = base de la refonte web | Adopté |
+| Image d'entité = pointeur dans le manifeste vers un rendu de publish, plutôt qu'un `preview.png` copié | Proposé |
+
+Prochains incréments, dans l'ordre :
+1. Afficher `behind` (web, Blender, Houdini) et l'accueil en matrice ; la donnée existe déjà dans
+   `/api/assets` (statut et dernière version par step, avec vignette).
+2. Exposer depuis l'orchestrateur les signaux d'intégrité : réservations abandonnées
+   (`clean_stale_staging` en dry run), rendu de publish vide.
+3. Page shot : ordre de composition de `shot_root`, playblasts, rendus du cache, livraisons ;
+   `deliver_render` à déplacer du bridge Houdini vers `create_project.py` (il est pur : shutil, sans `hou`).
+
+Ouvert : nommage des shots (`TYPE_Name_Variant` fige un département) ; `comp` vs `composite` ;
+commentaire de publish vide en dur dans `op_publish.execute`.

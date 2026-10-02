@@ -937,12 +937,14 @@ class YlosHandler(BaseHTTPRequestHandler):
             _json(self, 500, {"error": f"Cannot launch Blender: {e}"})
 
     def _post_set_step_status(self):
-        """POST /api/set-step-status {entity, step, status} — persist an EXPLICIT step
-        status (schema 2.2) or clear it ('auto'). Thin adapter → create_project.
-        set_step_status (single point: validation + atomic write under the manifest flock).
-        A business refusal (unknown step, status outside STEP_STATUS_EXPLICIT) is a
-        ValueError → 400 with the orchestrator's message; an unknown entity is a
-        FileNotFoundError → 404."""
+        """POST /api/set-step-status {entity, step, status, version?} — persist an EXPLICIT
+        step status or clear it ('auto'). Thin adapter → create_project.set_step_status
+        (single point: validation + atomic write under the manifest flock). Schema 2.3: the
+        status is recorded with the publish version it applies to — 'version' is optional,
+        and its default (the step's latest complete publish) is chosen by the orchestrator,
+        never here. A business refusal (unknown step, status outside STEP_STATUS_EXPLICIT,
+        version that is not a complete publish of the step) is a ValueError → 400 with the
+        orchestrator's message; an unknown entity is a FileNotFoundError → 404."""
         body = self._body()
         if body is None:
             _json(self, 400, {"error": "Invalid JSON in the body"})
@@ -963,7 +965,8 @@ class YlosHandler(BaseHTTPRequestHandler):
         if status is not None:
             status = str(status).strip()
         try:
-            result = create_project.set_step_status(project_dir, entity, step, status)
+            result = create_project.set_step_status(project_dir, entity, step, status,
+                                                    version=body.get("version"))
         except ValueError as e:
             _json(self, 400, {"error": str(e)})
             return
