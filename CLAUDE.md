@@ -240,7 +240,11 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
   **ne recharge jamais son code** (`create_project` est importé au démarrage). Après toute modif de
   `ylos_ui.py` / `create_project.py`, `launch_ui.command --status` dit `stale` et *Redémarrer* est la
   seule façon d'exécuter le nouveau code — premier réflexe quand un fix « ne prend pas » côté web.
-  `--detach` met le serveur dans **sa propre session** (`setsid`) : lancé par `Ylos.app`, le lanceur est
+  `app.html`, lui, est relu à chaque requête **depuis le dossier où le serveur a démarré** : une page
+  servie qui diffère du `app.html` du repo veut dire un serveur lancé depuis une autre copie (vu le
+  2026-10-02 après le déplacement du repo). `--status` ne compare pas ce dossier au repo, il regarde
+  seulement les dates ; *Redémarrer* depuis le bon `Ylos.app` arrête le serveur quel que soit son
+  dossier et relance depuis le repo. `--detach` met le serveur dans **sa propre session** (`setsid`) : lancé par `Ylos.app`, le lanceur est
   le process principal d'un job launchd, qui peut tuer ce qui reste dans son groupe de processus à sa
   sortie (comportement supposé, non vérifié sur un Mac ; `tests/test_launch_ui.py` joue launchd). Le
   double-clic qui « ne fait rien » se diagnostique dans `~/.ylos/launcher.log` (+ `ui-server.log`).
@@ -349,6 +353,10 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **Lanceur = vraie app** (applet ou exécutable natif, identité TCC propre) avant de servir des
   projets du NVMe externe : `Ylos.app` (script) y sera refusé, et Blender lancé depuis le cockpit
   avec lui.
+- **`--status` aveugle au dossier du serveur** : un serveur démarré depuis une autre copie du repo,
+  après la dernière modif du code, paraît `running` (dialogue par défaut sur *Open*, ancienne page).
+  Piste : comparer le `cwd` du process (`lsof -a -p <pid> -d cwd`) à `REPO_DIR` et le traiter comme
+  `stale`.
 
 ## Tensions connues
 - **Collision d'env vars** — **levée** côté lancements web/launcher (env par-session, cf.

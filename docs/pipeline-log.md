@@ -1545,8 +1545,10 @@ documentée dans CLAUDE.md** : Blender lancé par un serveur que `Ylos.app` a d�
 identité TCC (process enfant) — pas d'accès Bureau / Documents / Téléchargements / disque externe. Le
 NVMe externe des projets exigera une vraie app.
 
-**Résultat** (le soir même) : script lancé par Sébastien ; le serveur tourne depuis
-`~/Developer/YlosPipeline` et sert le schéma 2.3.0.
+**Résultat** (le soir même) : script lancé par Sébastien ; vu depuis le pont, la copie est dans
+`~/Developer/YlosPipeline` (même commit, arbre propre) et l'ancien dossier a été renommé. Le serveur
+relancé répondait en schéma 2.3.0, ce qui ne dit pas depuis quel dossier il tourne (l'ancienne copie
+est au même commit) : cf. « Livraison » de la section suivante.
 
 ## Cockpit web « direction C » (2026-10-02, PR #3)
 
@@ -1622,3 +1624,15 @@ courante, colonnes et bouton principal rognés, noms de dépendances tronqués, 
 vide, `behind` dans Blender / Houdini, réservations LOP dans l'aperçu, pré-production (References /
 Boards affichés « planned »). Pas encore vu sur les vraies données du Mac : il faut *Redémarrer* le
 serveur, son code Python a changé.
+
+**Livraison** : PR #3, CI verte en 3.9 / 3.11 / 3.13. Mac : `feat/ui-direction-c` extraite dans
+`~/Developer/YlosPipeline` par un fetch HTTPS depuis le pont (arbre propre, `git fsck` propre, aucun
+verrou ; suppression autorisée dans ce dossier avant toute commande git). **Constat** juste après :
+le serveur en cours sert encore l'ancienne page (même longueur, au caractère près, que
+`app_classic.html`), alors que le `app.html` de `~/Developer/YlosPipeline` est la direction C et que
+le serveur relit ce fichier à chaque requête. Il ne tourne donc pas depuis ce dossier, mais depuis une
+autre copie au même commit, probablement l'ancienne du Bureau (non vérifié : le pont ne voit pas les
+process du Mac). Sans conséquence pour *Redémarrer* depuis `~/Developer/YlosPipeline/Ylos.app` :
+`--status` y voit le code plus récent que le dernier démarrage (`stale`, *Restart* par défaut),
+`--stop` arrête le serveur qui écoute le port quel que soit son dossier, et la relance part du repo.
+Faiblesse notée dans CLAUDE.md : `--status` ne compare pas le dossier du serveur au repo.
