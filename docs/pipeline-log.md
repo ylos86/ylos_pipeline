@@ -1467,3 +1467,172 @@ l'essai suivant.
 GNU et Debian bloqués par la politique d'egress) ; le comportement TCC d'un serveur détaché une fois l'app
 fermée ; le rendu de l'icône sur macOS 27 (la règle « bord opaque » documentée plus haut vaut pour
 macOS 26).
+
+## Schéma 2.3 : un statut explicite porte sa version (2026-10-02)
+
+- **Constat** (pendant la refonte UI, sur les données réelles de `Ylos__Test`) : en 2.2,
+  l'explicite gagne toujours dans `get_step_status` et `finalize_publish_version` ne touche jamais
+  `step_status`. Une approbation s'étendait donc en silence à toute publication suivante.
+- **Décision** (Sébastien) : l'approbation porte sa version. Implémentation **additive** : table
+  voisine `step_status_meta` `{step: {version, set_utc}}`, `step_status` inchangé. Un outil 2.2 relit
+  un manifeste 2.3 sans perdre une approbation : retour arrière sûr sur le tag
+  `snapshot/2026-10-02-before-schema-2.3`. Rejeté : un objet dans `step_status` (le code 2.2 l'aurait
+  lu comme valeur inconnue et serait retombé en silence sur le dérivé).
+- `set_step_status(..., version=None)` : sans version → dernière version `complete` (manifeste seul,
+  les réservations `pending` exclues) ; avec version → doit être un publish `complete` du step, sinon
+  `ValueError` sans écriture. Effacer retire les deux entrées ; une version passée en effaçant est
+  refusée.
+- `get_step_status` : clés ajoutées `version`, `set_utc`, `latest_version`, `behind`. Le statut n'est
+  jamais rétrogradé par un publish : `behind` sert aux UI.
+- Adaptateurs : `version` optionnel sur `POST /api/set-step-status` (passé tel quel) ; CLI
+  `set-step-status ... --version N`. Blender et Houdini inchangés : ils enregistrent la dernière version.
+- Tests : `TestVersionBoundStatus` (+13) dans `tests/test_step_status.py` ; `tests/test_ylos_ui.py`
+  (+2, et trois comparaisons de dict complet mises à la forme 2.3). Suite stdlib : 395 OK (1 skip),
+  Python 3.10 ; modules touchés verts en 3.11 et 3.13 ; `vermin` : minimum 3.7, donc compatible 3.9.
+- **Non fait** : affichage de `behind` dans les trois UI (incrément suivant). Tests headless Blender et
+  e2e Houdini non relancés (ni Blender ni licence Houdini dans l'environnement) ; aucun appelant DCC ne
+  change de signature.
+- **Avant ce travail** : le travail du 2026-10-01 (browser Blender, publish check, `Ylos.app`) n'avait
+  jamais été commité. Il l'a été tel quel (`79ccbd4`, sur `main`) et tagué
+  `snapshot/2026-10-02-before-schema-2.3`. Incident : le dossier connecté du pont Cowork refusait la
+  suppression, git a laissé `.git/index.lock` (bloquant aussi sur le Mac) ; suppression autorisée,
+  verrou et 33 objets temporaires retirés, `git fsck` propre.
+- **Publication GitHub** : premier push refusé (« Claude doesn't have GitHub access ») ; Sébastien
+  installe l'app GitHub Claude sur `ylos86/ylos_pipeline`. Poussés ensuite depuis la session :
+  `feat/schema-2.3-step-status` et `main` → `79ccbd4` (avance rapide depuis `de571a3`). Le tag
+  `snapshot/2026-10-02-before-schema-2.3` reste refusé (HTTP 403) depuis la session, et le premier
+  push qui le mêlait aux deux branches a échoué en bloc : tag à pousser depuis le Mac. PR #1
+  `feat/schema-2.3-step-status` → `main`, ouverte par l'API REST (GraphQL refusé) : CI verte en
+  3.9 / 3.11 / 3.13 (première exécution de ce code sous 3.9), comme le push de `main`. Mac
+  resynchronisé par un fetch HTTPS depuis le pont (écrire un bundle dans `.git` est refusé) ; ancien
+  bundle de transfert supprimé.
+
+## Repo sorti du Bureau : `tools/macos/relocate_repo.sh` (2026-10-02)
+
+**Demande** (Sébastien, en voulant tester 2.3) : « un bouton, tu cliques, ça ouvre directement — avant
+`launch_ui.command` lançait la pipeline, là ça ne marche plus ». **Constat avant d'agir** : rien n'avait
+cassé. `Ylos.app` (le bouton) n'a jamais marché sur ce Mac (cause TCC confirmée le 2026-10-01, cf.
+« Retour terrain » plus haut) ; `launch_ui.command` marche, mais depuis le Terminal, et le serveur au
+premier plan emporte avec sa fenêtre les DCC qu'il a lancés (fermer la fenêtre du serveur 2.2 listait
+« bash, Blender, Python » : annulé avant de tuer le Blender de Sébastien). Vérifié en plus : le Bureau
+est géré par iCloud (attribut `com.apple.fileprovider.fpfs#P` sur `Ylos.app`) — un `.git` synchronisé
+par iCloud est un risque à lui seul (doublons « fichier 2 », fichiers évacués du disque).
+
+**Décision** (Sébastien) : voie (1) du retour terrain — déplacer le repo vers `~/Developer/YlosPipeline`.
+`plugins/houdini/ylos.json` (`YLOS_REPO`) et les deux README d'installation suivent.
+
+**`tools/macos/relocate_repo.sh`** (une seule fois, depuis le Terminal ; rien n'est supprimé) :
+refuse si la destination existe ou est elle-même protégée (Desktop / Documents / Downloads / iCloud
+Drive / `/Volumes`), ou si Blender / Houdini tournent (ils ont chargé l'addon / le package depuis
+l'ancien dossier) ; arrête le serveur par `launch_ui.command --stop` ; copie avec `ditto --noextattr
+--noqtn` (lit tout, donc télécharge ce qui n'est que dans iCloud ; les marqueurs iCloud / TCC restent à
+l'ancien endroit), sans `__pycache__` ; vérifie la copie (même commit, même `status --porcelain` —
+le travail non commité voyage —, `git fsck`) ; re-pointe le lien de l'addon Blender, les packages
+Houdini (lien re-pointé, copie réécrite avec `.bak`), `YLOS_REPO` de la copie, `~/.ylos/repo_path` ;
+signale un `~/.zshrc` qui cite encore l'ancien dossier ; renomme l'ancien dossier
+« YlosPipeline (old copy - moved to Developer) » ; révèle `Ylos.app` dans le Finder.
+
+**Tests** : `tests/test_relocate_repo.py` (10) — faux `$HOME` calqué sur le Mac (repo sale, lien
+addon, deux packages Houdini, `repo_path`, `.zshrc`), `pgrep` et moteur remplacés par des stubs,
+`python3` figé sur l'interpréteur des tests. Refus vérifiés sans aucune modification (destination
+existante / protégée / relative / dans le repo, Blender ou Houdini ouverts, serveur impossible à
+arrêter, script hors repo). Trois mutations à la main (lien Blender non re-pointé, Blender ouvert non
+détecté, ancien dossier non renommé) : les tests cassent. Suite : 405 OK (1 skip).
+
+**Non vérifié (pas de macOS ici)** : `ditto` et le téléchargement iCloud (Linux passe par `cp -R`),
+bash 3.2 réel, le premier double-clic sur `Ylos.app` depuis `~/Developer`. **Conséquence probable,
+documentée dans CLAUDE.md** : Blender lancé par un serveur que `Ylos.app` a démarré hérite de son
+identité TCC (process enfant) — pas d'accès Bureau / Documents / Téléchargements / disque externe. Le
+NVMe externe des projets exigera une vraie app.
+
+**Résultat** (le soir même) : script lancé par Sébastien ; vu depuis le pont, la copie est dans
+`~/Developer/YlosPipeline` (même commit, arbre propre) et l'ancien dossier a été renommé. Le serveur
+relancé répondait en schéma 2.3.0, ce qui ne dit pas depuis quel dossier il tourne (l'ancienne copie
+est au même commit) : cf. « Livraison » de la section suivante.
+
+## Cockpit web « direction C » (2026-10-02, PR #3)
+
+**Demande** (Sébastien, après le déplacement du repo) : il voit toujours l'ancienne UI et veut « la
+nouvelle qu'on a travaillée sur le UI et les fonctions », c'est-à-dire la direction C des maquettes.
+Codée dans la nuit sur `feat/ui-direction-c` ; l'ancien cockpit reste servi.
+
+**Orchestrateur** (`create_project.py` ; lecture seule, additif, aucun changement de schéma) :
+- `entity_overview(project_root, entity)` → `{last_activity_utc, steps: {step: champs de
+  get_step_status + shown_version, shown_thumb, shown_ext, shown_published_utc, latest_scenefile,
+  newer_wip, abandoned}}`. La version montrée et son rendu sortent **appariés** (la version d'un statut
+  explicite si elle est publiée, sinon le dernier `complete`) : aucune UI ne peut plus remettre le
+  rendu de v007 à côté d'une approbation de v006. `None` pour une entité inconnue ou orpheline.
+- `abandoned_reservations()` : `pending` sans staging, ou dont le staging appartient à un PID mort ;
+  un publish en cours (PID vivant) n'en est pas un. Partage `_pending_reservations()` avec
+  `clean_stale_staging` (même définition du staging d'une réservation ; une entrée sans version
+  entière est désormais ignorée au lieu de lever).
+- `artifact_extension()` : la règle d'extension de `ylos_ui._artifact_ext` remonte dans
+  l'orchestrateur (principe 5) ; le serveur délègue.
+- `_scan_scenefiles` : chaque ligne porte `mtime_utc` (la date d'une sauvegarde même sans sidecar).
+- `NEWER_WIP_GRACE_S = 120` : une scène sauvée autour de l'export appartient au publish, ce n'est pas
+  du travail non publié.
+
+**Serveur** (`ylos_ui.py`) : `overview` sur les cartes `/api/assets` et sur `/api/asset/<nom>`
+(rendu → URL `/thumb/`) ; `/classic` sert `app_classic.html` (l'ancien `app.html`, `git mv`, intact) ;
+`/api/config` expose `prod_types` et `prod_type_targets` (le modal New project ne code plus les types de
+production en dur).
+
+**Web** (`app.html` réécrit : un fichier, JS sans dépendance, chaînes en anglais). Accueil : matrice
+entités × steps triée par dernière activité (ou galerie) ; une cellule = statut + version + rendu de
+CETTE version, sous-lignes « vNNN not reviewed » (avertissement) et « + WIP vNNN · date » (info).
+Aperçu rapide : image d'entité étiquetée selon sa source, un onglet par rendu de step, action
+principale = rouvrir la dernière scène sauvée (sinon New scene). Intégrité : orphelins, réservations
+abandonnées, approbations en retard, imports périmés, chacun avec la fonction qui l'a détecté. Web
+pins. Page entité : onglets de steps ; versions avec LATEST / APPROVED / IN REVIEW / PINNED FOR WEB ;
+comparaison de deux versions (rendus, format, date, commentaire, imports) ; réservations abandonnées
+repliées ; scenefiles (Open par version) ; statut (Send vNNN to review / Approve vNNN / Clear, toujours
+avec la version) ; dépendances Built on / Used by avec OUTDATED. Routes `#/assets|sets|shots` et
+`#/entity/<nom>?step=` ; clavier (⌘K, ⌘N, ⇧⌘N, flèches, Entrée, ←/→ sur la page entité) ;
+rafraîchissement toutes les 30 s et au retour sur l'onglet, rendus re-téléchargés seulement quand leur
+signature change.
+
+**Serveur plus ancien que la page** : le serveur relit `app.html` à chaque requête, jamais son code
+Python. Entre la mise à jour du repo et un *Redémarrer*, la nouvelle page parle donc à l'ancien
+serveur : cartes sans `overview` → bandeau « Ylos is still running older server code… choose
+Restart ». Le repli n'affiche une version à côté d'un rendu que là où l'ancien serveur les a appariés
+lui-même (dernier publish d'un step sans statut posé à la main) : Tente = « APR » sans numéro à
+l'accueil, « Approved for v006 » + retard de v007 sur sa page. Le premier jet du repli affichait
+« APR v007 » avec le rendu de v007, soit l'erreur exacte que la refonte supprime : vu en capture contre
+le serveur de `6a2eefc`, corrigé avant le commit.
+
+**Tests** : `tests/test_entity_overview.py` (19) — version approuvée montrée avec son propre rendu
+(pas la dernière), statut 2.2 sans version → dernier publish ; dernière scenefile tous DCC, date de
+sauvegarde, `newer_wip` seulement au-delà de la grâce et jamais sans publish ; dernière activité ;
+réservations (PID vivant ≠ abandonnée, sans staging, PID mort, un `complete` jamais, la lecture ne
+réécrit pas le manifeste) ; lectures sûres (entité inconnue, orpheline, entrée `pending` malformée) ;
+extensions composées. Trois mutations à la main : les tests cassent. `tests/test_ylos_ui.py` + 7
+(`TestDirectionCCockpit` : la carte de la Tente montre v1 approuvée et non v2, et l'URL du rendu
+répond 200 ; step WIP → sa dernière scenefile ; orphelin sans `overview` ; détail = carte ; `/` sert la
+direction C, `/classic` l'ancien ; config ; aucun vocabulaire pipeline en dur dans la page). Suite :
+431 OK (1 skip) sous 3.13 et sous 3.9.25 (le minimum de la CI, installé par `uv`).
+
+**Vérification visuelle** : projet de test calqué sur `_TEST` (Tente : 4 réservations abandonnées,
+v005 à v007, v006 approuvée ; Barrel ; Sissa02 avec une WIP v005 plus récente que son publish ; Sissa
+en WIP seule ; Sphere vide ; Village en review avec une dépendance périmée ; orphelin `sets/lecube` ;
+deux pins web). Captures Playwright de 17 vues (accueil matrice et galerie, aperçu, Intégrité, Web
+pins, sets, shots vides, pages entité, comparaison, réservations, modals, mobile 390 px) et de 5 vues
+servies par le code de `6a2eefc`. Corrigé en route : pills, signature de rendu, clic sur la famille
+courante, colonnes et bouton principal rognés, noms de dépendances tronqués, en-tête mobile, doublon
+« New … scene » sur une entité vide.
+
+**Non fait** : page shot (l'accueil des shots montre un état vide), détection du rendu de publish
+vide, `behind` dans Blender / Houdini, réservations LOP dans l'aperçu, pré-production (References /
+Boards affichés « planned »). Pas encore vu sur les vraies données du Mac : il faut *Redémarrer* le
+serveur, son code Python a changé.
+
+**Livraison** : PR #3, CI verte en 3.9 / 3.11 / 3.13. Mac : `feat/ui-direction-c` extraite dans
+`~/Developer/YlosPipeline` par un fetch HTTPS depuis le pont (arbre propre, `git fsck` propre, aucun
+verrou ; suppression autorisée dans ce dossier avant toute commande git). **Constat** juste après :
+le serveur en cours sert encore l'ancienne page (même longueur, au caractère près, que
+`app_classic.html`), alors que le `app.html` de `~/Developer/YlosPipeline` est la direction C et que
+le serveur relit ce fichier à chaque requête. Il ne tourne donc pas depuis ce dossier, mais depuis une
+autre copie au même commit, probablement l'ancienne du Bureau (non vérifié : le pont ne voit pas les
+process du Mac). Sans conséquence pour *Redémarrer* depuis `~/Developer/YlosPipeline/Ylos.app` :
+`--status` y voit le code plus récent que le dernier démarrage (`stale`, *Restart* par défaut),
+`--stop` arrête le serveur qui écoute le port quel que soit son dossier, et la relance part du repo.
+Faiblesse notée dans CLAUDE.md : `--status` ne compare pas le dossier du serveur au repo.

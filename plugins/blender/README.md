@@ -15,7 +15,7 @@ fonctions. Principe « logique unique, jamais dupliquée » — cf. `CLAUDE.md`.
 Remplacer `5.2` par ta version de Blender. Sur macOS :
 
 ```bash
-REPO="$HOME/Desktop/Claude/YlosPipeline"
+REPO="$HOME/Developer/YlosPipeline"   # jamais sous Desktop / Documents / iCloud (cf. CLAUDE.md, TCC)
 BL="$HOME/Library/Application Support/Blender/5.2/scripts"
 
 ln -sfn "$REPO/plugins/blender" "$BL/addons/ylos_pipeline"

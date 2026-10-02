@@ -171,3 +171,30 @@ Ouvert : modèle de browser pur partagé avec Houdini (`ylos_browser_model.py`) 
   30 checks) ; `test_panel_draw_headless.py` couvre check_publish + Import scopé. Suite stdlib : 380 OK.
 - **Limites** : ne vérifie pas shading/normales/rig ; la perte d'exporteur est simulée par monkeypatch.
   `ylos.check_publish` lève une erreur bpy (RuntimeError) quand le dry run trouve des erreurs bloquantes (contrat voulu).
+
+## 2026-10-02 — Web : refonte « direction C » (maquettes) et schéma 2.3
+
+Maquettes sur les données réelles de `Ylos__Test` (canvas Claude « Ylos Prod Home Mockup ») :
+accueil en matrice entités × steps avec panneau d'aperçu, page entité, page shot (données
+d'exemple), langage de statut, contrat d'écran (chaque écran : sa question, ses données, ses actions).
+
+| Décision | Statut |
+|---|---|
+| Une approbation porte sa version | Implémenté : schéma 2.3 (`docs/migration-2.2-to-2.3.md`), branche `feat/schema-2.3-step-status` |
+| Une cellule de step montre le rendu de SA version ; l'image d'entité peut rester un preview, étiqueté et capturé sans overlays | Implémenté côté web : `entity_overview` apparie version et rendu, la cellule et l'aperçu affichent la paire ; l'image d'entité porte son étiquette (« Publish render », « Preview · custom », « Legacy publish », « WIP thumbnail ») |
+| Direction C = base de la refonte web | Implémenté : `app.html` (branche `feat/ui-direction-c`, PR #3) ; l'ancien cockpit reste servi à `/classic` |
+| Image d'entité = pointeur dans le manifeste vers un rendu de publish, plutôt qu'un `preview.png` copié | Proposé |
+
+Incréments :
+1. ~~Accueil en matrice et `behind` côté web~~ — fait (2026-10-02, PR #3). Reste `behind` et la
+   vue d'ensemble dans les browsers Blender et Houdini, depuis le même `entity_overview`.
+2. Signaux d'intégrité : ~~réservations abandonnées~~ — fait (`abandoned_reservations`, lecture
+   seule, partage `_pending_reservations` avec `clean_stale_staging`). Reste : rendu de publish
+   vide (le v001 de Sissa02), réservations LOP dans l'aperçu.
+3. Page shot : ordre de composition de `shot_root`, playblasts, rendus du cache, livraisons ;
+   `deliver_render` à déplacer du bridge Houdini vers `create_project.py` (il est pur : shutil, sans `hou`).
+   Pas commencé : l'accueil des shots montre un état vide avec « New shot ».
+4. Pré-production (References, Boards) : entrées « planned » dans la navigation, rien derrière.
+
+Ouvert : nommage des shots (`TYPE_Name_Variant` fige un département) ; `comp` vs `composite` ;
+commentaire de publish vide en dur dans `op_publish.execute`.

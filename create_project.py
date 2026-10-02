@@ -50,13 +50,17 @@ from pathlib import Path
 # Constants - contract
 # --------------------------------------------------------------------------------------
 
-SCHEMA_VERSION = "2.2.0"          # contract version (project.json AND asset manifest).
+SCHEMA_VERSION = "2.3.0"          # contract version (project.json AND asset manifest).
                                   # Bump on EVERY schema change (= migration).
                                   # 2.1.0: added 'frame_range' (shots) - additive, no
                                   # 2.0 manifest invalidated (see docs/migration-2.0-to-2.1.md).
                                   # 2.2.0: added optional 'step_status' (entity manifest) and
                                   # optional 'dependencies' on publish entries - additive
                                   # (see docs/migration-2.1-to-2.2.md).
+                                  # 2.3.0: added optional 'step_status_meta' (entity manifest):
+                                  # the publish version an explicit status applies to -
+                                  # additive, 'step_status' keeps its 2.2 shape
+                                  # (see docs/migration-2.2-to-2.3.md).
 MANIFEST_NAME = "project.json"
 ASSET_MANIFEST_NAME = "manifest.json"
 ASSET_ROOT_NAME = "asset_root.usda"   # USD composition of an asset/set (ASCII, see convention)
@@ -161,6 +165,12 @@ STEP_STATUS_KEY = "step_status"
 STEP_STATUSES = ["empty", "wip", "published", "review", "approved"]   # progression order
 STEP_STATUS_EXPLICIT = ("review", "approved")
 STEP_STATUS_AUTO = "auto"         # sentinel accepted by set_step_status to clear an explicit value
+# Schema 2.3 - what an EXPLICIT status applies to: manifest['step_status_meta'][step] =
+# {"version": <complete publish version or None>, "set_utc": <ISO date>}. A SEPARATE map, so
+# 'step_status' keeps its 2.2 shape (plain strings) and a 2.2 reader still sees every
+# review/approved of a manifest written in 2.3. Written only by set_step_status, together
+# with 'step_status' and under the same flock; a publish never touches either map.
+STEP_STATUS_META_KEY = "step_status_meta"
 # Schema 2.2 - dependencies recorded on a publish entry (Prism-style product tracking):
 # [{"entity", "step", "version"}] = the published products this publish was built from.
 DEPENDENCIES_KEY = "dependencies"
@@ -705,6 +715,7 @@ def _scan_scenefiles(wip_dir):
             "date": meta.get("date", ""),
             "dcc_version": dcc_version,
             "blender_version": meta.get("blender_version", ""),   # compat (web readers)
+            "mtime_utc": _mtime_utc(f),   # the save date even without a sidecar
         })
     return sorted(rows, key=lambda r: (r["version"], r["filename"]))
 
@@ -747,13 +758,60 @@ def _derive_step_status(entity_dir, manifest, step):
     return "empty"
 
 
+def _complete_step_versions(manifest, step):
+    """Sorted versions of the step's 'complete' publishes (with an artifact) in the two-phase
+    contract (manifest['step_publishes'][step]). Manifest only, no disk scan: get_step_status
+    runs on every cockpit poll. Legacy flat-file publishes (deprecated publish_asset) carry no
+    manifest version and are not listed. Never raises on a malformed manifest."""
+    step_publishes = manifest.get(STEP_PUBLISHES_KEY)
+    entries = step_publishes.get(step) if isinstance(step_publishes, dict) else None
+    if not isinstance(entries, list):
+        return []
+    versions = set()
+    for e in entries:
+        if not isinstance(e, dict) or e.get("status") != "complete" or not e.get("artifact"):
+            continue
+        v = e.get("version")
+        if isinstance(v, int) and not isinstance(v, bool):
+            versions.add(v)
+    return sorted(versions)
+
+
+def _status_meta(manifest, step):
+    """(version, set_utc) recorded with the step's explicit status (schema 2.3), each None
+    when absent or malformed. A status set before 2.3 has no meta: its version is unknown."""
+    metas = manifest.get(STEP_STATUS_META_KEY)
+    meta = metas.get(step) if isinstance(metas, dict) else None
+    if not isinstance(meta, dict):
+        return None, None
+    version = meta.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        version = None
+    set_utc = meta.get("set_utc")
+    if not isinstance(set_utc, str):
+        set_utc = None
+    return version, set_utc
+
+
 def get_step_status(project_root, entity_name, step=None):
-    """Per-step status of an entity (schema 2.2). The EXPLICIT value of the manifest
-    (manifest['step_status'][step], one of STEP_STATUS_EXPLICIT) wins; otherwise the
-    status is DERIVED from disk (_derive_step_status: empty / wip / published). Returns
-    {step: {"status", "explicit": bool, "derived"}} for every declared step, or the single
-    dict when 'step' is given (None if that step is not declared). NEVER raises for a
-    business case: unknown entity -> {} (None with 'step')."""
+    """Per-step status of an entity (schema 2.2, bound to a version since 2.3). The EXPLICIT
+    value of the manifest (manifest['step_status'][step], one of STEP_STATUS_EXPLICIT) wins;
+    otherwise the status is DERIVED from disk (_derive_step_status: empty / wip / published).
+
+    Returns {step: info} for every declared step, or the single info dict when 'step' is
+    given (None if that step is not declared). info =
+      "status"          effective status (the explicit value wins over the derived one)
+      "explicit"        bool
+      "derived"         the derived status, always available
+      "version"         publish version the explicit status applies to (schema 2.3,
+                        manifest['step_status_meta']); None when derived, or for a status
+                        set before 2.3 (version unknown)
+      "set_utc"         when the explicit status was set (2.3), else None
+      "latest_version"  highest complete publish version of the step, or None
+      "behind"          True when the explicit status carries a version and a newer complete
+                        publish exists ("approved v007, v008 not reviewed"). The status is
+                        never downgraded here: flagging it is the consumer's job.
+    NEVER raises for a business case: unknown entity -> {} (None with 'step')."""
     resolved = resolve_entity(project_root, entity_name)
     if resolved is None:
         return None if step else {}
@@ -765,23 +823,41 @@ def get_step_status(project_root, entity_name, step=None):
     result = {}
     for s in list(manifest.get("steps") or []):
         derived = _derive_step_status(entity_dir, manifest, s)
+        complete = _complete_step_versions(manifest, s)
+        latest = complete[-1] if complete else None
         explicit = explicit_map.get(s)
         if explicit in STEP_STATUS_EXPLICIT:
-            result[s] = {"status": explicit, "explicit": True, "derived": derived}
+            version, set_utc = _status_meta(manifest, s)
+            behind = version is not None and latest is not None and latest > version
+            result[s] = {"status": explicit, "explicit": True, "derived": derived,
+                         "version": version, "set_utc": set_utc,
+                         "latest_version": latest, "behind": behind}
         else:
-            result[s] = {"status": derived, "explicit": False, "derived": derived}
+            result[s] = {"status": derived, "explicit": False, "derived": derived,
+                         "version": None, "set_utc": None,
+                         "latest_version": latest, "behind": False}
     if step:
         return result.get(step)
     return result
 
 
-def set_step_status(project_root, entity_name, step, status):
-    """Persist an EXPLICIT step status (schema 2.2) in the entity manifest, or clear it
-    (STEP_STATUS_AUTO / None / '' -> the status falls back to the derived value). 'status'
-    must be one of STEP_STATUS_EXPLICIT; 'step' must be declared for the entity. Atomic
-    write under the manifest flock (same pattern as set_frame_range). Returns the
-    resulting get_step_status(...) dict of the step. Raises ValueError (unknown step /
-    status) or FileNotFoundError (unknown entity)."""
+def set_step_status(project_root, entity_name, step, status, version=None):
+    """Persist an EXPLICIT step status in the entity manifest, or clear it (STEP_STATUS_AUTO /
+    None / '' -> the status falls back to the derived value). 'status' must be one of
+    STEP_STATUS_EXPLICIT; 'step' must be declared for the entity.
+
+    Schema 2.3 - the status is recorded WITH the publish version it applies to
+    (manifest['step_status_meta'][step] = {"version", "set_utc"}):
+      - version None -> the step's latest complete publish at call time (None when nothing
+        is published yet: still accepted, as in 2.2);
+      - an explicit version must be a complete publish of that step.
+    Clearing removes both entries, and an emptied map is dropped from the manifest. A later
+    publish never touches either map: get_step_status reports it as 'behind' instead.
+
+    Atomic write under the manifest flock (same pattern as set_frame_range). Returns the
+    resulting get_step_status(...) dict of the step. Raises ValueError (unknown step or
+    status, invalid version, version given while clearing) or FileNotFoundError (unknown
+    entity). A refused call writes nothing."""
     if status in (None, "", STEP_STATUS_AUTO):
         status = None
     elif status not in STEP_STATUS_EXPLICIT:
@@ -789,6 +865,16 @@ def set_step_status(project_root, entity_name, step, status):
             f"Invalid step status {status!r}: expected one of {list(STEP_STATUS_EXPLICIT)} "
             f"or {STEP_STATUS_AUTO!r} to clear (the other statuses are derived, never set)."
         )
+    if version is not None:
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ValueError(
+                f"Invalid version {version!r}: expected an integer publish version or None."
+            )
+        if status is None:
+            raise ValueError(
+                f"A version ({version}) is only recorded with an explicit status "
+                f"{list(STEP_STATUS_EXPLICIT)}, not when clearing."
+            )
     _entity_dir, manifest_path = _find_asset_entity(project_root, entity_name)
     with acquire_lock(manifest_path):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -797,20 +883,135 @@ def set_step_status(project_root, entity_name, step, status):
             raise ValueError(
                 f"Step {step!r} not declared for '{entity_name}' (manifest steps: {declared})."
             )
+        if status is not None:
+            complete = _complete_step_versions(manifest, step)
+            if version is None:
+                version = complete[-1] if complete else None
+            elif version not in complete:
+                raise ValueError(
+                    f"Version {version} is not a complete publish of '{entity_name}' step "
+                    f"{step!r} (complete versions: {complete or 'none'})."
+                )
         statuses = manifest.get(STEP_STATUS_KEY)
         if not isinstance(statuses, dict):
             statuses = {}
+        metas = manifest.get(STEP_STATUS_META_KEY)
+        if not isinstance(metas, dict):
+            metas = {}
         if status is None:
             statuses.pop(step, None)
+            metas.pop(step, None)
         else:
             statuses[step] = status
-        if statuses:
-            manifest[STEP_STATUS_KEY] = statuses
-        else:
-            manifest.pop(STEP_STATUS_KEY, None)
+            metas[step] = {"version": version, "set_utc": _now()}
+        for key, value in ((STEP_STATUS_KEY, statuses), (STEP_STATUS_META_KEY, metas)):
+            if value:
+                manifest[key] = value
+            else:
+                manifest.pop(key, None)
         manifest["modified_utc"] = _now()
         _atomic_write_json(manifest_path, manifest)
     return get_step_status(project_root, entity_name, step)
+
+
+# --------------------------------------------------------------------------------------
+# Entity overview - what a project-level view shows of one entity (web home, DCC browsers)
+# --------------------------------------------------------------------------------------
+
+# A scenefile saved within this many seconds after a publish belongs to that publish (a DCC
+# saves the scene around the export): it is not reported as newer, unpublished work.
+NEWER_WIP_GRACE_S = 120
+
+
+def _parse_utc(value):
+    """Aware datetime from an ISO-8601 string ('Z' accepted, Python 3.9-safe), or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _mtime_utc(path):
+    """ISO-8601 UTC modification date of a file, or None if it cannot be read."""
+    try:
+        return datetime.fromtimestamp(Path(path).stat().st_mtime, timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
+def entity_overview(project_root, entity_name):
+    """What a project-level view shows of ONE entity, computed here once so that the web
+    home, the Blender browser and the Houdini panel show the same thing (principle 5).
+    Read-only; never raises for a business case: unknown or orphan entity -> None.
+
+    {"last_activity_utc": ISO-8601 or None - the latest of: a complete publish
+                          (published_utc), a scenefile save (file date), the manifest's
+                          modified_utc / created_utc,
+     "steps": {step: {   (the steps the manifest declares, in its order)
+        status, explicit, derived, version, set_utc, latest_version, behind
+                               - get_step_status, unchanged;
+        "shown_version":       the version whose render goes next to the status: the one an
+                               explicit status applies to (schema 2.3), else the latest
+                               complete publish; None when nothing is published,
+        "shown_thumb":         that version's render, relative to the entity, or None,
+        "shown_ext":           its artifact extension ('glb', 'usdc', ...), or None,
+        "shown_published_utc": its publish date, or None,
+        "latest_scenefile":    {"version", "dcc", "mtime_utc"} of the highest scenefile, or
+                               None,
+        "newer_wip":           True when a scenefile was saved after the latest complete
+                               publish (more than NEWER_WIP_GRACE_S later): unpublished work,
+        "abandoned":           [versions] reserved and never finalized
+                               (abandoned_reservations),
+     }}}
+    A version number only ever travels with the render of THAT version: a UI never has to
+    pair them itself, so it cannot show v008's render next to an approval of v007."""
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return None
+    entity_dir = Path(resolved["dir"])
+    manifest = resolved["manifest"]
+    statuses = get_step_status(project_root, entity_name) or {}
+    abandoned = abandoned_reservations(project_root, entity_name)
+    moments = [_parse_utc(manifest.get("modified_utc")), _parse_utc(manifest.get("created_utc"))]
+    steps = {}
+    for step in manifest.get("steps") or []:
+        info = dict(statuses.get(step) or {})
+        complete = [e for e in list_publishes(project_root, entity_name, step)
+                    if e.get("status") == "complete" and e.get("artifact")]
+        by_version = {e["version"]: e for e in complete
+                      if isinstance(e.get("version"), int) and not isinstance(e.get("version"), bool)}
+        latest = by_version[max(by_version)] if by_version else None
+        shown = latest
+        if info.get("explicit") and info.get("version") in by_version:
+            shown = by_version[info["version"]]
+        moments.extend(_parse_utc(e.get("published_utc")) for e in complete)
+        scenefiles = _scan_scenefiles(entity_dir / step / "wip")
+        saves = [s for s in (_parse_utc(r.get("mtime_utc")) for r in scenefiles) if s]
+        moments.extend(saves)
+        latest_pub = _parse_utc(latest.get("published_utc")) if latest else None
+        newest_save = max(saves) if saves else None
+        top = (max(scenefiles, key=lambda r: (r["version"], r.get("mtime_utc") or ""))
+               if scenefiles else None)
+        info.update({
+            "shown_version": shown.get("version") if shown else None,
+            "shown_thumb": (shown.get("thumbnail") or shown.get("thumb")) if shown else None,
+            "shown_ext": artifact_extension(shown.get("artifact")) if shown else None,
+            "shown_published_utc": shown.get("published_utc") if shown else None,
+            "latest_scenefile": ({"version": top["version"], "dcc": top["dcc"],
+                                  "mtime_utc": top.get("mtime_utc")} if top else None),
+            "newer_wip": bool(latest_pub and newest_save and
+                              (newest_save - latest_pub).total_seconds() > NEWER_WIP_GRACE_S),
+            "abandoned": list(abandoned.get(step, [])),
+        })
+        steps[step] = info
+    known = [m for m in moments if m]
+    return {
+        "last_activity_utc": max(known).isoformat() if known else None,
+        "steps": steps,
+    }
 
 
 def list_entities(project_root, family=None):
@@ -902,6 +1103,19 @@ def _latest_step_publish_rel(manifest, step):
 # <step>/publish/<name>_<step>_vNNN.<ext>). '.usdz' included (deliverable); the others = composable
 # layers. A two-phase publish is a FOLDER, never a file -> never confused.
 _LEGACY_PUBLISH_EXTS = USD_LAYER_EXTENSIONS + (".usdz",)
+
+
+def artifact_extension(artifact):
+    """Extension label of a publish artifact ('usdc', 'glb', 'bgeo.sc'...): the longest known
+    PUBLISH_ARTIFACT_EXTENSIONS suffix wins, so a compound extension is not cut. None without
+    an artifact. The single rule every UI shows (the web adapter delegates here)."""
+    if not artifact:
+        return None
+    low = str(artifact).lower()
+    for ext in sorted(PUBLISH_ARTIFACT_EXTENSIONS, key=len, reverse=True):
+        if low.endswith(ext):
+            return ext.lstrip(".")
+    return os.path.splitext(low)[1].lstrip(".") or None
 
 
 def list_publishes(project_root, entity_name, step, entity_type="asset"):
@@ -2116,6 +2330,47 @@ def _pid_alive(pid):
     return True
 
 
+def _pending_reservations(entity_dir, manifest):
+    """[(kind, version, [staging dirs])] - every 'pending' entry of one entity's manifest (LOP
+    and step publishes) with the staging dirs on disk that belong to it. Shared by
+    clean_stale_staging (the sweeper) and abandoned_reservations (read-only), so both agree
+    on what a reservation's staging dir is. An entry without an integer version is skipped."""
+    entity_dir = Path(entity_dir)
+    entries = [("lop", e) for e in manifest.get(LOP_PUBLISHES_KEY, [])]
+    for step, step_entries in (manifest.get(STEP_PUBLISHES_KEY) or {}).items():
+        entries += [(step, e) for e in step_entries]
+    out = []
+    for kind, entry in entries:
+        if not isinstance(entry, dict) or entry.get("status") != "pending":
+            continue
+        version = entry.get("version")
+        if isinstance(version, bool) or not isinstance(version, int):
+            continue
+        versioned_name = f"{entity_dir.name}_{kind}_v{version:03d}"
+        staging_root = entity_dir / (LOP_DIR_NAME if kind == "lop" else kind) / LOP_STAGING_DIR_NAME
+        matches = (sorted(staging_root.glob(f"{versioned_name}.staging-*"))
+                   if staging_root.is_dir() else [])
+        out.append((kind, version, matches))
+    return out
+
+
+def abandoned_reservations(project_root, entity_name):
+    """{kind: [versions]} - publish reservations of an entity that nothing can finalize any
+    more: 'pending' in the manifest with no staging dir on disk, or only staging dirs whose
+    creator process is gone. A reservation whose publisher still runs is NOT abandoned (a
+    publish in progress). Read-only, never raises for a business case (unknown entity -> {});
+    sweeping stays clean_stale_staging's job, and nothing ever rewrites the manifest entry."""
+    resolved = resolve_entity(project_root, entity_name)
+    if resolved is None:
+        return {}
+    out = {}
+    for kind, version, matches in _pending_reservations(resolved["dir"], resolved["manifest"]):
+        pids = [_staging_pid(m.name) for m in matches]
+        if not any(pid is not None and _pid_alive(pid) for pid in pids):
+            out.setdefault(kind, []).append(version)
+    return {kind: sorted(versions) for kind, versions in out.items()}
+
+
 def clean_stale_staging(project_root, dry_run=False):
     """Sweep all staging_dirs (entity_dir/<kind>/.staging/*, LOP or step) of the project.
 
@@ -2168,17 +2423,7 @@ def clean_stale_staging(project_root, dry_run=False):
             # 2. Report (never removes): 'pending' entries with no staging on disk -
             #    computed after the sweep above, so it reflects the post-purge state in a single
             #    call (an entry just orphan-purged appears here immediately).
-            all_entries = [("lop", e) for e in manifest.get(LOP_PUBLISHES_KEY, [])]
-            for step, entries in manifest.get(STEP_PUBLISHES_KEY, {}).items():
-                all_entries += [(step, e) for e in entries]
-
-            for kind, entry in all_entries:
-                if entry.get("status") != "pending":
-                    continue
-                version = entry.get("version")
-                versioned_name = f"{entity_dir.name}_{kind}_v{version:03d}"
-                staging_root = entity_dir / (LOP_DIR_NAME if kind == "lop" else kind) / LOP_STAGING_DIR_NAME
-                matches = list(staging_root.glob(f"{versioned_name}.staging-*")) if staging_root.is_dir() else []
+            for kind, version, matches in _pending_reservations(entity_dir, manifest):
                 if not matches:
                     pending_without_staging.append({
                         "entity": entity_dir.name,
@@ -2629,12 +2874,16 @@ def _cli(argv=None):
                      help="Actually delete (default: dry-run, reports without deleting anything)")
 
     pss = sub.add_parser("set-step-status",
-                         help="Set a step's EXPLICIT status (schema 2.2: review|approved) or "
-                              "clear it with 'auto' (back to the derived empty|wip|published).")
+                         help="Set a step's EXPLICIT status (review|approved), recorded with "
+                              "the publish version it applies to (schema 2.3), or clear it "
+                              "with 'auto' (back to the derived empty|wip|published).")
     pss.add_argument("project", help="Path of the existing project")
     pss.add_argument("entity", help="Entity name")
     pss.add_argument("step", help="Step declared for the entity")
     pss.add_argument("status", help="|".join(STEP_STATUS_EXPLICIT + (STEP_STATUS_AUTO,)))
+    pss.add_argument("--version", type=int, default=None,
+                     help="Complete publish version the status applies to "
+                          "(default: the step's latest complete publish)")
 
     pdp = sub.add_parser("dependencies",
                          help="Dependency index (who uses what, update available) of a project "
@@ -2674,8 +2923,10 @@ def _cli(argv=None):
             print(f"[ok] frame_range {args.shot} : {fr['start']}-{fr['end']} @ {fr['fps']} fps")
             print("  shot_root.usda recomposed (timecodes)")
         elif args.cmd == "set-step-status":
-            info = set_step_status(args.project, args.entity, args.step, args.status)
-            print(f"[ok] {args.entity} / {args.step} status = {info['status']} "
+            info = set_step_status(args.project, args.entity, args.step, args.status,
+                                   version=args.version)
+            applies = f" for v{info['version']:03d}" if info.get("version") is not None else ""
+            print(f"[ok] {args.entity} / {args.step} status = {info['status']}{applies} "
                   f"({'explicit' if info['explicit'] else 'derived'})")
         elif args.cmd == "dependencies":
             if args.entity:

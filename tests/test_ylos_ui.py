@@ -837,8 +837,11 @@ class TestStepStatusApi(ServerTestCase):
         self.assertEqual(manifest["step_status"][self.step], "review")
         # Surfaced by both cockpit payloads.
         _, _, detail = self._request("/api/asset/PROP_Tente_Default")
-        self.assertEqual(json.loads(detail)["step_status"][self.step],
-                         {"status": "review", "explicit": True, "derived": "empty"})
+        entry = json.loads(detail)["step_status"][self.step]
+        self.assertIsInstance(entry.pop("set_utc"), str)
+        # Schema 2.3 keys: nothing is published here, so the status carries no version.
+        self.assertEqual(entry, {"status": "review", "explicit": True, "derived": "empty",
+                                 "version": None, "latest_version": None, "behind": False})
         _, _, grid = self._request("/api/assets")
         card = next(a for a in json.loads(grid)["assets"]
                     if a["name"] == "PROP_Tente_Default")
@@ -875,6 +878,21 @@ class TestStepStatusApi(ServerTestCase):
     def test_missing_fields_400(self):
         self.assertEqual(self._set(step=self.step, status="review")[0], 400)
         self.assertEqual(self._set(entity="PROP_Tente_Default", status="review")[0], 400)
+
+    def test_version_is_validated_by_the_orchestrator_400(self):
+        # Schema 2.3: 'version' is passed through untouched; the orchestrator refuses a
+        # version that is not a complete publish of the step (nothing is published here),
+        # a non-integer, or a version sent while clearing - and writes nothing.
+        for bad in (3, "1", 1.5):
+            status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                        status="approved", version=bad)
+            self.assertEqual(status, 400, msg=repr(bad))
+        status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                    status=cp.STEP_STATUS_AUTO, version=1)
+        self.assertEqual(status, 400)
+        manifest = cp.resolve_entity(self.project, "PROP_Tente_Default")["manifest"]
+        self.assertNotIn(cp.STEP_STATUS_KEY, manifest)
+        self.assertNotIn(cp.STEP_STATUS_META_KEY, manifest)
 
 
 class TestRevealTarget(ServerTestCase):
@@ -1046,12 +1064,140 @@ class TestCockpitPayload(ServerTestCase):
     def test_detail_step_status_is_the_full_orchestrator_dict(self):
         detail = self._detail("PROP_Tente_Default")
         entry = detail["step_status"][self.asset_step]
-        self.assertEqual(set(entry), {"status", "explicit", "derived"})
+        self.assertEqual(entry, cp.get_step_status(self.project, "PROP_Tente_Default",
+                                                   self.asset_step))
+        self.assertEqual(set(entry), {"status", "explicit", "derived", "version", "set_utc",
+                                      "latest_version", "behind"})
         self.assertFalse(entry["explicit"])
+        self.assertEqual(entry["latest_version"], self.v2)
+
+    def test_approval_of_an_older_version_is_reported_behind(self):
+        # Schema 2.3 end to end: approve v1 through the endpoint while v2 exists.
+        try:
+            status, _, body = self._request(
+                "/api/set-step-status", method="POST",
+                body={"entity": "PROP_Tente_Default", "step": self.asset_step,
+                      "status": "approved", "version": self.v1})
+            self.assertEqual(status, 200)
+            entry = self._detail("PROP_Tente_Default")["step_status"][self.asset_step]
+            self.assertEqual((entry["status"], entry["version"], entry["latest_version"],
+                              entry["behind"]), ("approved", self.v1, self.v2, True))
+            # The grid card keeps its 2.2 contract: a plain status string per step.
+            self.assertEqual(self._cards()["PROP_Tente_Default"]["step_status"][self.asset_step],
+                             "approved")
+        finally:
+            cp.set_step_status(self.project, "PROP_Tente_Default", self.asset_step,
+                               cp.STEP_STATUS_AUTO)
 
     def test_detail_unknown_entity_404(self):
         status, _, _ = self._request("/api/asset/PROP_Fantome_Default")
         self.assertEqual(status, 404)
+
+
+class TestDirectionCCockpit(ServerTestCase):
+    """Web cockpit, direction C: the cards and the detail carry create_project.entity_overview
+    with each step's render turned into a /thumb/ URL (nothing re-derived by the adapter), the
+    new page is served at /, the classic one stays at /classic, and the page reads its
+    vocabulary from /api/config."""
+
+    ENTITY = "PROP_Tente_Default"
+
+    @classmethod
+    def _publish(cls, ext):
+        staging, final = cp.allocate_publish_version(cls.project, cls.ENTITY, comment="", kind="modeling")
+        version = cp.publish_version_from_dir(final)
+        stem = f"{cls.ENTITY}_modeling_v{version:03d}"
+        (staging / f"{stem}.{ext}").write_bytes(b"artifact")
+        (staging / "thumb.png").write_bytes(b"\x89PNG v%d" % version)
+        cp.finalize_publish_version(cls.project, cls.ENTITY, staging, final, version,
+                                    expected_artifacts=[stem, "thumb.png"])
+        return version
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        info = cp.create("proj_direction_c", root=str(cls._tmp / "croot"), cache=str(cls._tmp / "ccache"))
+        cls.project = Path(info["source"])
+        cp.create_asset(cls.project, cls.ENTITY, asset_type="PROP")
+        cls.v1 = cls._publish("usdc")
+        cp.set_step_status(cls.project, cls.ENTITY, "modeling", "approved")   # binds v1
+        cls.v2 = cls._publish("glb")                                         # not reviewed
+        wip = cls.project / "assets" / cls.ENTITY / "lookdev" / "wip"
+        wip.mkdir(parents=True, exist_ok=True)
+        (wip / f"{cls.ENTITY}_lookdev_v001.blend").write_bytes(b"blend")
+        (cls.project / "sets" / "lecube").mkdir(parents=True)                # orphan folder
+        cls._set_active(cls.project)
+
+    def _cards(self):
+        status, _, body = self._request("/api/assets")
+        self.assertEqual(status, 200)
+        return {c["name"]: c for c in json.loads(body)["assets"]}
+
+    def test_card_carries_the_overview_with_the_render_of_the_shown_version(self):
+        card = self._cards()[self.ENTITY]
+        step = card["overview"]["steps"]["modeling"]
+        self.assertEqual((step["status"], step["version"], step["latest_version"], step["behind"]),
+                         ("approved", self.v1, self.v2, True))
+        self.assertEqual(step["shown_version"], self.v1)     # the approved one, not the latest
+        self.assertEqual(step["shown_ext"], "usdc")
+        self.assertEqual(step["shown_thumb"],
+                         f"/thumb/{self.ENTITY}/modeling/publish/{self.ENTITY}_modeling_v{self.v1:03d}/thumb.png")
+        status, _, body = self._request(step["shown_thumb"] + "?t=1")
+        self.assertEqual((status, body), (200, b"\x89PNG v%d" % self.v1))
+        self.assertIsNotNone(card["overview"]["last_activity_utc"])
+        # The adapter adds nothing: same overview as the orchestrator, render path aside.
+        expected = cp.entity_overview(self.project, self.ENTITY)
+        for name, info in expected["steps"].items():
+            got = dict(card["overview"]["steps"][name])
+            got.pop("shown_thumb"); info = dict(info); info.pop("shown_thumb")
+            self.assertEqual(got, info, name)
+
+    def test_wip_step_reports_its_latest_scenefile(self):
+        step = self._cards()[self.ENTITY]["overview"]["steps"]["lookdev"]
+        self.assertEqual(step["status"], "wip")
+        self.assertEqual(step["latest_scenefile"]["version"], 1)
+        self.assertIsNone(step["shown_thumb"])
+
+    def test_orphan_card_has_no_overview(self):
+        card = self._cards()["lecube"]
+        self.assertTrue(card["broken"])
+        self.assertIsNone(card["overview"])
+
+    def test_detail_carries_the_same_overview_and_scenefile_dates(self):
+        status, _, body = self._request(f"/api/asset/{self.ENTITY}")
+        self.assertEqual(status, 200)
+        detail = json.loads(body)
+        self.assertEqual(detail["overview"], self._cards()[self.ENTITY]["overview"])
+        row = detail["scenefiles"]["lookdev"][0]
+        self.assertIsNotNone(cp._parse_utc(row["mtime_utc"]))
+        self.assertNotIn("path", row)
+
+    def test_root_serves_direction_c_and_classic_stays_reachable(self):
+        status, headers, body = self._request("/")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers.get("Content-Type", ""))
+        self.assertIn(b'<meta name="ylos-ui" content="direction-c">', body)
+        for path in ("/classic", "/app_classic.html"):
+            status, _, classic = self._request(path)
+            self.assertEqual(status, 200, path)
+            self.assertIn(b"<title>Ylos Prod \xe2\x80\x94 Pipeline</title>", classic, path)
+            self.assertNotIn(b"direction-c", classic, path)
+
+    def test_config_exposes_the_new_project_choices(self):
+        status, _, body = self._request("/api/config")
+        data = json.loads(body)
+        self.assertEqual(data["prod_types"], cp.PROD_TYPES)
+        self.assertEqual(data["prod_type_targets"], cp.PROD_TYPE_TO_TARGET)
+
+    def test_page_never_hard_codes_pipeline_vocabulary(self):
+        # Types, steps and statuses come from /api/config (principle 5): a quoted literal of
+        # one of them in the page would be a rule living in the wrong place.
+        page = (_REPO_ROOT / "app.html").read_text(encoding="utf-8")
+        words = (cp.ASSET_TYPES + cp.SET_TYPES + cp.SHOT_TYPES + cp.DEFAULT_ASSET_STEPS
+                 + cp.DEFAULT_SET_STEPS + cp.DEFAULT_SHOT_STEPS + cp.PROD_TYPES)
+        for word in sorted(set(words)):
+            for quoted in (f"'{word}'", f'"{word}"', f"`{word}`"):
+                self.assertNotIn(quoted, page, f"{quoted} hard-coded in app.html")
 
 
 if __name__ == "__main__":

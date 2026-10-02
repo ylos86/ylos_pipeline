@@ -1,0 +1,2555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ylos Prod — Pipeline</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Palette derived from Prism Pipeline (near-black background, raspberry accent #af326d).
+       The accent is ONE variable — changing it here reskins all the UI magenta. */
+    :root {
+      --bg:           #121212;
+      --bg-2:         #1a1b1f;
+      --bg-3:         #232430;
+      --bg-hover:     #2b2c39;
+      --border:       #2b2c34;
+      --border-hi:    #3a3b48;
+      --text:         #eef1f4;
+      /* text-muted / text-dim: recalibrated WCAG AA (>=4.5:1) on 2026-08-03, re-checked on the
+         Prism palette on 2026-09-09. Both carry real readable text (labels, counters,
+         placeholders — not just decorative), so the muted > dim hierarchy is expressed by
+         size/weight/letter-spacing rather than by an aggressive contrast gap. Verified by
+         calculation (relative luminance) on the 3 backgrounds --bg/--bg-2/--bg-3: both pass
+         >=4.5:1 everywhere they appear. */
+      --text-muted:   #bcc4ce;
+      --text-dim:     #8b939e;
+      --accent:       #af326d;
+      --accent-hover: #c2497f;
+      --accent-glow:  #af326d33;
+      --wine:         #4e111b;   /* deep Prism hue — background of SELECTED states */
+      --wine-hi:      #631726;
+      --on-wine:      #f6d7e3;   /* pale rosy text on wine (high contrast, ~11:1) */
+      --green:        #34d399;
+      --red:          #f87171;
+
+      /* Translucent chrome (header/toolbar) — macOS-style vibrancy over the dark ground.
+         A hair darker than --bg-2 and semi-transparent so content scrolling underneath
+         reads through the blur. */
+      --chrome:       rgba(20, 21, 25, .72);
+
+      /* Motion system (macos-design): one place for easing + duration, so every
+         transition in the app feels like it came from the same hand. */
+      --ease-out:    cubic-bezier(.25, .46, .45, .94);
+      --ease-spring: cubic-bezier(.34, 1.3, .64, 1);
+      --ease-smooth: cubic-bezier(.4, 0, .2, 1);
+      --dur-fast: .15s;
+      --dur:      .24s;
+      --dur-slow: .4s;
+
+      /* Layered shadows — the `0 0 0 .5px` edge is what reads as a crisp hairline
+         without a hard border (the macOS look), stacked with soft spread for depth. */
+      --shadow-card: 0 0 0 .5px rgba(0,0,0,.45), 0 10px 28px -8px rgba(0,0,0,.6);
+      --shadow-pop:  0 0 0 .5px rgba(0,0,0,.55), 0 8px 24px rgba(0,0,0,.5), 0 24px 60px -14px rgba(0,0,0,.45);
+      --ring:        0 0 0 3px var(--accent-glow);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-delay: 0ms !important;
+        transition-duration: .001ms !important;
+      }
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* Thin, self-effacing scrollbars — visible only against the dark ground,
+       matching a native-tool feel rather than the chunky OS default. */
+    * { scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-hi); border-radius: 8px;
+      border: 3px solid transparent; background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: #4a4b59; background-clip: padding-box; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    /* ── Header ─────────────────────────────────── */
+    /* SCOPED to the app bar (body > header) on purpose: a bare `header` selector also
+       caught the <header> of the entity view, which inherited position:sticky and
+       height:54px and spilled its buttons over the departments column. Any other
+       <header> in the page now styles itself. */
+    body > header {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px; height: 54px;
+      background: var(--chrome);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+    /* Solid fallback where backdrop-filter is unsupported — never a see-through bar. */
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      body > header, .toolbar { background: var(--bg-2); }
+    }
+    .header-left  { display: flex; align-items: center; gap: 14px; }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+
+    .logo { font-size: 15px; font-weight: 700; letter-spacing: -.4px; }
+    .logo em { color: var(--accent); font-style: normal; }
+
+    .project-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 13px; color: var(--text-muted);
+      max-width: 260px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    }
+
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-dim); flex-shrink: 0;
+      transition: background .3s, box-shadow .3s;
+    }
+    .status-dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.offline { background: var(--red); }
+
+    .badge-target {
+      font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+      padding: 1px 6px; border-radius: 3px; flex-shrink: 0;
+      background: var(--bg); border: 1px solid var(--border); color: var(--text-dim);
+    }
+
+    .status-label { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Buttons ─────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 6px 14px; border-radius: 7px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
+      transition: background var(--dur-fast), border-color var(--dur-fast),
+                  box-shadow var(--dur), transform var(--dur-fast), opacity var(--dur-fast);
+    }
+    .btn:active { transform: scale(.97); opacity: .9; }
+    .btn:disabled { opacity: .4; cursor: default; }
+
+    /* Keyboard-shortcut hint chip (macos-design): every primary action names its key. */
+    .kbd {
+      display: inline-flex; align-items: center; gap: 1px;
+      margin-left: 2px; padding: 1px 5px; border-radius: 4px;
+      font-size: 10.5px; font-weight: 600; line-height: 1.4;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: rgba(255,255,255,.14); color: inherit; opacity: .72;
+    }
+    .btn-secondary .kbd, .search .kbd { background: rgba(255,255,255,.06); }
+    @media (max-width: 520px) { .kbd { display: none; } }
+    .btn-primary   { background: var(--accent); color: #fff; box-shadow: 0 1px 12px -4px var(--accent); }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 2px 16px -4px var(--accent); }
+    .btn-secondary { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-hi); }
+    .btn-ghost     { background: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { color: var(--text); background: var(--bg-3); }
+
+    /* Keyboard focus is visible and on-brand; mouse focus stays quiet (:focus-visible). */
+    :focus-visible { outline: none; box-shadow: var(--ring); }
+    .btn:focus-visible { box-shadow: var(--ring); }
+    .card:focus-visible { box-shadow: var(--ring), var(--shadow-card); border-color: var(--accent); }
+
+    /* ── Error banner ────────────────────────────── */
+    .error-banner {
+      margin: 24px; padding: 22px 24px;
+      background: #1a0f0f; border: 1px solid #5a2222; border-radius: 10px;
+    }
+    .error-banner h3 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
+    .error-banner p  { color: var(--text-muted); font-size: 13px; margin-bottom: 14px; }
+    .error-cmd {
+      display: inline-block;
+      padding: 8px 14px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 13px; color: var(--green);
+      user-select: all; cursor: text;
+    }
+
+    /* ── Toolbar ─────────────────────────────────── */
+    .toolbar {
+      position: sticky; top: 54px; z-index: 90;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 11px 20px;
+      background: var(--chrome);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+    /* Keep each label welded to its own pills so the group never breaks across
+       lines (the old layout orphaned the "Family" label above its pills). */
+    .filter-group { display: flex; align-items: center; gap: 8px; }
+    .filter-label {
+      font-size: 11px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .7px; white-space: nowrap;
+    }
+
+    /* ── Search ──────────────────────────────────── */
+    .search {
+      display: flex; align-items: center; gap: 7px;
+      height: 30px; padding: 0 9px; min-width: 160px;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text-dim);
+      transition: border-color var(--dur-fast), box-shadow var(--dur), background var(--dur-fast);
+    }
+    .search:focus-within { border-color: var(--accent); box-shadow: var(--ring); background: var(--bg); }
+    .search svg { flex-shrink: 0; }
+    .search input {
+      flex: 1; min-width: 0; border: none; background: none; outline: none;
+      color: var(--text); font-size: 13px; padding: 0;
+    }
+    .search input::placeholder { color: var(--text-dim); }
+    .search .kbd { transition: opacity var(--dur-fast); }
+    .search:focus-within .kbd, .search.has-text .kbd { opacity: 0; pointer-events: none; }
+    .search-clear {
+      display: none; flex-shrink: 0; border: none; background: none; cursor: pointer;
+      color: var(--text-dim); padding: 2px; border-radius: 4px; line-height: 0;
+    }
+    .search-clear:hover { color: var(--text); background: var(--bg-hover); }
+    .search.has-text .search-clear { display: inline-flex; }
+    .pills { display: flex; gap: 5px; flex-wrap: wrap; }
+    .pill {
+      padding: 3px 11px; border-radius: 20px;
+      border: 1px solid var(--border); background: var(--bg-3);
+      font-size: 12px; color: var(--text-muted);
+      cursor: pointer; user-select: none;
+      transition: all .15s;
+    }
+    .pill:hover { border-color: var(--border-hi); color: var(--text); }
+    .pill.active { border-color: var(--accent); background: var(--wine); color: var(--on-wine); font-weight: 600; }
+    .pill.active:hover { background: var(--wine-hi); color: var(--on-wine); }
+
+    .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+    .toolbar-right {
+      margin-left: auto; display: flex; align-items: center; gap: 10px;
+      flex-wrap: wrap; justify-content: flex-end; row-gap: 8px;
+    }
+    .asset-count { font-size: 12px; color: var(--text-dim); }
+
+    .sort-select {
+      padding: 5px 10px; border-radius: 6px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      color: var(--text); font-size: 13px; cursor: pointer; outline: none;
+    }
+    .sort-select:hover { border-color: var(--border-hi); }
+
+    .refresh-icon { color: var(--text-dim); display: flex; align-items: center; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinning { animation: spin 1s linear infinite; }
+
+    /* ── Main ────────────────────────────────────── */
+    main { padding: 20px; }
+
+    /* ── States ──────────────────────────────────── */
+    .state-center {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 80px 24px; gap: 12px;
+    }
+    .state-center svg  { color: var(--text-dim); opacity: .35; }
+    .state-center h3   { font-size: 15px; color: var(--text-muted); }
+    .state-center p    { font-size: 13px; color: var(--text-dim); max-width: 320px; }
+
+    /* ── Asset grid ──────────────────────────────── */
+    .asset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 260px), 1fr));
+      gap: 14px;
+    }
+    /* Grid density — the asset browser is first a VISUAL tool: whether you
+       look for a specific thumbnail or scan a whole project, the right card
+       size is not the same. Three steps, not a slider (a named step is memorable). */
+    body[data-density="s"] .asset-grid { --card-min: 190px; }
+    body[data-density="m"] .asset-grid { --card-min: 260px; }
+    body[data-density="l"] .asset-grid { --card-min: 360px; }
+
+    /* ── Card ────────────────────────────────────── */
+    .card {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
+      overflow: hidden; display: flex; flex-direction: column;
+      transition: border-color var(--dur), transform var(--dur-fast), box-shadow var(--dur);
+      /* Entrance stagger — plays only when the grid actually re-renders (a real data
+         or filter change), never on the idle 30s poll. --i is the card's index. */
+      animation: cardIn .34s var(--ease-out) both;
+      animation-delay: calc(var(--i, 0) * 18ms);
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(9px) scale(.985); }
+      to   { opacity: 1; transform: none; }
+    }
+    .card:hover {
+      border-color: var(--border-hi);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-card), 0 0 0 1px var(--accent-glow);
+    }
+
+    /* 4/3 and not 16/9: thumbnails are rendered SQUARE (three-quarter framing on the
+       bbox). In 16/9 + object-fit:cover, ~44% of the height was cropped — the top and
+       bottom of the subject, exactly what lets you recognize it. */
+    .card-thumb {
+      position: relative;
+      width: 100%; aspect-ratio: 4/3;
+      background: var(--bg-3); overflow: hidden;
+    }
+    .card-thumb img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      transition: transform .35s cubic-bezier(.2,.7,.3,1);
+    }
+    .card:hover .card-thumb img { transform: scale(1.045); }
+
+    /* Thumbnail provenance. A WIP thumbnail does not carry the same confidence as a
+       publish: the UI SAYS so instead of letting it pass for a published asset. Nothing is shown
+       for a publish thumb — the normal case does not deserve visual noise. */
+    /* Type badge AS AN OVERLAY on the thumbnail, not next to the name. Direct visual finding:
+       side by side in a 260px header, the badge ate half the width and the
+       TYPE_Name_Variant names (already long) ellipsized from the 12th character
+       — exactly the information that distinguishes two assets. The name takes the full
+       width, the type stays readable where it costs nothing. */
+    .thumb-type {
+      position: absolute; right: 8px; top: 8px;
+      font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 4px; border: 1px solid transparent;
+      backdrop-filter: blur(6px); pointer-events: none;
+    }
+    .thumb-tag {
+      position: absolute; left: 8px; bottom: 8px;
+      font-size: 9px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+      padding: 2px 6px; border-radius: 4px; backdrop-filter: blur(6px);
+      border: 1px solid transparent; pointer-events: none;
+    }
+    .thumb-tag.wip    { background: rgba(251,146,60,.22); color: #fdba74; border-color: rgba(251,146,60,.4); }
+    .thumb-tag.custom { background: rgba(52,211,153,.18); color: #6ee7b7; border-color: rgba(52,211,153,.35); }
+
+    /* Orphan entity (folder without manifest.json) — flagged, never hidden. */
+    .card.broken { border-color: rgba(248,113,113,.45); }
+    .card.broken:hover { border-color: rgba(248,113,113,.7); }
+    .card-warn {
+      display: flex; gap: 6px; align-items: flex-start;
+      font-size: 11px; line-height: 1.45; color: #fca5a5;
+      background: rgba(248,113,113,.09); border: 1px solid rgba(248,113,113,.25);
+      border-radius: 5px; padding: 6px 8px;
+    }
+    .card-warn svg { flex-shrink: 0; margin-top: 1px; }
+
+    .density-group { display: flex; gap: 2px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+    .density-group button {
+      background: none; border: 0; color: var(--text-dim); cursor: pointer;
+      font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px;
+      transition: background .15s, color .15s;
+    }
+    .density-group button:hover  { color: var(--text-muted); }
+    .density-group button.active { background: var(--wine); color: var(--on-wine); box-shadow: inset 0 0 0 1px var(--accent); }
+    .thumb-placeholder {
+      width: 100%; height: 100%;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; color: var(--text-dim);
+    }
+    .thumb-placeholder span { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+
+    .card-body { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; gap: 9px; }
+
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    /* min-width:0 mandatory: without it, a flex item never shrinks below its content
+       width — the name pushed the type badge out of the card instead of ellipsizing. */
+    .card-name {
+      font-size: 15px; font-weight: 600;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-block; padding: 2px 7px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+      white-space: nowrap; flex-shrink: 0; border: 1px solid transparent;
+    }
+
+    .steps-list { display: flex; flex-direction: column; gap: 3px; }
+
+    .step-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 8px; border-radius: 5px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .step-row:hover { border-color: var(--accent); background: var(--accent-glow); }
+    .step-row:hover .step-name { color: var(--text); }
+
+    .step-thumb {
+      width: 20px; height: 20px; border-radius: 4px; object-fit: cover;
+      flex-shrink: 0; background: var(--bg); display: block;
+    }
+    .step-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+
+    .step-name { font-size: 11px; color: var(--text-muted); text-transform: capitalize; flex: 1; min-width: 0; }
+    .step-ext {
+      font-size: 9px; font-weight: 700; letter-spacing: .4px; color: var(--text-dim);
+      background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+      padding: 1px 5px; flex-shrink: 0;
+    }
+    .step-ver  {
+      font-size: 11px; color: var(--accent); flex-shrink: 0;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    }
+
+    .card-footer { margin-top: auto; padding-top: 8px; }
+    .card-footer .btn { width: 100%; }
+
+    /* ── Modal ───────────────────────────────────── */
+    /* position/z-index only on :not(.hidden) — avoids any GPU compositor layer at rest (Safari WebKit bug) */
+    .modal-overlay {
+      background: rgba(0,0,0,.65);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-overlay:not(.hidden) {
+      position: fixed; inset: 0; z-index: 1000;
+      pointer-events: auto;
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      animation: overlayIn var(--dur) var(--ease-out) both;
+    }
+    .modal {
+      background: var(--bg-2); border: 1px solid var(--border-hi);
+      border-radius: 12px; padding: 28px; width: 460px;
+      max-width: calc(100vw - 40px);
+      box-shadow: var(--shadow-pop);
+    }
+    .modal-overlay:not(.hidden) .modal { animation: modalIn .28s var(--ease-spring) both; }
+    @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(10px) scale(.97); }
+      to   { opacity: 1; transform: none; }
+    }
+    .modal h2 { font-size: 16px; margin-bottom: 6px; }
+    .modal .subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 22px; }
+    .modal .subtitle code {
+      font-family: ui-monospace, monospace; font-size: 12px;
+      background: var(--bg-3); padding: 1px 5px; border-radius: 4px;
+    }
+
+    .field label {
+      display: block; font-size: 11px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px;
+    }
+    .field input {
+      width: 100%; padding: 9px 12px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text); font-size: 13px;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      outline: none; transition: border-color .15s;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .field input::placeholder { color: var(--text-dim); }
+
+    .modal-err { font-size: 12px; color: var(--red); min-height: 18px; margin-top: 8px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+
+    /* Frame range (shots) */
+    .fr-fields { display: flex; gap: 12px; }
+    .fr-fields .field { flex: 1; }
+    .frame-chip {
+      display: inline-flex; align-items: center; gap: 5px; margin-top: 7px;
+      padding: 3px 9px; font-size: 11px;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      color: var(--text-muted); background: var(--bg-3);
+      border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .frame-chip:hover { border-color: var(--accent); color: var(--text); }
+    .frame-chip .frame-fps { color: var(--text-dim); }
+    .frame-chip.unset { font-style: italic; color: var(--text-dim); }
+
+    .root-field { display: flex; gap: 6px; align-items: center; }
+    .root-field input { flex: 1; min-width: 0; }
+
+    .browse-panel {
+      margin-top: 6px; border-radius: 7px;
+      border: 1px solid var(--border); background: var(--bg);
+      max-height: 220px; overflow-y: auto;
+    }
+    .browse-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 10px; font-size: 12px; color: var(--text-muted);
+      cursor: pointer; border-bottom: 1px solid var(--border);
+      transition: background .12s;
+    }
+    .browse-row:last-child { border-bottom: none; }
+    .browse-row:hover { background: var(--bg-3); color: var(--text); }
+    .browse-parent { color: var(--text-dim); font-style: italic; }
+    .badge-ylos {
+      font-size: 9px; font-weight: 700; flex-shrink: 0;
+      padding: 1px 6px; border-radius: 3px; letter-spacing: .5px;
+      background: #78350f20; color: #fbbf24; border: 1px solid #fbbf2440;
+    }
+
+    /* ── Toast ───────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 22px; right: 22px; z-index: 2000;
+      display: flex; align-items: center; gap: 8px;
+      padding: 11px 16px; border-radius: 10px;
+      background: var(--chrome);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      backdrop-filter: saturate(180%) blur(20px);
+      border: 1px solid var(--border-hi);
+      box-shadow: var(--shadow-pop);
+      font-size: 13px; font-weight: 500;
+      opacity: 0; transform: translateY(10px) scale(.96);
+      transition: opacity var(--dur), transform var(--dur) var(--ease-spring);
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0) scale(1); }
+    .toast.ok   { border-color: var(--green); color: var(--green); }
+    .toast.err  { border-color: var(--red);   color: var(--red);   }
+
+    .modal-select {
+      width: 100%; padding: 9px 12px; border-radius: 7px;
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); font-size: 13px; cursor: pointer; outline: none;
+      transition: border-color .15s;
+    }
+    .modal-select:hover { border-color: var(--border-hi); }
+    .modal-select:focus { border-color: var(--accent); }
+
+    .step-check {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;
+    }
+    .step-check input[type=checkbox] { accent-color: var(--accent); }
+
+    /* Pins web (modal Sync Web) */
+    .ws-pins {
+      display: flex; flex-direction: column; gap: 6px;
+      max-height: 200px; overflow-y: auto;
+    }
+    .ws-pin-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .ws-pin-name {
+      font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ws-pin-row select {
+      background: var(--bg-3); color: inherit;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: 12px; padding: 4px 6px; max-width: 190px;
+    }
+    .ws-pin-row select:focus { border-color: var(--accent); outline: none; }
+    .ws-pins-empty { font-size: 12.5px; color: var(--text-muted); }
+
+    .icon-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; padding: 0; flex-shrink: 0;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text-dim); cursor: pointer; transition: border-color .15s, color .15s;
+    }
+    .icon-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    /* ── Step status (schema 2.2) ─────────────────────
+       ONE hue per status, reused identically on the grid card, the step column and the
+       selector — the colour IS the vocabulary, so it must never drift between views.
+       Vocabulary itself comes from /api/config (create_project.STEP_STATUSES). */
+    .st-pill {
+      display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+      font-size: 10px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 999px; border: 1px solid transparent;
+      background: var(--st-bg, rgba(255,255,255,.05));
+      color: var(--st-fg, var(--text-dim));
+      border-color: var(--st-bd, var(--border));
+    }
+    .st-empty     { --st-bg: rgba(255,255,255,.04); --st-fg: var(--text-dim);  --st-bd: var(--border); }
+    .st-wip       { --st-bg: rgba(251,146,60,.18);  --st-fg: #fdba74;          --st-bd: rgba(251,146,60,.4); }
+    .st-published { --st-bg: rgba(96,165,250,.18);  --st-fg: #93c5fd;          --st-bd: rgba(96,165,250,.4); }
+    .st-review    { --st-bg: rgba(251,191,36,.18);  --st-fg: #fcd34d;          --st-bd: rgba(251,191,36,.45); }
+    .st-approved  { --st-bg: rgba(52,211,153,.18);  --st-fg: #6ee7b7;          --st-bd: rgba(52,211,153,.4); }
+    .st-pill.explicit::before { content: '●'; font-size: 7px; line-height: 1; }
+
+    /* "Update available" — the dependency badge (Phase 3.2). Same hue everywhere it
+       appears (grid card, entity header, step row, Uses row). */
+    .upd-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+      background: rgba(251,191,36,.16); color: #fcd34d; border: 1px solid rgba(251,191,36,.42);
+    }
+    .card-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+
+    /* ── Entity view (cockpit drill-down, Phase 2.2) ───
+       Replaces the buried scenefiles modal: a real view in the main area, with a
+       breadcrumb back (Esc). Two columns: departments/steps on the left, the selected
+       step's panels on the right. */
+    .entity-view { animation: entityIn var(--dur) var(--ease-out) both; }
+    @keyframes entityIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .crumb { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 12.5px; }
+    .crumb-back {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text-muted); cursor: pointer; font: inherit;
+      transition: border-color var(--dur-fast), color var(--dur-fast), background var(--dur-fast);
+    }
+    .crumb-back:hover { border-color: var(--accent); color: var(--text); background: var(--bg-hover); }
+    .crumb-back:focus-visible { box-shadow: var(--ring); }
+    .crumb-sep  { color: var(--text-dim); }
+    .crumb-here { color: var(--text); font-weight: 600; }
+
+    .entity-head {
+      display: flex; gap: 18px; align-items: flex-start;
+      padding: 16px; margin-bottom: 18px;
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: var(--shadow-card);
+    }
+    .entity-head-thumb {
+      width: 132px; height: 92px; flex-shrink: 0; border-radius: 9px; overflow: hidden;
+      background: var(--bg-3); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .entity-head-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .entity-head-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+    .entity-title { font-size: 19px; font-weight: 650; letter-spacing: -.3px; word-break: break-all; }
+    .entity-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 6px;
+      background: var(--bg-3); border: 1px solid var(--border); color: var(--text-muted);
+    }
+    .entity-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+
+    .entity-body { display: grid; grid-template-columns: minmax(190px, 250px) 1fr; gap: 18px; align-items: start; }
+    @media (max-width: 860px) { .entity-body { grid-template-columns: 1fr; } }
+
+    .dept-col {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .col-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+      color: var(--text-dim); padding: 2px 6px 6px;
+    }
+    .dept-row {
+      display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+      padding: 7px 8px; border-radius: 8px; cursor: pointer; font: inherit;
+      background: transparent; border: 1px solid transparent; color: var(--text-muted);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+    }
+    .dept-row:hover { background: var(--bg-3); color: var(--text); }
+    .dept-row.active { background: var(--wine); border-color: var(--accent); color: var(--on-wine); }
+    .dept-row:focus-visible { box-shadow: var(--ring); }
+    .dept-thumb {
+      width: 34px; height: 24px; border-radius: 5px; flex-shrink: 0; object-fit: cover;
+      background: var(--bg-3); border: 1px solid var(--border);
+    }
+    .dept-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+    .dept-name { flex: 1; min-width: 0; font-size: 12.5px; text-transform: capitalize;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dept-ver {
+      font-size: 11px; font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+      color: var(--text-dim); flex-shrink: 0;
+    }
+    .dept-row.active .dept-ver { color: var(--on-wine); }
+    .dept-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--st-fg, var(--text-dim)); }
+
+    .panel-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .panel {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+    }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+    }
+    .panel-title { font-size: 13px; font-weight: 620; letter-spacing: -.1px; }
+    .panel-title .muted { color: var(--text-dim); font-weight: 400; margin-left: 6px; font-size: 11.5px; }
+    .panel-empty { font-size: 12.5px; color: var(--text-dim); font-style: italic; padding: 6px 0; }
+
+    .status-select {
+      background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+      border-radius: 7px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+    }
+    .status-select:hover { border-color: var(--border-hi); }
+    .status-select:focus { border-color: var(--accent); outline: none; }
+    .field-inline { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
+
+    /* Version rows (scenefiles + products share the geometry so the two panels read
+       as one family; only the trailing action differs). */
+    .vrow {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 8px;
+      background: var(--bg-3); border: 1px solid var(--border);
+    }
+    .vrow + .vrow { margin-top: 6px; }
+    .vrow:hover { border-color: var(--border-hi); }
+    .vrow-ver {
+      font-size: 12px; font-weight: 600; color: var(--accent); flex-shrink: 0;
+      font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    }
+    .vrow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .vrow-comment { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vrow-comment.empty { font-style: italic; color: var(--text-dim); }
+    .vrow-meta { font-size: 11px; color: var(--text-dim); display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag {
+      font-size: 9.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+      padding: 1px 6px; border-radius: 5px; flex-shrink: 0;
+      background: var(--bg-hover); color: var(--text-dim); border: 1px solid var(--border);
+    }
+    .tag.dcc-blender { color: #fdba74; border-color: rgba(251,146,60,.35); }
+    .tag.dcc-houdini { color: #93c5fd; border-color: rgba(96,165,250,.35); }
+    .tag.missing     { color: var(--red); border-color: rgba(248,113,113,.4); }
+    .btn-mini { font-size: 11.5px; padding: 4px 10px; flex-shrink: 0; }
+
+    /* Version gallery (Phase 2.3) — thumbnails side by side + 2-up compare. */
+    .gallery { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+    .gal-item {
+      width: 112px; flex-shrink: 0; padding: 0; cursor: pointer; font: inherit; text-align: center;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 9px; overflow: hidden;
+      color: var(--text-muted); transition: border-color var(--dur-fast), transform var(--dur-fast);
+    }
+    .gal-item:hover { border-color: var(--border-hi); transform: translateY(-2px); }
+    .gal-item.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .gal-item:focus-visible { box-shadow: var(--ring); }
+    .gal-thumb {
+      width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; background: var(--bg);
+    }
+    .gal-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
+    .gal-cap { padding: 5px 6px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+    .gal-ver { font-weight: 600; color: var(--text); font-family: 'SF Mono', ui-monospace, monospace; }
+    .gal-date { font-size: 10px; color: var(--text-dim); }
+    .gal-pick { font-size: 9.5px; color: var(--accent); font-weight: 700; }
+
+    .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+    @media (max-width: 640px) { .compare-grid { grid-template-columns: 1fr; } }
+    .cmp-card { background: var(--bg-3); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .cmp-card img { width: 100%; display: block; aspect-ratio: 4/3; object-fit: contain; background: var(--bg); }
+    .cmp-none { aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; color: var(--text-dim); background: var(--bg); }
+    .cmp-body { padding: 9px 11px; display: flex; flex-direction: column; gap: 3px; }
+    .cmp-ver { font-size: 12.5px; font-weight: 650; color: var(--accent); font-family: 'SF Mono', ui-monospace, monospace; }
+
+    /* Dependencies (Phase 3.2) */
+    .dep-row {
+      display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+      padding: 7px 10px; border-radius: 8px;
+      background: var(--bg-3); border: 1px solid var(--border);
+    }
+    .dep-row + .dep-row { margin-top: 6px; }
+    .dep-link {
+      font-size: 12.5px; font-weight: 600; color: var(--text); background: none; border: none;
+      padding: 0; cursor: pointer; font-family: inherit; text-align: left;
+    }
+    .dep-link:hover { color: var(--accent); text-decoration: underline; }
+    .dep-meta { font-size: 11px; color: var(--text-dim); }
+    .dep-pin { font-family: 'SF Mono', ui-monospace, monospace; font-size: 11px; color: var(--text-muted); }
+
+    .hidden { display: none !important; pointer-events: none !important; }
+
+    /* ── Recent dropdown ─────────────────────────────── */
+    #js-recent-list {
+      position: absolute; top: calc(100% + 6px); left: 0; z-index: 500;
+      background: var(--bg-2); border: 1px solid var(--border-hi);
+      border-radius: 10px; list-style: none;
+      min-width: 260px; max-width: 440px;
+      box-shadow: var(--shadow-pop);
+      overflow: hidden;
+      transform-origin: top left;
+      animation: popIn .18s var(--ease-out) both;
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(-4px) scale(.98); }
+      to   { opacity: 1; transform: none; }
+    }
+    #js-recent-list li {
+      padding: 8px 14px; font-size: 12px; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      transition: background .12s; color: var(--text-muted);
+    }
+    #js-recent-list li:last-child { border-bottom: none; }
+    #js-recent-list li:hover { background: var(--bg-hover); color: var(--text); }
+    #js-recent-list li .recent-basename { font-weight: 500; color: var(--text); }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <span class="logo">Ylos<em>Prod</em></span>
+    <span class="project-pill">
+      <span class="status-dot" id="js-dot"></span>
+      <span id="js-project-name">No project</span>
+      <span id="js-project-target" class="badge-target hidden"></span>
+    </span>
+    <div id="js-recent-wrap" style="position:relative;display:inline-block">
+      <button id="js-recent-btn" class="btn btn-secondary hidden" type="button">Recent ▾</button>
+      <ul id="js-recent-list" hidden></ul>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="status-label" id="js-status-label">Connecting…</span>
+    <button class="btn btn-primary"   type="button" id="js-btn-new-project" onclick="openNewProjectModal()">+ New project</button>
+    <button class="btn btn-secondary" type="button" id="js-btn-change" onclick="openModal()">Change project</button>
+  </div>
+</header>
+
+<!-- ── Server offline ──────────────────────────────── -->
+<div class="error-banner hidden" id="js-error-banner">
+  <h3>Server not detected</h3>
+  <p>The Ylos server is not running. Start it in a terminal:</p>
+  <code class="error-cmd">python3 ylos_ui.py</code>
+</div>
+
+<!-- ── Toolbar ─────────────────────────────────────── -->
+<div class="toolbar hidden" id="js-toolbar">
+  <div class="filter-group">
+    <span class="filter-label">Type</span>
+    <div class="pills" id="js-pills-type">
+      <span class="pill active" data-type="ALL">All</span>
+    </div>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <div class="filter-group">
+    <span class="filter-label">Family</span>
+    <div class="pills" id="js-pills-family">
+      <span class="pill active" data-fam="ALL">All</span>
+      <span class="pill" data-fam="assets">Assets</span>
+      <span class="pill" data-fam="sets">Sets</span>
+      <span class="pill" data-fam="shots">Shots</span>
+    </div>
+  </div>
+
+  <div class="toolbar-right">
+    <label class="search" id="js-search-wrap">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="js-search" placeholder="Search" spellcheck="false" autocomplete="off" aria-label="Search assets">
+      <span class="kbd" aria-hidden="true">⌘F</span>
+      <button class="search-clear" id="js-search-clear" type="button" aria-label="Clear search" title="Clear (Esc)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </label>
+    <span class="refresh-icon" id="js-refresh-icon"></span>
+    <span class="asset-count" id="js-count"></span>
+    <button class="btn btn-primary" type="button" id="js-btn-new-asset" style="font-size:12px;padding:5px 12px" onclick="openNewAssetModal()">+ New asset<span class="kbd" aria-hidden="true">⌘N</span></button>
+    <button class="btn btn-secondary" type="button" id="js-btn-sync-web" style="font-size:12px;padding:5px 12px" onclick="openWebSyncModal()">Sync Web</button>
+    <div class="density-group" id="js-density" title="Thumbnail size">
+      <button type="button" data-d="s">S</button>
+      <button type="button" data-d="m">M</button>
+      <button type="button" data-d="l">L</button>
+    </div>
+    <select class="sort-select" id="js-sort">
+      <option value="name-asc">Name A → Z</option>
+      <option value="name-desc">Name Z → A</option>
+      <option value="type">Type</option>
+      <option value="version">Version (newest)</option>
+    </select>
+  </div>
+</div>
+
+<!-- ── Main content ────────────────────────────────── -->
+<main>
+
+  <div class="state-center" id="js-no-project">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+      <rect x="2" y="3" width="20" height="14" rx="2"/>
+      <polyline points="8 21 12 17 16 21"/>
+    </svg>
+    <h3>No active project</h3>
+    <p>Set a project to display its assets.</p>
+    <button class="btn btn-primary" type="button" id="js-btn-change-empty" onclick="openModal()">Choose a project</button>
+  </div>
+
+  <div class="asset-grid hidden" id="js-grid"></div>
+
+  <div class="state-center hidden" id="js-empty">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </svg>
+    <h3>No assets</h3>
+    <p id="js-empty-reason">This project has no assets yet.</p>
+  </div>
+
+  <!-- Entity view (cockpit drill-down, Phase 2.2). Filled by renderEntity(); replaces
+       the grid in place — the breadcrumb (or Esc) comes back. -->
+  <section class="entity-view hidden" id="js-entity" aria-label="Entity"></section>
+
+</main>
+
+<!-- ── Change-project modal ────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal">
+  <div class="modal">
+    <h2>Change project</h2>
+    <p class="subtitle">Absolute path of the folder containing <code>_pipeline/project.json</code>.</p>
+    <div class="field">
+      <label>Path</label>
+      <input type="text" id="js-modal-input" spellcheck="false"
+             placeholder="/Volumes/Ylos/Projects/MyProject">
+    </div>
+    <div class="modal-err" id="js-modal-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-modal-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-modal-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ───────────────────────────────────────── -->
+<!-- ── New-project modal ───────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal-new-project">
+  <div class="modal">
+    <h2>New project</h2>
+    <p class="subtitle">Creates a project and makes it the active project.</p>
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="js-np-name" spellcheck="false" placeholder="MyProject">
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Production type</label>
+      <select id="js-np-prod-type" class="modal-select">
+        <option value="FILM">FILM</option>
+        <option value="SERIES">SERIES</option>
+        <option value="GAME">GAME</option>
+        <option value="XR">XR</option>
+      </select>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Root folder</label>
+      <div class="root-field">
+        <input type="text" id="js-np-root" spellcheck="false" placeholder="~/Projects">
+        <button class="btn btn-secondary" id="js-np-browse-btn" type="button">Browse</button>
+      </div>
+      <div class="browse-panel hidden" id="js-np-browse-panel"></div>
+    </div>
+    <div class="modal-err" id="js-np-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-np-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-np-ok">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Web-sync modal ───────────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal-web-sync">
+  <div class="modal">
+    <h2>Sync to the web project</h2>
+    <p class="subtitle">Copies the pinned GLBs (project.json → web.pinned_assets) to
+      <code>public/assets/</code> of the target Three.js project.</p>
+    <div class="field">
+      <label>Web project folder (root)</label>
+      <input type="text" id="js-ws-target" spellcheck="false"
+             placeholder="~/Projects/my-three-site">
+    </div>
+    <div class="field">
+      <label>Pinned assets (GLB publishes)</label>
+      <div class="ws-pins" id="js-ws-pins"></div>
+    </div>
+    <div class="modal-err" id="js-ws-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-ws-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-ws-ok">Sync</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Frame-range modal (shots, schema 2.1) ────────── -->
+<div class="modal-overlay hidden" id="js-modal-framerange">
+  <div class="modal">
+    <h2 id="js-fr-title">Frame range</h2>
+    <p class="subtitle">Frame range of the shot (schema 2.1). Saving recomposes
+      <code>shot_root.usda</code> (timecodes).</p>
+    <div class="fr-fields">
+      <div class="field"><label for="js-fr-start">Start</label>
+        <input type="number" id="js-fr-start" step="1" spellcheck="false"></div>
+      <div class="field"><label for="js-fr-end">End</label>
+        <input type="number" id="js-fr-end" step="1" spellcheck="false"></div>
+      <div class="field"><label for="js-fr-fps">FPS</label>
+        <input type="number" id="js-fr-fps" step="0.01" min="0" spellcheck="false"></div>
+    </div>
+    <div class="modal-err" id="js-fr-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-fr-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-fr-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── New-asset modal ─────────────────────────────── -->
+<div class="modal-overlay hidden" id="js-modal-new-asset">
+  <div class="modal">
+    <h2>Create an asset</h2>
+    <p class="subtitle">Scaffolds a new entity in the active project.</p>
+    <div class="field">
+      <label>Name</label>
+      <input type="text" id="js-na-name" spellcheck="false" placeholder="Lina">
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Family</label>
+      <select id="js-na-family" class="modal-select">
+        <option value="asset">asset</option>
+        <option value="set">set</option>
+        <option value="shot">shot</option>
+      </select>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Business type</label>
+      <select id="js-na-type" class="modal-select"></select>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label>Steps</label>
+      <div id="js-na-steps" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px"></div>
+    </div>
+    <div class="modal-err" id="js-na-err"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost"   type="button" id="js-na-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="js-na-ok">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ───────────────────────────────────────── -->
+<div class="toast" id="js-toast"></div>
+
+<script>
+console.log('[ylos] script start');
+'use strict';
+
+// Served by ylos_ui.py: same origin as the page (follows --port automatically).
+// Fallback 8765 only if the page is not served over http (direct file
+// open — not supported by the origin guard, see ylos_ui.py, but we don't break
+// the URL for it).
+const BASE     = location.protocol.startsWith('http')
+  ? location.origin
+  : 'http://127.0.0.1:8765';
+const POLL_MS  = 30_000;
+const TYPE_COLORS = {
+  CHARACTER: '#60a5fa', PROP: '#fb923c', SET: '#34d399',
+  SHOT: '#a78bfa', VEHICLE: '#fbbf24', FX: '#f472b6',
+};
+
+// ── State ───────────────────────────────────────────
+const S = {
+  online:       false,
+  project:      null,
+  assets:       [],
+  filterType:   'ALL',
+  filterFamily: 'ALL',
+  search:       '',
+  sort:         'name-asc',
+  density:      'm',
+  // Signature of what the grid currently shows. render() skips rebuilding the DOM
+  // when it hasn't changed — so the 30s background poll never wipes hover/scroll
+  // state or replays the card entrance animation; only real changes re-render.
+  _gridSig:     null,
+  // Thumbnail cache-bust token. A thumbnail is MUTABLE at a constant URL (republishing
+  // a step rewrites thumb.png at the same path): without this token, a manual refresh
+  // after a publish may re-serve the cached image. Moved ONLY on explicit refresh —
+  // moving it on every poll would re-download all thumbnails in a loop.
+  thumbToken:   Date.now(),
+  _thumbSig:    null,
+  // ── Entity view (cockpit drill-down, Phase 2.2) ──
+  entity:       null,   // entity NAME currently drilled into (null = grid)
+  entityData:   null,   // last /api/asset/<name> payload
+  entityStep:   null,   // selected department/step inside that entity
+  comparePick:  [],     // version gallery: up to 2 picked versions (Phase 2.3)
+};
+
+// Step-status vocabulary — SERVER-OWNED (/api/config ← create_project.STEP_STATUSES).
+// The values below are only the offline fallback, same discipline as FAMILY_CONFIG:
+// with the server reachable they are overwritten. Never add a status here without
+// adding it in create_project.py first (principle 5).
+let STATUS_VOCAB = {
+  all:      ['empty', 'wip', 'published', 'review', 'approved'],
+  explicit: ['review', 'approved'],
+  auto:     'auto',
+};
+const statusLabel = s => (s || 'empty').replace(/^./, c => c.toUpperCase());
+let _pollTimer  = null;
+let _toastTimer = null;
+
+// ── DOM refs ────────────────────────────────────────
+const el = id => document.getElementById(id);
+const DOT          = el('js-dot');
+const STATUS_LBL   = el('js-status-label');
+const PROJECT_NAME = el('js-project-name');
+const PROJECT_TARGET = el('js-project-target');
+const ERR_BANNER   = el('js-error-banner');
+const TOOLBAR      = el('js-toolbar');
+const NO_PROJECT   = el('js-no-project');
+const GRID         = el('js-grid');
+const ENTITY       = el('js-entity');
+const EMPTY        = el('js-empty');
+const EMPTY_REASON = el('js-empty-reason');
+const COUNT        = el('js-count');
+const REFRESH_ICON = el('js-refresh-icon');
+const SEARCH       = el('js-search');
+const SEARCH_WRAP  = el('js-search-wrap');
+const SEARCH_CLEAR = el('js-search-clear');
+const MODAL        = el('js-modal');
+const MODAL_INPUT  = el('js-modal-input');
+const MODAL_ERR    = el('js-modal-err');
+const MODAL_OK     = el('js-modal-ok');
+const TOAST        = el('js-toast');
+const MODAL_NP     = el('js-modal-new-project');
+const MODAL_NA     = el('js-modal-new-asset');
+
+// OFFLINE fallback only. The source of truth is the server (/api/config ←
+// create_project.py, single logic): reloaded at boot and on every project
+// change (steps depend on the active project's pipeline). Do not edit the values
+// here without reason — with the server reachable, they are overwritten.
+let FAMILY_CONFIG = {
+  asset: {
+    types: ['CHARACTER', 'PROP', 'VEHICLE', 'CREATURE', 'FX_ELEMENT'],
+    steps: ['modeling', 'rigging', 'lookdev', 'fx'],
+  },
+  set: {
+    types: ['EXTERIOR', 'INTERIOR', 'HERO_SET', 'MODULAR_KIT'],
+    steps: ['layout', 'lookdev', 'lighting'],
+  },
+  shot: {
+    types: ['LAYOUT', 'ANIMATION', 'FX', 'LIGHTING', 'COMP'],
+    steps: ['animation', 'fx', 'lighting', 'comp'],
+  },
+};
+
+async function loadConfig() {
+  try {
+    const { ok, data } = await api('/api/config');
+    if (!ok) return;
+    if (data.families) FAMILY_CONFIG = data.families;
+    // Status vocabulary (schema 2.2): 'all' = displayable, 'explicit' = settable, the
+    // rest is derived from disk by the orchestrator and never offered in the selector.
+    if (Array.isArray(data.step_statuses)) {
+      STATUS_VOCAB = {
+        all:      data.step_statuses,
+        explicit: data.step_status_explicit || [],
+        auto:     data.step_status_auto || 'auto',
+      };
+    }
+  } catch { /* offline: the local fallback above stays in place */ }
+}
+
+// ── API helper ──────────────────────────────────────
+async function api(path, opts = {}) {
+  const res  = await fetch(BASE + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  const data = await res.json();
+  return { ok: res.ok, data };
+}
+
+// ── Server + project ────────────────────────────────
+async function checkServer() {
+  try {
+    const { ok, data } = await api('/api/project');
+    setOnline(true);
+    S.project = ok ? data : null;
+    PROJECT_NAME.textContent = ok
+      ? (data.display_name || data.name || data._project_path?.split('/').pop() || '—')
+      : 'No project';
+    PROJECT_TARGET.textContent = ok ? (data.pipeline_target || '') : '';
+    PROJECT_TARGET.classList.toggle('hidden', !ok || !data.pipeline_target);
+  } catch {
+    setOnline(false);
+    S.project = null;
+    PROJECT_NAME.textContent = 'No project';
+    PROJECT_TARGET.classList.add('hidden');
+  }
+}
+
+function setOnline(v) {
+  S.online = v;
+  DOT.className          = 'status-dot ' + (v ? 'online' : 'offline');
+  STATUS_LBL.textContent = v ? 'Connected' : 'Offline';
+  ERR_BANNER.classList.toggle('hidden', v);
+}
+
+// ── Assets ──────────────────────────────────────────
+async function loadAssets() {
+  if (!S.online || !S.project) { render(); return; }
+  setRefreshing(true);
+  try {
+    const { ok, data } = await api('/api/assets');
+    if (ok) {
+      const next = data.assets || [];
+      // Targeted cache-bust: the token only moves if the SIGNATURE of the thumbnails changed
+      // (thumb path + latest versions). A publish rewrites thumb.png at a constant
+      // URL — without this bump, the browser would re-serve the old image; bumping it
+      // on every poll would re-download all thumbnails in a loop.
+      const sig = a => `${a.name}|${a.thumb || ''}|${Object.entries(a.last_versions || {})
+        .map(([s, v]) => s + v.version).sort().join(',')}`;
+      const nextSig = next.map(sig).join(';');
+      if (nextSig !== S._thumbSig) { S._thumbSig = nextSig; S.thumbToken = Date.now(); }
+      S.assets = next;
+      rebuildTypeFilter();
+    }
+  } catch {
+    setOnline(false);
+  } finally {
+    setRefreshing(false);
+  }
+  render();
+}
+
+// ── Filters / sort ──────────────────────────────────
+function filtered() {
+  let list = S.assets;
+  if (S.filterType   !== 'ALL') list = list.filter(a => (a.type || '') === S.filterType);
+  if (S.filterFamily !== 'ALL') list = list.filter(a => a.family === S.filterFamily);
+  const q = S.search.trim().toLowerCase();
+  if (q) list = list.filter(a => a.name.toLowerCase().includes(q));
+  return sorted(list);
+}
+
+function sorted(list) {
+  const cp = [...list];
+  switch (S.sort) {
+    case 'name-asc':  cp.sort((a, b) => a.name.localeCompare(b.name)); break;
+    case 'name-desc': cp.sort((a, b) => b.name.localeCompare(a.name)); break;
+    case 'type':      cp.sort((a, b) => (a.type||'').localeCompare(b.type||'') || a.name.localeCompare(b.name)); break;
+    case 'version':   cp.sort((a, b) => maxVer(b) - maxVer(a) || a.name.localeCompare(b.name)); break;
+  }
+  return cp;
+}
+
+function maxVer(asset) {
+  const vals = Object.values(asset.last_versions || {});
+  return vals.length ? Math.max(...vals.map(v => v.version || 0)) : 0;
+}
+
+// ── Render ──────────────────────────────────────────
+// Identity of what the grid shows: names, order, publish state, thumbnails, frame
+// range — plus the thumb cache-bust token (a manual refresh moves it, forcing a
+// re-fetch). If this is unchanged, render() leaves the DOM untouched.
+function gridSignature(list) {
+  return list.map(a =>
+    a.name + '|' + (a.broken ? 'B' : '') + '|' + (a.thumb || '') + '|' + (a.thumb_source || '') + '|' +
+    (a.frame_range ? `${a.frame_range.start}-${a.frame_range.end}-${a.frame_range.fps}` : '') + '|' +
+    // Status per step + 'update available' count (schema 2.2 / Phase 3.2): both are drawn
+    // on the card, so both belong to its identity — otherwise a status change made from
+    // the entity view would not repaint the grid behind it.
+    Object.entries(a.step_status || {}).map(([s, v]) => `${s}=${v}`).sort().join(',') + '|' +
+    (a.outdated || 0) + '|' +
+    Object.entries(a.last_versions || {})
+      .map(([s, v]) => `${s}:${v.version || 0}:${v.ext || ''}:${v.thumb || ''}`).join(',')
+  ).join('||') + '#' + S.thumbToken;
+}
+
+function render() {
+  const hasProject = !!(S.project && S.online);
+  const visible    = hasProject ? filtered() : [];
+  // The entity view takes over the main area: grid, empty state and toolbar filters
+  // step aside rather than stacking behind it (Phase 2.2 — a view, not a modal).
+  const inEntity   = hasProject && !!S.entity;
+
+  NO_PROJECT.classList.toggle('hidden', hasProject || !S.online);
+  TOOLBAR   .classList.toggle('hidden', !hasProject || inEntity);
+  GRID      .classList.toggle('hidden', !hasProject || inEntity || visible.length === 0);
+  EMPTY     .classList.toggle('hidden', !hasProject || inEntity || visible.length > 0);
+  ENTITY    .classList.toggle('hidden', !inEntity);
+
+  if (!hasProject) { S._gridSig = null; closeEntity({ silent: true }); return; }
+  if (inEntity) { S._gridSig = null; return; }
+
+  COUNT.textContent = `${visible.length} / ${S.assets.length} asset${S.assets.length !== 1 ? 's' : ''}`;
+
+  if (visible.length === 0) {
+    const filtering = S.filterType !== 'ALL' || S.filterFamily !== 'ALL' || S.search.trim();
+    EMPTY_REASON.textContent = filtering
+      ? 'No asset matches the filters.'
+      : 'This project has no assets yet.';
+    S._gridSig = null;
+    return;
+  }
+
+  // Rebuild only when the visible set actually changed — otherwise the idle poll
+  // would wipe hover/scroll and replay the entrance stagger every 30s.
+  const sig = gridSignature(visible);
+  if (sig === S._gridSig) return;
+  S._gridSig = sig;
+
+  GRID.innerHTML = visible.map((a, i) => cardHTML(a, i)).join('');
+
+  // A card is the door to the ENTITY VIEW (Phase 2.2 — the old buried scenefiles modal
+  // is gone). Its inner controls keep their own verbs and stop the propagation, so the
+  // card click never fights with "Open the scene" / "Import" / "Set frames".
+  GRID.querySelectorAll('[data-card-entity]').forEach(card => {
+    card.addEventListener('click', () => openEntity(card.dataset.cardEntity));
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); openEntity(card.dataset.cardEntity); }
+    });
+  });
+
+  // Two verbs, never a path built here (see INC-3): the server resolves
+  // {entity, step?} ('Open the scene') or {entity, step, version} ('Import').
+  GRID.querySelectorAll('[data-open-entity]').forEach(btn =>
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openScene(btn.dataset.openEntity, btn.dataset.openStep);
+    })
+  );
+  GRID.querySelectorAll('[data-import-entity]').forEach(row =>
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      importPublish(row.dataset.importEntity, row.dataset.importStep, row.dataset.importVersion);
+    })
+  );
+  GRID.querySelectorAll('[data-framerange-entity]').forEach(btn =>
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openFrameRangeModal(btn.dataset.framerangeEntity);
+    })
+  );
+}
+
+// ── Card HTML ────────────────────────────────────────
+function thumbURL(path) {
+  return `${BASE}${path}${path.includes('?') ? '&' : '?'}t=${S.thumbToken}`;
+}
+
+const THUMB_TAGS = {
+  wip:    ['wip',    'WIP',     'Latest WIP thumbnail — this entity has no publish yet'],
+  custom: ['custom', 'Preview', 'Manually set thumbnail (preview.png)'],
+};
+
+function cardHTML(asset, i = 0) {
+  const { name, family, type, last_versions = {}, step_status = {}, outdated = 0,
+          frame_range, thumb, thumb_source, broken } = asset;
+  const steps = Object.entries(last_versions);  // [step, {version, ext, thumb}]
+  const color = TYPE_COLORS[type] || '#9c9cc8';  // aligned with --text-muted (contrast fix 2026-08-03)
+
+  const tag = THUMB_TAGS[thumb_source];
+  const tagHTML = (thumb && tag)
+    ? `<span class="thumb-tag ${tag[0]}" title="${esc(tag[2])}">${esc(tag[1])}</span>`
+    : '';
+  const typeHTML = type
+    ? `<span class="thumb-type" style="background:${color}26;color:${color};border-color:${color}55">${esc(type)}</span>`
+    : '';
+
+  const thumbSection = (thumb
+    ? `<img src="${esc(thumbURL(thumb))}" alt="${esc(name)}" loading="lazy">
+       <div class="thumb-placeholder" style="display:none">${placeholderInner(type)}</div>`
+    : `<div class="thumb-placeholder">${placeholderInner(type)}</div>`) + tagHTML + typeHTML;
+
+  const stepsSection = steps.length
+    ? steps.map(([step, v]) => {
+        const ver = v.version ? `v${String(v.version).padStart(3, '0')}` : '—';
+        const rowThumb = v.thumb
+          ? `<img class="step-thumb" src="${esc(thumbURL(v.thumb))}" alt="" loading="lazy">`
+          : `<span class="step-thumb step-thumb-empty">${iconBox(11)}</span>`;
+        const st = step_status[step];
+        return `<div class="step-row" data-import-entity="${esc(name)}" data-import-step="${esc(step)}" data-import-version="${v.version ?? ''}" title="Import ${esc(step)} ${ver} (new session)">
+                  ${rowThumb}
+                  <span class="step-name">${esc(step)}</span>
+                  ${st ? `<span class="dept-dot st-${esc(st)}" title="${esc(statusLabel(st))}"></span>` : ''}
+                  ${v.ext ? `<span class="step-ext">${esc(v.ext.toUpperCase())}</span>` : ''}
+                  <span class="step-ver">${esc(ver)}</span>
+                </div>`;
+      }).join('')
+    : `<span style="font-size:11px;color:var(--text-dim)">No publish</span>`;
+
+  // step with the highest version number among last_versions
+  const bestStep = steps.length
+    ? steps.reduce((best, cur) => (cur[1].version || 0) > (best[1].version || 0) ? cur : best)[0]
+    : null;
+
+  const warnHTML = broken
+    ? `<div class="card-warn">${iconWarn(12)}<span>${esc(broken)}</span></div>`
+    : '';
+
+  // frame_range: shots only (schema 2.1), not editable on an orphan entity.
+  const frameChip = (family === 'shots' && !broken)
+    ? `<button class="frame-chip${frame_range ? '' : ' unset'}" type="button" data-framerange-entity="${esc(name)}" title="Edit the frame range">
+         ${frame_range
+            ? `${frame_range.start}–${frame_range.end}<span class="frame-fps">@${esc(String(frame_range.fps))}</span>`
+            : 'Set frames…'}
+       </button>`
+    : '';
+
+  // 'Update available' (Phase 3.2): this entity pins, in its latest publish, a version
+  // older than the dependency's latest complete publish. Count computed server-side
+  // (entity_dependencies.outdated) — never re-derived here.
+  const updBadge = outdated > 0
+    ? `<span class="upd-badge" title="${outdated} dependenc${outdated > 1 ? 'ies' : 'y'} with a newer version available">
+         ${iconUp(10)} ${outdated} update${outdated > 1 ? 's' : ''}
+       </span>`
+    : '';
+
+  return `
+    <div class="card${broken ? ' broken' : ''}" style="--i:${i}" data-card-entity="${esc(name)}"
+         role="button" tabindex="0" title="Open ${esc(name)}">
+      <div class="card-thumb">${thumbSection}</div>
+      <div class="card-body">
+        <div class="card-head">
+          <span class="card-name">${esc(name)}</span>
+          <span class="icon-btn" aria-hidden="true" title="Open the entity view">${iconChevron(13)}</span>
+        </div>
+        ${warnHTML}
+        ${(updBadge || frameChip) ? `<div class="card-badges">${updBadge}${frameChip}</div>` : ''}
+        <div class="steps-list">${stepsSection}</div>
+        <div class="card-footer">
+          ${bestStep
+            ? `<button class="btn btn-primary" type="button" data-open-entity="${esc(name)}" data-open-step="${esc(bestStep)}">
+                 ${iconPlay(13)} Open the scene
+               </button>`
+            : `<button class="btn btn-secondary" type="button" disabled>No publish</button>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+function placeholderInner(type) {
+  return `${iconBox(32)}<span>${esc(type || 'ASSET')}</span>`;
+}
+
+function iconPlay(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>`;
+}
+function iconBox(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+    <line x1="12" y1="22.08" x2="12" y2="12"/>
+  </svg>`;
+}
+function iconWarn(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>`;
+}
+function iconHistory(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+    <path d="M3 12a9 9 0 1 0 3-6.7"/>
+    <polyline points="3 4 3 9 8 9"/>
+    <polyline points="12 7 12 12 16 14"/>
+  </svg>`;
+}
+function iconChevron(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>`;
+}
+function iconBack(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>`;
+}
+function iconUp(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
+}
+function iconNew(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="12" x2="12" y2="18"/><line x1="9" y1="15" x2="15" y2="15"/></svg>`;
+}
+function iconFolder(s) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Type filter rebuild ──────────────────────────────
+// Scoped to the active family: asset/set/shot types no longer mix in the
+// same row of pills. Called at load AND on family change (see the
+// js-pills-family binding below) — never only at boot.
+function rebuildTypeFilter() {
+  const scoped = S.filterFamily === 'ALL'
+    ? S.assets
+    : S.assets.filter(a => a.family === S.filterFamily);
+  const types = [...new Set(scoped.map(a => a.type).filter(Boolean))].sort();
+
+  // The active type may no longer exist in the new scope (e.g. family changed) —
+  // falls back to "All" rather than keeping an invisible/active filter over nothing.
+  if (S.filterType !== 'ALL' && !types.includes(S.filterType)) S.filterType = 'ALL';
+
+  const ctnr  = el('js-pills-type');
+
+  ctnr.innerHTML = `<span class="pill ${S.filterType === 'ALL' ? 'active' : ''}" data-type="ALL">All</span>`;
+  types.forEach(t => {
+    const p = document.createElement('span');
+    p.className    = 'pill' + (S.filterType === t ? ' active' : '');
+    p.dataset.type = t;
+    p.textContent  = t;
+    ctnr.appendChild(p);
+  });
+
+  ctnr.querySelectorAll('.pill').forEach(p =>
+    p.addEventListener('click', () => {
+      S.filterType = p.dataset.type;
+      ctnr.querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x === p));
+      render();
+    })
+  );
+}
+
+// ── Open / Import (DCC) ───────────────────────────────
+// Two verbs, never a path built here: the server resolves {entity, step?} or
+// {entity, step, version} against the orchestrator (create_project) and builds itself
+// the canonical path + the launcher argv (see INC-3 - no more client-side
+// project_root + rel reconstruction, cause of the bug: missing 'assets/<entity>' segment).
+async function openScene(entity, step) {
+  const payload = { entity };
+  if (step) payload.step = step;
+  await _launchDcc(payload, 'Scene opened');
+}
+
+async function importPublish(entity, step, version) {
+  if (!step || version === undefined || version === '') {
+    toast('Missing version', 'err');
+    return;
+  }
+  await _launchDcc({ entity, step, version: Number(version) }, 'Import started (new session)');
+}
+
+// 'New Scene' (Scene Creator, Phase 1.4): a 3rd verb of the same endpoint. The server
+// validates through create_project.scene_starter_spec and launches the versioned launcher
+// with --kind create; the WIP version is allocated by the Blender operator itself.
+async function createScene(entity, step) {
+  if (!step) { toast('Pick a department first', 'err'); return; }
+  await _launchDcc({ entity, step, create: true },
+                   `New ${step} scene — Blender is starting`);
+}
+
+// Open ONE specific WIP version (version gallery / scenefiles list). The client sends a
+// version NUMBER, never a path: the server resolves it via create_project.list_scenefiles.
+async function openScenefile(entity, step, version) {
+  await _launchDcc({ entity, step, scenefile: Number(version) },
+                   `Opening v${String(version).padStart(3, '0')}`);
+}
+
+async function _launchDcc(payload, okMessage) {
+  try {
+    const { ok, data } = await api('/api/open-blender', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    ok ? toast(okMessage, 'ok') : toast(data.error || 'Error', 'err');
+  } catch {
+    toast('Server unavailable', 'err');
+  }
+}
+
+// ═════════════════════════════════════════════════════
+// Entity view — the cockpit drill-down (plan-usable-v1 Phase 2.2/2.3/3.2)
+//
+// One /api/asset/<name> call feeds everything below: per-step status (schema 2.2),
+// scenefiles of every DCC, enriched publishes and the dependency view. NOTHING is
+// re-derived client-side — the server is the only place that knows the rules
+// (principle 5); this module is presentation + verbs.
+// ═════════════════════════════════════════════════════
+
+async function openEntity(name, step) {
+  // An ORPHAN entity (broken card: no manifest.json) has nothing to drill into — the
+  // server rightly 404s on /api/asset. Say WHY here instead of opening an empty view.
+  const card = S.assets.find(a => a.name === name);
+  if (card && card.broken) { toast(card.broken, 'err'); return; }
+  S.entity = name;
+  S.entityStep = step || null;
+  S.comparePick = [];
+  ENTITY.innerHTML = `<div class="state-center"><h3>Loading ${esc(name)}…</h3></div>`;
+  render();
+  await loadEntity();
+}
+
+function closeEntity(opts = {}) {
+  if (!S.entity && opts.silent) return;
+  S.entity = null;
+  S.entityData = null;
+  S.entityStep = null;
+  S.comparePick = [];
+  ENTITY.innerHTML = '';
+  if (!opts.silent) { S._gridSig = null; render(); }
+}
+
+async function loadEntity() {
+  const name = S.entity;
+  if (!name) return;
+  try {
+    const { ok, data } = await api(`/api/asset/${encodeURIComponent(name)}`);
+    if (S.entity !== name) return;            // the user already navigated away
+    if (!ok) {
+      // A card can be stale (entity deleted / renamed on disk between two polls):
+      // say so and go back to the grid rather than leaving a dead view.
+      toast(data.error || 'Entity not found', 'err');
+      closeEntity();
+      return;
+    }
+    S.entityData = data;
+    const steps = entitySteps(data);
+    if (!S.entityStep || !steps.includes(S.entityStep)) S.entityStep = steps[0] || null;
+    renderEntity();
+  } catch {
+    setOnline(false);
+    toast('Server unavailable', 'err');
+  }
+}
+
+// Every step worth showing: those declared in the manifest first (the pipeline's own
+// order — never re-sorted alphabetically), then any step that carries publishes or
+// scenefiles without being declared (legacy entity, hand-made folder).
+function entitySteps(d) {
+  const steps = [...(d.steps || [])];
+  for (const s of [...Object.keys(d.publishes || {}), ...Object.keys(d.scenefiles || {})])
+    if (!steps.includes(s)) steps.push(s);
+  return steps;
+}
+
+const verLabel = v => (v || v === 0) ? `v${String(v).padStart(3, '0')}` : '—';
+const shortDate = s => (s || '').slice(0, 10);
+
+function selectStep(step) {
+  S.entityStep = step;
+  S.comparePick = [];
+  renderEntity();
+}
+
+function renderEntity() {
+  const d = S.entityData;
+  if (!d) return;
+  const steps  = entitySteps(d);
+  const step   = S.entityStep;
+  const status = d.step_status || {};
+  const deps   = d.dependencies || { uses: [], used_in: [], outdated: [] };
+
+  const thumb = d.thumb
+    ? `<img src="${esc(thumbURL(d.thumb))}" alt="${esc(d.name)}">`
+    : placeholderInner(d.type);
+
+  const fam = { assets: 'Asset', sets: 'Set', shots: 'Shot' }[d.family] || d.family;
+  const outdated = (deps.outdated || []).length;
+
+  const frameChip = d.family === 'shots'
+    ? `<button class="frame-chip${d.frame_range ? '' : ' unset'}" type="button"
+               data-framerange-entity="${esc(d.name)}" title="Edit the frame range">
+         ${d.frame_range
+            ? `${d.frame_range.start}–${d.frame_range.end}<span class="frame-fps">@${esc(String(d.frame_range.fps))}</span>`
+            : 'Set frames…'}
+       </button>`
+    : '';
+
+  const deptRows = steps.length ? steps.map(s => {
+    const st = (status[s] || {});
+    const cur = st.status || 'empty';
+    const latest = (d.publishes?.[s] || []).filter(p => p.status === 'complete').pop();
+    const t = latest?.thumb;
+    return `<button class="dept-row${s === step ? ' active' : ''}" type="button" data-step="${esc(s)}">
+              ${t ? `<img class="dept-thumb" src="${esc(thumbURL(t))}" alt="" loading="lazy">`
+                  : `<span class="dept-thumb dept-thumb-empty">${iconBox(11)}</span>`}
+              <span class="dept-name">${esc(s)}</span>
+              <span class="dept-dot st-${esc(cur)}" title="${esc(statusLabel(cur))}"></span>
+              <span class="dept-ver">${latest ? esc(verLabel(latest.version)) : '—'}</span>
+            </button>`;
+  }).join('') : '<div class="panel-empty">No department declared.</div>';
+
+  ENTITY.innerHTML = `
+    <nav class="crumb">
+      <button class="crumb-back" type="button" id="js-ent-back">${iconBack(12)} All entities</button>
+      <span class="crumb-sep">/</span>
+      <span class="crumb-here">${esc(d.name)}</span>
+      <span class="kbd" aria-hidden="true" style="margin-left:auto">Esc</span>
+    </nav>
+
+    <header class="entity-head">
+      <div class="entity-head-thumb">${thumb}</div>
+      <div class="entity-head-meta">
+        <div class="entity-title">${esc(d.name)}</div>
+        <div class="entity-chips">
+          <span class="chip">${esc(fam)}</span>
+          ${d.type ? `<span class="chip">${esc(d.type)}</span>` : ''}
+          <span class="chip">${steps.length} department${steps.length !== 1 ? 's' : ''}</span>
+          ${frameChip}
+          ${outdated ? `<span class="upd-badge">${iconUp(10)} ${outdated} update${outdated > 1 ? 's' : ''} available</span>` : ''}
+        </div>
+        <div class="entity-actions">
+          <button class="btn btn-primary" type="button" id="js-ent-new">${iconNew(13)} New Scene</button>
+          <button class="btn btn-secondary" type="button" id="js-ent-open">${iconPlay(12)} Open the scene</button>
+          <button class="btn btn-secondary" type="button" id="js-ent-reveal">${iconFolder(12)} Reveal in Finder</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="entity-body">
+      <aside class="dept-col">
+        <div class="col-label">Departments</div>
+        ${deptRows}
+      </aside>
+      <div class="panel-col">${step ? stepPanelsHTML(d, step) : ''}</div>
+    </div>`;
+
+  bindEntity();
+}
+
+// ── The selected step: status + gallery + scenefiles + products + dependencies ──
+function stepPanelsHTML(d, step) {
+  const st        = (d.step_status || {})[step] || {};
+  const cur       = st.status || 'empty';
+  const publishes = [...((d.publishes || {})[step] || [])].sort((a, b) => b.version - a.version);
+  const scenes    = [...((d.scenefiles || {})[step] || [])].sort((a, b) => b.version - a.version);
+  const deps      = d.dependencies || { uses: [], used_in: [] };
+
+  // Status selector: 'auto' (the orchestrator derives it from disk) + the explicit
+  // values only — 'empty'/'wip'/'published' are never settable, by contract.
+  const options = [
+    `<option value="${esc(STATUS_VOCAB.auto)}"${st.explicit ? '' : ' selected'}>Auto — ${esc(statusLabel(st.derived || cur))}</option>`,
+    ...STATUS_VOCAB.explicit.map(v =>
+      `<option value="${esc(v)}"${st.explicit && cur === v ? ' selected' : ''}>${esc(statusLabel(v))}</option>`),
+  ].join('');
+
+  return `
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">${esc(step)}
+          <span class="st-pill st-${esc(cur)}${st.explicit ? ' explicit' : ''}">${esc(statusLabel(cur))}</span>
+        </div>
+        <label class="field-inline">Status
+          <select class="status-select" id="js-ent-status">${options}</select>
+        </label>
+      </div>
+      ${galleryHTML(publishes)}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Scenefiles<span class="muted">work files (WIP)</span></div>
+        <button class="btn btn-primary btn-mini" type="button" id="js-ent-new-2">${iconNew(11)} New Scene</button>
+      </div>
+      ${scenes.length ? scenes.map(scenefileRowHTML).join('')
+                      : `<div class="panel-empty">No work file yet — “New Scene” builds the ${esc(step)} starter.</div>`}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">Products<span class="muted">published versions</span></div>
+      </div>
+      ${publishes.length ? publishes.map(productRowHTML).join('')
+                         : '<div class="panel-empty">Nothing published for this department yet.</div>'}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div class="panel-title">Dependencies<span class="muted">entity-wide</span></div></div>
+      <div class="col-label" style="padding-left:0">Uses</div>
+      ${depListHTML(deps.uses, 'dependency')}
+      <div class="col-label" style="padding-left:0;padding-top:12px">Used in</div>
+      ${depListHTML(deps.used_in, 'consumer')}
+    </section>`;
+}
+
+function scenefileRowHTML(v) {
+  const meta = [v.dcc_version || v.blender_version, v.user, shortDate(v.date)].filter(Boolean);
+  return `<div class="vrow">
+            <span class="vrow-ver">${esc(verLabel(v.version))}</span>
+            <span class="tag dcc-${esc(v.dcc || 'unknown')}">${esc(v.dcc || 'unknown')}</span>
+            <div class="vrow-main">
+              <div class="vrow-comment${v.comment ? '' : ' empty'}">${esc(v.comment || 'No comment')}</div>
+              ${meta.length ? `<div class="vrow-meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}</div>` : ''}
+            </div>
+            <button class="btn btn-secondary btn-mini" type="button"
+                    data-open-scenefile="${v.version}" ${v.dcc === 'blender' ? '' : 'disabled title="Blender cannot open this file"'}>Open</button>
+          </div>`;
+}
+
+function productRowHTML(p) {
+  const nDeps = (p.dependencies || []).length;
+  const meta = [
+    p.ext ? p.ext.toUpperCase() : null,
+    shortDate(p.published_utc),
+    nDeps ? `${nDeps} dependenc${nDeps > 1 ? 'ies' : 'y'}` : null,
+    p.legacy ? 'legacy' : null,
+  ].filter(Boolean);
+  const depTitle = nDeps
+    ? p.dependencies.map(x => `${x.entity} / ${x.step} ${verLabel(x.version)}`).join('\n')
+    : '';
+  const bad = p.status !== 'complete' || !p.exists;
+  return `<div class="vrow">
+            <span class="vrow-ver">${esc(verLabel(p.version))}</span>
+            <span class="tag${bad ? ' missing' : ''}">${esc(p.exists ? (p.status || '—') : 'missing')}</span>
+            <div class="vrow-main"${depTitle ? ` title="${esc(depTitle)}"` : ''}>
+              <div class="vrow-comment${p.comment ? '' : ' empty'}">${esc(p.comment || 'No comment')}</div>
+              ${meta.length ? `<div class="vrow-meta">${meta.map(m => `<span>${esc(m)}</span>`).join('<span>·</span>')}</div>` : ''}
+            </div>
+            <button class="btn btn-secondary btn-mini" type="button" data-import-version="${p.version}"
+                    ${p.exists ? '' : 'disabled title="Artifact missing on disk"'}>Import into Blender</button>
+          </div>`;
+}
+
+// ── Version gallery (Phase 2.3) — thumbnails side by side, 2-up compare ──
+function galleryHTML(publishes) {
+  if (!publishes.length)
+    return '<div class="panel-empty">No published version to compare yet.</div>';
+  const picked = S.comparePick;
+  const items = publishes.map(p => {
+    const i = picked.indexOf(p.version);
+    return `<button class="gal-item${i >= 0 ? ' picked' : ''}" type="button" data-gallery-version="${p.version}"
+                    title="Click to compare (2 max)">
+              ${p.thumb ? `<img class="gal-thumb" src="${esc(thumbURL(p.thumb))}" alt="${esc(verLabel(p.version))}" loading="lazy">`
+                        : `<span class="gal-thumb gal-thumb-empty">${iconBox(22)}</span>`}
+              <span class="gal-cap">
+                <span class="gal-ver">${esc(verLabel(p.version))}</span>
+                <span class="gal-date">${esc(shortDate(p.published_utc) || '—')}</span>
+                ${i >= 0 ? `<span class="gal-pick">${i === 0 ? 'A' : 'B'}</span>` : ''}
+              </span>
+            </button>`;
+  }).join('');
+
+  const cmp = picked.length
+    ? `<div class="compare-grid">${picked.map((v, i) =>
+         compareCardHTML(publishes.find(p => p.version === v), i === 0 ? 'A' : 'B')).join('')}
+         ${picked.length === 1 ? '<div class="cmp-card"><div class="cmp-none">Pick a second version</div></div>' : ''}
+       </div>`
+    : '';
+
+  return `<div class="gallery">${items}</div>${cmp}`;
+}
+
+function compareCardHTML(p, slot) {
+  if (!p) return '';
+  return `<div class="cmp-card">
+            ${p.thumb ? `<img src="${esc(thumbURL(p.thumb))}" alt="${esc(verLabel(p.version))}">`
+                      : `<div class="cmp-none">${iconBox(28)}</div>`}
+            <div class="cmp-body">
+              <div class="cmp-ver">${slot} · ${esc(verLabel(p.version))}</div>
+              <div class="vrow-meta"><span>${esc(shortDate(p.published_utc) || '—')}</span>${p.ext ? `<span>·</span><span>${esc(p.ext.toUpperCase())}</span>` : ''}</div>
+              <div class="vrow-comment${p.comment ? '' : ' empty'}" style="white-space:normal">${esc(p.comment || 'No comment')}</div>
+            </div>
+          </div>`;
+}
+
+// ── Dependencies (Phase 3.2) ──
+// 'side' says which end of the edge to name: on "Uses" the interesting entity is the
+// dependency, on "Used in" it is the consumer. The pinned version vs the dependency's
+// latest is what makes an edge actionable.
+function depListHTML(edges, side) {
+  if (!edges || !edges.length)
+    return `<div class="panel-empty">${side === 'dependency' ? 'This entity pulls in no published product.' : 'Nothing references this entity yet.'}</div>`;
+  return edges.map(e => {
+    const other = side === 'dependency' ? e.dependency : e.consumer;
+    const dep = e.dependency;
+    const pinned = verLabel(dep.version);
+    const latest = verLabel(dep.latest_version);
+    const stale = dep.outdated;
+    return `<div class="dep-row">
+              <button class="dep-link" type="button" data-dep-entity="${esc(other.entity)}"
+                      ${other.step ? `data-dep-step="${esc(other.step)}"` : ''}>${esc(other.entity)}</button>
+              <span class="dep-meta">${esc(other.step || 'root')}</span>
+              <span class="dep-pin">${esc(pinned)}${stale ? ` → ${esc(latest)}` : ''}</span>
+              ${stale ? `<span class="upd-badge">${iconUp(9)} update</span>` : ''}
+              <span class="dep-meta" style="margin-left:auto">${esc(e.source)}</span>
+            </div>`;
+  }).join('');
+}
+
+// ── Bindings of the entity view (rebuilt with the DOM, never stacked) ──
+function bindEntity() {
+  const d = S.entityData, step = S.entityStep;
+  el('js-ent-back').addEventListener('click', () => closeEntity());
+  ENTITY.querySelectorAll('[data-step]').forEach(b =>
+    b.addEventListener('click', () => selectStep(b.dataset.step)));
+
+  el('js-ent-open').addEventListener('click', () => openScene(d.name, step));
+  el('js-ent-reveal').addEventListener('click', () => revealEntity(d.name, step));
+  for (const id of ['js-ent-new', 'js-ent-new-2']) {
+    const b = el(id);
+    if (b) b.addEventListener('click', () => createScene(d.name, step));
+  }
+
+  const sel = el('js-ent-status');
+  if (sel) sel.addEventListener('change', () => setStepStatus(d.name, step, sel.value));
+
+  ENTITY.querySelectorAll('[data-open-scenefile]').forEach(b =>
+    b.addEventListener('click', () => openScenefile(d.name, step, b.dataset.openScenefile)));
+  ENTITY.querySelectorAll('[data-import-version]').forEach(b =>
+    b.addEventListener('click', () => importPublish(d.name, step, b.dataset.importVersion)));
+  ENTITY.querySelectorAll('[data-gallery-version]').forEach(b =>
+    b.addEventListener('click', () => togglePick(Number(b.dataset.galleryVersion))));
+  ENTITY.querySelectorAll('[data-dep-entity]').forEach(b =>
+    b.addEventListener('click', () => openEntity(b.dataset.depEntity, b.dataset.depStep)));
+  ENTITY.querySelectorAll('[data-framerange-entity]').forEach(b =>
+    b.addEventListener('click', () => openFrameRangeModal(b.dataset.framerangeEntity)));
+}
+
+// Compare mode: at most two picks; picking a third drops the oldest (FIFO) so the
+// gesture never dead-ends on "deselect first".
+function togglePick(version) {
+  const i = S.comparePick.indexOf(version);
+  if (i >= 0) S.comparePick.splice(i, 1);
+  else {
+    S.comparePick.push(version);
+    if (S.comparePick.length > 2) S.comparePick.shift();
+  }
+  renderEntity();
+}
+
+async function setStepStatus(entity, step, status) {
+  try {
+    const { ok, data } = await api('/api/set-step-status', {
+      method: 'POST', body: JSON.stringify({ entity, step, status }),
+    });
+    if (!ok) { toast(data.error || 'Error', 'err'); await loadEntity(); return; }
+    toast(`${step}: ${statusLabel(data.step_status?.status)}`, 'ok');
+    await loadEntity();
+    await loadAssets();    // the grid card behind carries the same status dot
+  } catch {
+    toast('Server unavailable', 'err');
+  }
+}
+
+async function revealEntity(entity, step) {
+  try {
+    const body = step ? { entity, step } : { entity };
+    const { ok, data } = await api('/api/reveal', {
+      method: 'POST', body: JSON.stringify(body),
+    });
+    ok ? toast('Revealed in Finder', 'ok') : toast(data.error || 'Error', 'err');
+  } catch {
+    toast('Server unavailable', 'err');
+  }
+}
+
+// ── Modal ────────────────────────────────────────────
+function openModal() {
+  MODAL_INPUT.value     = S.project?._project_path || '';
+  MODAL_ERR.textContent = '';
+  MODAL.classList.remove('hidden');
+  setTimeout(() => MODAL_INPUT.focus(), 40);
+}
+function closeModal() { MODAL.classList.add('hidden'); }
+
+async function confirmModal() {
+  const path = MODAL_INPUT.value.trim();
+  if (!path) { MODAL_ERR.textContent = 'Path required.'; return; }
+  MODAL_ERR.textContent = '';
+  MODAL_OK.disabled     = true;
+  MODAL_OK.textContent  = 'Loading…';
+  try {
+    const { ok, data } = await api('/api/set-project', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    if (ok) {
+      closeModal();
+      S.assets = [];
+      closeEntity({ silent: true });   // a project change invalidates the drill-down
+      await checkServer();
+      await loadAssets();
+      await loadRecent();
+      toast('Project changed', 'ok');
+    } else {
+      MODAL_ERR.textContent = data.error || 'Unknown error';
+    }
+  } catch {
+    MODAL_ERR.textContent = 'Server unavailable';
+  } finally {
+    MODAL_OK.disabled    = false;
+    MODAL_OK.textContent = 'Confirm';
+  }
+}
+
+// ── Toast ────────────────────────────────────────────
+function toast(msg, type = 'ok') {
+  clearTimeout(_toastTimer);
+  TOAST.textContent = msg;
+  TOAST.className   = `toast ${type}`;
+  requestAnimationFrame(() => TOAST.classList.add('show'));
+  _toastTimer = setTimeout(() => TOAST.classList.remove('show'), 2600);
+}
+
+// ── Refresh indicator ────────────────────────────────
+function setRefreshing(on) {
+  REFRESH_ICON.innerHTML = on
+    ? `<svg class="spinning" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+         <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+       </svg>`
+    : '';
+}
+
+// ── Polling ──────────────────────────────────────────
+function startPoll() {
+  _pollTimer = setInterval(async () => {
+    await checkServer();
+    await loadAssets();
+    // The entity view is a live view too: a publish or a Save Version done in a DCC
+    // while it is open must show up without a manual refresh.
+    if (S.entity) await loadEntity();
+  }, POLL_MS);
+}
+
+// ── Event bindings ───────────────────────────────────
+el('js-btn-change')      .addEventListener('click', openModal);
+el('js-btn-change-empty').addEventListener('click', openModal);
+el('js-modal-cancel')    .addEventListener('click', closeModal);
+MODAL_OK                 .addEventListener('click', confirmModal);
+MODAL.addEventListener('click', e => { if (e.target === MODAL) closeModal(); });
+MODAL_INPUT.addEventListener('keydown', e => {
+  if (e.key === 'Enter')  confirmModal();
+  if (e.key === 'Escape') closeModal();
+});
+
+el('js-sort').addEventListener('change', e => { S.sort = e.target.value; render(); });
+
+// Placeholder fallback when a thumbnail fails to load (404, corrupted file). Attached ONCE
+// here, and not in render(): render() is called back on every poll, so the old
+// addEventListener stacked one listener per cycle (silent leak that grows as long as
+// the tab stays open). In capture, because 'error' on <img> does not bubble.
+GRID.addEventListener('error', e => {
+  if (e.target.tagName === 'IMG') {
+    e.target.style.display = 'none';
+    const ph = e.target.nextElementSibling;
+    if (ph && ph.classList.contains('thumb-placeholder')) ph.style.display = 'flex';
+  }
+}, true);
+
+// Same guard for the entity view: a thumbnail deleted on disk between two polls must
+// leave a tidy empty slot, not a broken-image glyph. Attached once, in capture.
+ENTITY.addEventListener('error', e => {
+  if (e.target.tagName === 'IMG') e.target.style.visibility = 'hidden';
+}, true);
+
+function setDensity(d) {
+  S.density = d;
+  document.body.dataset.density = d;
+  el('js-density').querySelectorAll('button')
+    .forEach(b => b.classList.toggle('active', b.dataset.d === d));
+}
+el('js-density').querySelectorAll('button').forEach(b =>
+  b.addEventListener('click', () => setDensity(b.dataset.d))
+);
+setDensity(S.density);
+
+el('js-pills-family').querySelectorAll('.pill').forEach(p =>
+  p.addEventListener('click', () => {
+    S.filterFamily = p.dataset.fam;
+    el('js-pills-family').querySelectorAll('.pill').forEach(x => x.classList.toggle('active', x === p));
+    rebuildTypeFilter();  // the Type pills depend on the active family
+    render();
+  })
+);
+
+// ── Search ────────────────────────────────────────────
+function applySearch() {
+  S.search = SEARCH.value;
+  SEARCH_WRAP.classList.toggle('has-text', SEARCH.value.length > 0);
+  render();
+}
+function focusSearch() { SEARCH.focus(); SEARCH.select(); }
+function clearSearch() {
+  SEARCH.value = '';
+  S.search = '';
+  SEARCH_WRAP.classList.remove('has-text');
+  render();
+}
+SEARCH.addEventListener('input', applySearch);
+SEARCH.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (S.search) { clearSearch(); e.stopPropagation(); }
+    else SEARCH.blur();
+  }
+});
+SEARCH_CLEAR.addEventListener('click', e => { e.preventDefault(); clearSearch(); SEARCH.focus(); });
+
+// ── Manual refresh (⌘R) ───────────────────────────────
+// Unlike the idle poll, a manual refresh always re-pulls thumbnails: move the
+// cache-bust token and drop the grid signature so the DOM (and images) rebuild.
+async function manualRefresh() {
+  if (!S.online || !S.project) return;
+  S.thumbToken = Date.now();
+  S._gridSig = null;
+  await checkServer();
+  await loadAssets();
+  if (S.entity) await loadEntity();
+}
+
+// ── Keyboard shortcuts (macos-design: every primary action has a key) ──
+const _anyModalOpen = () => document.querySelector('.modal-overlay:not(.hidden)');
+const _typingInField = () => {
+  const t = document.activeElement;
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+                 || t.isContentEditable);
+};
+document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey;
+
+  // Esc — close any open modal; then leave the entity view; then clear/blur search.
+  // (Ordered inside-out: Esc always closes the innermost layer first.)
+  if (e.key === 'Escape') {
+    const open = document.querySelectorAll('.modal-overlay:not(.hidden)');
+    if (open.length) { open.forEach(m => m.classList.add('hidden')); return; }
+    if (S.entity) { closeEntity(); return; }
+    if (S.search) { clearSearch(); return; }
+    if (document.activeElement === SEARCH) SEARCH.blur();
+    return;
+  }
+
+  // '/' — focus the search (the reflex of every browser-like tool). Only on the grid,
+  // and never while typing in a field.
+  if (e.key === '/' && !mod && !_anyModalOpen() && !_typingInField()) {
+    if (S.project && S.online && !S.entity) { e.preventDefault(); focusSearch(); }
+    return;
+  }
+
+  if (!mod || e.altKey) return;
+  const k = e.key.toLowerCase();
+
+  // ⌘F — focus the asset search (replaces the browser find on this local tool).
+  if (k === 'f' && !e.shiftKey) {
+    if (S.project && S.online && !_anyModalOpen()) { e.preventDefault(); focusSearch(); }
+    return;
+  }
+  // ⌘N — New asset · ⌘⇧N — New project.
+  if (k === 'n') {
+    if (_anyModalOpen()) return;
+    e.preventDefault();
+    if (e.shiftKey) openNewProjectModal();
+    else if (S.project && S.online) openNewAssetModal();
+    else openNewProjectModal();
+    return;
+  }
+  // ⌘R — in-app refresh (re-pull assets + thumbnails) instead of a full page reload.
+  if (k === 'r' && !e.shiftKey) {
+    if (_anyModalOpen()) return;
+    e.preventDefault();
+    manualRefresh();
+    return;
+  }
+});
+
+// ── Browse ────────────────────────────────────────────
+function _browsePanelOutside(e) {
+  if (e.target.closest('#js-np-ok')) return;
+  if (!e.target.closest('#js-np-browse-panel') &&
+      !e.target.closest('#js-np-browse-btn') &&
+      !e.target.closest('#js-np-root')) {
+    closeBrowsePanel();
+  }
+}
+
+function closeBrowsePanel() {
+  el('js-np-browse-panel').classList.add('hidden');
+  document.removeEventListener('mousedown', _browsePanelOutside);
+}
+
+function renderBrowsePanel(data) {
+  const panel = el('js-np-browse-panel');
+  let html = '';
+  if (data.parent !== null) {
+    html += `<div class="browse-row browse-parent" data-path="${esc(data.parent)}">↑ Parent folder</div>`;
+  }
+  if (!data.dirs.length) {
+    html += `<div class="browse-row" style="color:var(--text-dim);cursor:default">Empty folder</div>`;
+  } else {
+    html += data.dirs.map(d =>
+      `<div class="browse-row" data-path="${esc(d.path)}">
+         <span>${esc(d.name)}</span>
+         ${d.is_project ? '<span class="badge-ylos">ylos</span>' : ''}
+       </div>`
+    ).join('');
+  }
+  panel.innerHTML = html;
+  panel.classList.remove('hidden');
+  panel.querySelectorAll('[data-path]').forEach(row =>
+    row.addEventListener('click', () => {
+      const p = row.dataset.path;
+      el('js-np-root').value = p;
+      browseTo(p);
+    })
+  );
+  document.addEventListener('mousedown', _browsePanelOutside);
+}
+
+async function browseTo(path) {
+  const url = path
+    ? `${BASE}/api/browse?path=${encodeURIComponent(path)}`
+    : `${BASE}/api/browse`;
+  try {
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) { el('js-np-err').textContent = data.error || 'Browse error'; return; }
+    renderBrowsePanel(data);
+    if (data.path) el('js-np-root').value = data.path;
+  } catch {
+    el('js-np-err').textContent = 'Server unavailable';
+  }
+}
+
+// ── New-project modal ─────────────────────────────────
+function openNewProjectModal() {
+  el('js-np-name').value      = '';
+  el('js-np-root').value      = '';
+  el('js-np-err').textContent = '';
+  closeBrowsePanel();
+  MODAL_NP.classList.remove('hidden');
+  setTimeout(() => el('js-np-name').focus(), 40);
+}
+function closeNewProjectModal() {
+  MODAL_NP.classList.add('hidden');
+  closeBrowsePanel();
+}
+
+async function confirmNewProject() {
+  console.log('[ylos] confirmNewProject called');
+  console.log('[ylos] name:', el('js-np-name').value.trim());
+  console.log('[ylos] root:', el('js-np-root').value.trim());
+  const name = el('js-np-name').value.trim();
+  const root = el('js-np-root').value.trim();
+  if (!name) { el('js-np-err').textContent = 'Name required.'; return; }
+  if (!root) { el('js-np-err').textContent = 'Root folder required.'; return; }
+  el('js-np-err').textContent = '';
+  const btn = el('js-np-ok');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    const { ok, data } = await api('/api/create-project', {
+      method: 'POST',
+      body: JSON.stringify({ name, prod_type: el('js-np-prod-type').value, root }),
+    });
+    console.log('[ylos] api response:', ok, JSON.stringify(data));
+    if (ok) {
+      closeNewProjectModal();
+      S.assets = [];
+      closeEntity({ silent: true });   // a project change invalidates the drill-down
+      await checkServer();
+      await loadConfig();
+      await loadAssets();
+      await loadRecent();
+      toast('Project created', 'ok');
+    } else {
+      el('js-np-err').textContent = data.error || 'Unknown error';
+    }
+  } catch {
+    el('js-np-err').textContent = 'Server unavailable';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create';
+  }
+}
+
+// ── New-asset modal ───────────────────────────────────
+function rebuildAssetModal(family) {
+  const cfg = FAMILY_CONFIG[family] || FAMILY_CONFIG.asset;
+  el('js-na-type').innerHTML = cfg.types.map(t =>
+    `<option value="${t}">${t}</option>`
+  ).join('');
+  el('js-na-steps').innerHTML = cfg.steps.map(s =>
+    `<label class="step-check"><input type="checkbox" value="${s}" checked> ${s}</label>`
+  ).join('');
+}
+
+function openNewAssetModal() {
+  el('js-na-name').value      = '';
+  el('js-na-err').textContent = '';
+  el('js-na-family').value    = 'asset';
+  rebuildAssetModal('asset');
+  MODAL_NA.classList.remove('hidden');
+  setTimeout(() => el('js-na-name').focus(), 40);
+}
+function closeNewAssetModal() { MODAL_NA.classList.add('hidden'); }
+
+async function confirmNewAsset() {
+  const name  = el('js-na-name').value.trim();
+  const steps = [...el('js-na-steps').querySelectorAll('input:checked')].map(i => i.value);
+  if (!name)         { el('js-na-err').textContent = 'Name required.'; return; }
+  if (!steps.length) { el('js-na-err').textContent = 'At least one step required.'; return; }
+  el('js-na-err').textContent = '';
+  const btn = el('js-na-ok');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try {
+    const { ok, data } = await api('/api/create-asset', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        entity_type: el('js-na-family').value,
+        asset_type:  el('js-na-type').value,
+        steps,
+      }),
+    });
+    if (ok) {
+      closeNewAssetModal();
+      if (data.first_step) await openScene(name, data.first_step);
+      await loadAssets();
+      toast('Asset created', 'ok');
+    } else {
+      el('js-na-err').textContent = data.error || 'Unknown error';
+    }
+  } catch {
+    el('js-na-err').textContent = 'Server unavailable';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create';
+  }
+}
+
+// ── Sync web ────────────────────────────────────────
+const MODAL_WS = el('js-modal-web-sync');
+
+function openWebSyncModal() {
+  el('js-ws-target').value = S.project?.web?.target_dir || '';
+  el('js-ws-err').textContent = '';
+  el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Loading…</div>';
+  loadWebPins();  // async, fills the list as soon as the response arrives
+  MODAL_WS.classList.remove('hidden');
+  setTimeout(() => el('js-ws-target').focus(), 40);
+}
+function closeWebSyncModal() { MODAL_WS.classList.add('hidden'); }
+
+async function loadWebPins() {
+  try {
+    const { ok, data } = await api('/api/web-pins');
+    if (!ok) {
+      el('js-ws-pins').innerHTML =
+        `<div class="ws-pins-empty">${esc(data.error || 'Error')}</div>`;
+      return;
+    }
+    renderWebPins(data);
+  } catch {
+    el('js-ws-pins').innerHTML = '<div class="ws-pins-empty">Server unavailable</div>';
+  }
+}
+
+function renderWebPins(data) {
+  const names = Object.keys(data.available).sort();
+  if (!names.length) {
+    el('js-ws-pins').innerHTML =
+      '<div class="ws-pins-empty">No GLB publish in this project — export to GLB from Blender first.</div>';
+    return;
+  }
+  el('js-ws-pins').innerHTML = names.map(name => {
+    const pin = data.pins[name];
+    const cur = pin ? `${pin.step}|${pin.version}` : '';
+    const opts = ['<option value="">— not pinned —</option>'];
+    let curFound = cur === '';
+    for (const [step, versions] of Object.entries(data.available[name])) {
+      for (const v of versions) {
+        const val = `${step}|${v}`;
+        if (val === cur) curFound = true;
+        opts.push(`<option value="${esc(val)}"${val === cur ? ' selected' : ''}>` +
+                  `${esc(step)} v${String(v).padStart(3, '0')}</option>`);
+      }
+    }
+    // Pin pointing to a vanished publish (manual edit, disk): show it as-is
+    // rather than displaying "not pinned" while the server has a pin.
+    if (!curFound)
+      opts.push(`<option value="${esc(cur)}" selected>${esc(pin.step)} v${String(pin.version).padStart(3, '0')} (not found)</option>`);
+    return `<div class="ws-pin-row"><span class="ws-pin-name" title="${esc(name)}">${esc(name)}</span>` +
+           `<select data-asset="${esc(name)}">${opts.join('')}</select></div>`;
+  }).join('');
+}
+
+el('js-ws-pins').addEventListener('change', async e => {
+  const sel = e.target.closest('select[data-asset]');
+  if (!sel) return;
+  const name = sel.dataset.asset;
+  sel.disabled = true;
+  try {
+    let resp;
+    if (sel.value === '') {
+      resp = await api('/api/unpin-asset', {
+        method: 'POST', body: JSON.stringify({ name }),
+      });
+    } else {
+      const [step, version] = sel.value.split('|');
+      resp = await api('/api/pin-asset', {
+        method: 'POST',
+        body: JSON.stringify({ name, step, version: Number(version) }),
+      });
+    }
+    if (resp.ok) {
+      el('js-ws-err').textContent = '';
+    } else {
+      el('js-ws-err').textContent = resp.data.error || 'Unknown error';
+      await loadWebPins();  // resync the display with the real server state
+    }
+  } catch {
+    el('js-ws-err').textContent = 'Server unavailable';
+  } finally {
+    sel.disabled = false;
+  }
+});
+
+async function confirmWebSync() {
+  const targetDir = el('js-ws-target').value.trim();
+  if (!targetDir) { el('js-ws-err').textContent = 'Folder required.'; return; }
+  el('js-ws-err').textContent = '';
+  const btn = el('js-ws-ok');
+  btn.disabled = true; btn.textContent = 'Syncing…';
+  try {
+    const set = await api('/api/set-web-target', {
+      method: 'POST',
+      body: JSON.stringify({ target_dir: targetDir }),
+    });
+    if (!set.ok) { el('js-ws-err').textContent = set.data.error || 'Unknown error'; return; }
+
+    const { ok, data } = await api('/api/sync-web', { method: 'POST' });
+    if (ok) {
+      closeWebSyncModal();
+      const n = Object.keys(data.synced || {}).length;
+      const warn = (data.warnings || []).length;
+      toast(`Web sync: ${n} asset${n !== 1 ? 's' : ''}${warn ? `, ${warn} warning(s)` : ''}`,
+            (n === 0 && warn > 0) ? 'err' : 'ok');
+    } else {
+      el('js-ws-err').textContent = data.error || 'Unknown error';
+    }
+  } catch {
+    el('js-ws-err').textContent = 'Server unavailable';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sync';
+  }
+}
+
+el('js-ws-cancel').addEventListener('click', closeWebSyncModal);
+el('js-ws-ok').addEventListener('click', confirmWebSync);
+MODAL_WS.addEventListener('click', e => { if (e.target === MODAL_WS) closeWebSyncModal(); });
+el('js-ws-target').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmWebSync(); if (e.key === 'Escape') closeWebSyncModal();
+});
+
+// ── Frame range (shots, schema 2.1) ─────────────────
+const MODAL_FR = el('js-modal-framerange');
+let _frEntity = null;
+
+function openFrameRangeModal(entity) {
+  _frEntity = entity;
+  const asset = S.assets.find(a => a.name === entity);
+  const fr = asset && asset.frame_range;   // {start, end, fps} or null (not set yet)
+  el('js-fr-title').textContent = `Frame range — ${entity}`;
+  el('js-fr-start').value = fr ? fr.start : 1001;
+  el('js-fr-end').value   = fr ? fr.end   : 1100;
+  el('js-fr-fps').value   = fr ? fr.fps   : 24;
+  el('js-fr-err').textContent = '';
+  MODAL_FR.classList.remove('hidden');
+  setTimeout(() => el('js-fr-start').focus(), 40);
+}
+function closeFrameRangeModal() { MODAL_FR.classList.add('hidden'); _frEntity = null; }
+
+async function saveFrameRange() {
+  // Client validation = convenience; the server (create_project.set_frame_range) stays
+  // the authority (same rules: start<end, fps>0, entity=shot).
+  const start = parseInt(el('js-fr-start').value, 10);
+  const end   = parseInt(el('js-fr-end').value, 10);
+  const fpsRaw = el('js-fr-fps').value.trim();
+  const fps    = fpsRaw === '' ? null : parseFloat(fpsRaw);
+  if (!Number.isInteger(start) || !Number.isInteger(end)) {
+    el('js-fr-err').textContent = 'Start and End must be integers.'; return;
+  }
+  if (start >= end) {
+    el('js-fr-err').textContent = 'Start must be strictly less than End.'; return;
+  }
+  if (fps !== null && !(fps > 0)) {
+    el('js-fr-err').textContent = 'FPS must be a positive number.'; return;
+  }
+  el('js-fr-err').textContent = '';
+  const btn = el('js-fr-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const body = { entity: _frEntity, start, end };
+    if (fps !== null) body.fps = fps;
+    const { ok, data } = await api('/api/set-frame-range', {
+      method: 'POST', body: JSON.stringify(body),
+    });
+    if (ok) {
+      closeFrameRangeModal();
+      await loadAssets();
+      if (S.entity) await loadEntity();   // the chip lives in the entity header too
+      toast('Frame range saved', 'ok');
+    } else {
+      el('js-fr-err').textContent = data.error || 'Unknown error';
+    }
+  } catch {
+    el('js-fr-err').textContent = 'Server unavailable';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+el('js-fr-cancel').addEventListener('click', closeFrameRangeModal);
+el('js-fr-save').addEventListener('click', saveFrameRange);
+MODAL_FR.addEventListener('click', e => { if (e.target === MODAL_FR) closeFrameRangeModal(); });
+
+el('js-btn-new-project').addEventListener('click', openNewProjectModal);
+el('js-np-cancel').addEventListener('click', closeNewProjectModal);
+el('js-np-browse-btn').addEventListener('click', () => browseTo(el('js-np-root').value.trim()));
+el('js-np-ok').addEventListener('click', confirmNewProject);
+MODAL_NP.addEventListener('click', e => { if (e.target === MODAL_NP) closeNewProjectModal(); });
+el('js-np-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmNewProject(); if (e.key === 'Escape') closeNewProjectModal();
+});
+
+el('js-btn-new-asset').addEventListener('click', openNewAssetModal);
+el('js-na-family').addEventListener('change', e => rebuildAssetModal(e.target.value));
+el('js-na-cancel').addEventListener('click', closeNewAssetModal);
+el('js-na-ok').addEventListener('click', confirmNewAsset);
+MODAL_NA.addEventListener('click', e => { if (e.target === MODAL_NA) closeNewAssetModal(); });
+el('js-na-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmNewAsset(); if (e.key === 'Escape') closeNewAssetModal();
+});
+
+console.log('[ylos] bindings done');
+// ── Recent projects ───────────────────────────────────
+async function loadRecent() {
+  try {
+    const { ok, data } = await api('/api/recent-projects');
+    const btn  = el('js-recent-btn');
+    const list = el('js-recent-list');
+    if (!ok || !Array.isArray(data) || !data.length) {
+      btn.classList.add('hidden');
+      return;
+    }
+    btn.classList.remove('hidden');
+    list.innerHTML = data.map(p => {
+      const base = p.split('/').pop();
+      return `<li title="${esc(p)}" data-path="${esc(p)}"><span class="recent-basename">${esc(base)}</span></li>`;
+    }).join('');
+    list.querySelectorAll('li').forEach(li =>
+      li.addEventListener('click', () => setProject(li.dataset.path))
+    );
+  } catch { /* server offline */ }
+}
+
+async function setProject(path) {
+  el('js-recent-list').hidden = true;
+  try {
+    const { ok, data } = await api('/api/set-project', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    });
+    if (ok) {
+      S.assets = [];
+      closeEntity({ silent: true });   // a project change invalidates the drill-down
+      await checkServer();
+      await loadConfig();
+      await loadAssets();
+      await loadRecent();
+      toast('Project changed', 'ok');
+    } else {
+      toast(data.error || 'Error', 'err');
+    }
+  } catch {
+    toast('Server unavailable', 'err');
+  }
+}
+
+el('js-recent-btn').addEventListener('click', () => {
+  const list = el('js-recent-list');
+  list.hidden = !list.hidden;
+});
+
+document.addEventListener('mousedown', e => {
+  if (!e.target.closest('#js-recent-wrap'))
+    el('js-recent-list').hidden = true;
+});
+
+// ── Init ─────────────────────────────────────────────
+(async () => {
+  await checkServer();
+  await loadConfig();
+  await loadAssets();
+  await loadRecent();
+  startPoll();
+})();
+</script>
+</body>
+</html>
