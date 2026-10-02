@@ -1,7 +1,7 @@
 {
     "env": [
         {
-            "YLOS_REPO": "$HOME/Desktop/Claude/YlosPipeline"
+            "YLOS_REPO": "$HOME/Developer/YlosPipeline"
         },
         {
             "HOUDINI_PATH": {

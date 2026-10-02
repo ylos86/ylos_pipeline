@@ -54,8 +54,8 @@ create_project.py     ORCHESTRATEUR. Source de vérité UNIQUE, stdlib seule. Co
                       lecture publishes (list_publishes, latest_publish_artifact), caches
                       (entity_cache_dir, resolve_cache), pinning web (pin_web_asset, sync_web_assets),
                       I/O atomique (_atomic_write_*), verrou (acquire_lock), clean_stale_staging,
-                      scenefiles multi-DCC (list_scenefiles), statut par step 2.2
-                      (get/set_step_status), listing d'entités (list_entities, orphelins flaggés),
+                      scenefiles multi-DCC (list_scenefiles), statut par step lié à une version
+                      2.3 (get/set_step_status), listing d'entités (list_entities, orphelins flaggés),
                       specs DCC-agnostiques (scene_starter_spec, playblast_spec, render_spec),
                       dépendances (build_dependency_index, entity_dependencies).
 ylos_ui.py            Serveur HTTP local + API REST (/api/*). Adaptateur mince → create_project.
@@ -73,7 +73,8 @@ Ylos.app/             Coquille double-clic SANS Terminal : retrouve le repo, dé
                       de lancement propre ; chaque double-clic laisse une trace dans ~/.ylos/launcher.log
                       (sans Terminal, un échec silencieux est indiagnosticable). Icône :
                       tools/macos/make_app_icon.py (Pillow, outil dev ; l'.icns est committé ;
-                      --style fullbleed macOS 26 / classic macOS ≤ 15).
+                      --style fullbleed macOS 26 / classic macOS ≤ 15). Déplacer le repo :
+                      tools/macos/relocate_repo.sh (copie vérifiée, liens re-pointés, rien supprimé).
 migrate_to_2.0.py     Migration legacy → convention TYPE_Nom_Variant (dispo si vrai projet legacy).
 README.md             Arborescence d'un projet CRÉÉ sur disque (source + cache) — ne pas la redupliquer.
 
@@ -143,14 +144,22 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 ```
 
 ## Contrats & conventions
-- **Schéma 2.2.0** (partagé `project.json` + `manifest.json`). Additif sur 2.0 : `frame_range`
+- **Schéma 2.3.0** (partagé `project.json` + `manifest.json`). Additif sur 2.0 : `frame_range`
   optionnel du shot (2.1) ; `step_status` explicite par step + `dependencies` sur les entrées
-  de `step_publishes` (2.2). `additionalProperties: true` → aucun manifeste antérieur invalidé.
+  de `step_publishes` (2.2) ; `step_status_meta` = version + date de chaque statut explicite (2.3).
+  `additionalProperties: true` → aucun manifeste antérieur invalidé.
   Tout changement de schéma = **migration documentée**, jamais une édition silencieuse.
   Contrats : `project.schema.json`, `asset.schema.json`, `docs/migration-*.md`.
 - **Statut par step** : seuls `review`/`approved` sont **persistés** (`set_step_status`, point
   unique) ; `empty`/`wip`/`published` sont **dérivés** du disque à la lecture
   (`get_step_status`), jamais écrits. Un step non déclaré est refusé (pas de création implicite).
+  **Un statut explicite porte sa version** (2.3) : `step_status_meta[step] = {version, set_utc}`,
+  par défaut la dernière version `complete` au moment de l'appel ; une version explicite doit être
+  un publish `complete` du step. Table **voisine** et non objet dans `step_status` : `step_status`
+  garde sa forme 2.2, donc un outil 2.2 relit un manifeste 2.3 sans perdre une approbation (retour
+  arrière sûr). Un publish ne réinitialise **jamais** un statut : `get_step_status` expose
+  `version`, `latest_version` et `behind` (publish plus récent que la version approuvée) — c'est
+  aux UI de signaler le retard, jamais à l'orchestrateur de rétrograder le statut.
 - **Dépendances** : `finalize_publish_version(..., dependencies=[{entity, step, version}])`
   enregistre ce que le DCC avait importé ; `build_dependency_index()` fusionne cette source
   (manifeste) avec le scan des layers USD **ASCII** (`@…@`, `$PROJ_ROOT` expansé). Jamais de
@@ -219,8 +228,17 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
   (`Operation not permitted`, **sans invite**) tout fichier sous `~/Desktop`, `~/Documents`,
   `~/Downloads`, iCloud Drive et les volumes externes / réseau — constaté sur macOS 27, repo sous
   `~/Desktop`. Le serveur relit `app.html` à chaque requête : il lui faut l'accès pendant toute sa vie.
-  Repo et projets que le serveur lit : hors de ces zones (ex. `~/Developer`) ; sinon lancer via
-  `launch_ui.command` dans le Terminal (qui détient la permission). Diagnostic : `~/.ylos/launcher.log`.
+  Repo et projets que le serveur lit : hors de ces zones ; sinon lancer via `launch_ui.command` dans
+  le Terminal (qui détient la permission). Diagnostic : `~/.ylos/launcher.log`. **Emplacement du
+  repo : `~/Developer/YlosPipeline`** (décision Sébastien 2026-10-02 : le Bureau était en plus
+  synchronisé par iCloud, pas un endroit pour un `.git`). Un déplacement passe par
+  `tools/macos/relocate_repo.sh` : il re-pointe le lien de l'addon Blender, le package Houdini
+  (`YLOS_REPO` de `plugins/houdini/ylos.json`) et `~/.ylos/repo_path`, et garde l'ancien dossier.
+  **Les DCC héritent de cette limite** (probable, non vérifié) : le cockpit lance Blender en process
+  enfant (`subprocess.Popen`), qui hérite donc de l'identité TCC du lanceur du serveur. Lancé par
+  `Ylos.app`, Blender ne lirait pas non plus le Bureau, Documents, Téléchargements ni un disque
+  externe : tout ce qu'une scène référence vit dans le projet. Les projets sur le NVMe externe
+  exigeront une vraie app (identité TCC propre, invite normale).
 - **Langue** : le **français** est réservé à la **communication avec Sébastien** et à la
   **doc** (`docs/`, ce fichier). **Tout le reste est en anglais** : le code (identifiants,
   noms de fichiers, commentaires, docstrings) ET **toutes les chaînes vues par l'utilisateur**
@@ -276,6 +294,12 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **`main`** = branche de travail unique (ex-`ui-pipeline`). Archivées, inactives :
   `legacy/standalone-addon-v0.2.7` (ancien addon standalone) et `legacy/v0.4-monorepo`
   (rewrite orphelin ; correctifs utiles C1/C3 déjà absorbés, reste hors scope).
+- **Incrément = branche + tag de l'état d'avant** (décision Sébastien 2026-10-02) : avant un
+  changement de contrat, l'état courant est commité **tel quel** et tagué
+  `snapshot/<date>-before-<sujet>`, puis le travail se fait sur `feat/<sujet>` et ne rejoint
+  `main` qu'après validation, par une PR `feat/<sujet>` → `main` : c'est elle qui lance la CI
+  (3.9 / 3.11 / 3.13) ; une branche poussée seule n'est pas testée. Premier cas :
+  `snapshot/2026-10-02-before-schema-2.3` + `feat/schema-2.3-step-status` (PR #1).
 
 ## Chantiers ouverts (hors scope actuel — cf. `pipeline-log.md` pour le détail)
 - **Update Import = remplacement pur (v1)** : aucun remap des overrides (matériaux, contraintes,
@@ -291,6 +315,17 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 - **Shakedown réel (plan 5a)** : `~/Ylos__Test` n'a encore aucune arête de dépendances (aucun
   publish n'en déclare) ; nettoyage Phase 0.1 (orphelin `sets/lecube`, publish vide
   `CHARACTER_Sissa02_Default/modeling/v001`) = décision utilisateur, données de test.
+- **Refonte web « direction C »** (maquettes validées, cf. `docs/ui-workstream.md`) : afficher
+  `behind` dans les trois UI + accueil en matrice entités × steps ; exposer depuis l'orchestrateur
+  les réservations abandonnées (`clean_stale_staging` en dry run) et le rendu de publish vide.
+- **Commentaire de publish perdu côté Blender** : `op_publish.execute` passe `comment=""` en dur,
+  alors que le contrat l'accepte (`allocate_publish_version(comment=…)`).
+- **À trancher** : nommage des shots (`TYPE_Name_Variant` fige un département dans le nom,
+  `ANIMATION_Sh010`) ; `comp` dans `SHOT_DOWNSTREAM_ORDER` contre `composite` dans les steps de
+  `_TEST` (un layer USD de composite serait empilé en dernier, le plus faible).
+- **Lanceur = vraie app** (applet ou exécutable natif, identité TCC propre) avant de servir des
+  projets du NVMe externe : `Ylos.app` (script) y sera refusé, et Blender lancé depuis le cockpit
+  avec lui.
 
 ## Tensions connues
 - **Collision d'env vars** — **levée** côté lancements web/launcher (env par-session, cf.
@@ -307,3 +342,15 @@ python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
   d'exécuter. Réframe une intention mal posée plutôt que de la suivre aveuglément.
 - **Un fix n'est pas fini sans son test** : stdlib (CI) pour la logique orchestrateur ; headless
   Blender / e2e hython (hors CI) pour ce qui exige un DCC.
+- **Git depuis une session Claude reliée au Mac (pont Cowork)** : le dossier connecté refuse la
+  suppression tant qu'elle n'est pas autorisée, or git doit supprimer ses verrous et objets
+  temporaires → il laisse `.git/index.lock`, qui bloque git **aussi sur le Mac**. Autoriser la
+  suppression AVANT toute commande git qui écrit. Le pont ne pousse jamais (ni clés ni réseau SSH).
+- **Pousser vers GitHub** (vérifié 2026-10-02) : l'app GitHub Claude est installée sur
+  `ylos86/ylos_pipeline` → une session Claude pousse les **branches** (`main` compris) depuis son
+  clone, en HTTPS, et ouvre les PR par l'API REST (`gh api`, GraphQL refusé). Les **tags** y sont
+  refusés (HTTP 403), et un push qui mêle branches et tag échoue **en bloc** : pousser les branches
+  seules, puis le tag depuis le Mac (remote SSH). Retour vers le Mac : le pont **lit** GitHub en
+  HTTPS (dépôt public) → `git fetch https://github.com/ylos86/ylos_pipeline.git
+  +refs/heads/<b>:refs/remotes/origin/<b>` puis `merge --ff-only` ; les outils de fichiers du pont
+  refusent toute écriture dans `.git` (pas de bundle dans ce sens).

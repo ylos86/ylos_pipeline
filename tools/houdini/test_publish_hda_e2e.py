@@ -163,8 +163,8 @@ def main():
             )
 
         # 4. HOME switched to the fake home ONLY now: Houdini has already started and
-        #    scanned HOUDINI_OTLSCAN_PATH with the real HOME (the package resolves $YLOS_REPO =
-        #    $HOME/Desktop/Claude/YlosPipeline at that moment, before this script). The only code
+        #    scanned HOUDINI_OTLSCAN_PATH with the real HOME (the package resolves $YLOS_REPO,
+        #    see plugins/houdini/ylos.json, at that moment, before this script). The only code
         #    that must see the switched HOME is project_root's default_expression (read at
         #    parm eval) and the import of the HDA's embedded module (which does not depend
         #    on HOME - it derives its repo root from its own installed definition path).

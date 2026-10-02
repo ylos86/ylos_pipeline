@@ -837,8 +837,11 @@ class TestStepStatusApi(ServerTestCase):
         self.assertEqual(manifest["step_status"][self.step], "review")
         # Surfaced by both cockpit payloads.
         _, _, detail = self._request("/api/asset/PROP_Tente_Default")
-        self.assertEqual(json.loads(detail)["step_status"][self.step],
-                         {"status": "review", "explicit": True, "derived": "empty"})
+        entry = json.loads(detail)["step_status"][self.step]
+        self.assertIsInstance(entry.pop("set_utc"), str)
+        # Schema 2.3 keys: nothing is published here, so the status carries no version.
+        self.assertEqual(entry, {"status": "review", "explicit": True, "derived": "empty",
+                                 "version": None, "latest_version": None, "behind": False})
         _, _, grid = self._request("/api/assets")
         card = next(a for a in json.loads(grid)["assets"]
                     if a["name"] == "PROP_Tente_Default")
@@ -875,6 +878,21 @@ class TestStepStatusApi(ServerTestCase):
     def test_missing_fields_400(self):
         self.assertEqual(self._set(step=self.step, status="review")[0], 400)
         self.assertEqual(self._set(entity="PROP_Tente_Default", status="review")[0], 400)
+
+    def test_version_is_validated_by_the_orchestrator_400(self):
+        # Schema 2.3: 'version' is passed through untouched; the orchestrator refuses a
+        # version that is not a complete publish of the step (nothing is published here),
+        # a non-integer, or a version sent while clearing - and writes nothing.
+        for bad in (3, "1", 1.5):
+            status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                        status="approved", version=bad)
+            self.assertEqual(status, 400, msg=repr(bad))
+        status, _, body = self._set(entity="PROP_Tente_Default", step=self.step,
+                                    status=cp.STEP_STATUS_AUTO, version=1)
+        self.assertEqual(status, 400)
+        manifest = cp.resolve_entity(self.project, "PROP_Tente_Default")["manifest"]
+        self.assertNotIn(cp.STEP_STATUS_KEY, manifest)
+        self.assertNotIn(cp.STEP_STATUS_META_KEY, manifest)
 
 
 class TestRevealTarget(ServerTestCase):
@@ -1046,8 +1064,30 @@ class TestCockpitPayload(ServerTestCase):
     def test_detail_step_status_is_the_full_orchestrator_dict(self):
         detail = self._detail("PROP_Tente_Default")
         entry = detail["step_status"][self.asset_step]
-        self.assertEqual(set(entry), {"status", "explicit", "derived"})
+        self.assertEqual(entry, cp.get_step_status(self.project, "PROP_Tente_Default",
+                                                   self.asset_step))
+        self.assertEqual(set(entry), {"status", "explicit", "derived", "version", "set_utc",
+                                      "latest_version", "behind"})
         self.assertFalse(entry["explicit"])
+        self.assertEqual(entry["latest_version"], self.v2)
+
+    def test_approval_of_an_older_version_is_reported_behind(self):
+        # Schema 2.3 end to end: approve v1 through the endpoint while v2 exists.
+        try:
+            status, _, body = self._request(
+                "/api/set-step-status", method="POST",
+                body={"entity": "PROP_Tente_Default", "step": self.asset_step,
+                      "status": "approved", "version": self.v1})
+            self.assertEqual(status, 200)
+            entry = self._detail("PROP_Tente_Default")["step_status"][self.asset_step]
+            self.assertEqual((entry["status"], entry["version"], entry["latest_version"],
+                              entry["behind"]), ("approved", self.v1, self.v2, True))
+            # The grid card keeps its 2.2 contract: a plain status string per step.
+            self.assertEqual(self._cards()["PROP_Tente_Default"]["step_status"][self.asset_step],
+                             "approved")
+        finally:
+            cp.set_step_status(self.project, "PROP_Tente_Default", self.asset_step,
+                               cp.STEP_STATUS_AUTO)
 
     def test_detail_unknown_entity_404(self):
         status, _, _ = self._request("/api/asset/PROP_Fantome_Default")
