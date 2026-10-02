@@ -22,24 +22,33 @@ def draw_io(layout, context):
     box = layout.box()
     hdr = box.row(align=True)
     hdr.label(text="Import Product", icon="IMPORT")
-    fam = hdr.row()
-    fam.alignment = "RIGHT"
-    fam.label(text=scene.ylos_context_type.title())
+    hdr.prop(scene, "ylos_io_all_entities", text="All assets", toggle=True)
     hdr.operator("ylos.refresh_products", text="", icon="FILE_REFRESH")
 
     if not (scene.ylos_project_path and scene.ylos_project_name):
         box.label(text="No project loaded", icon="INFO")
     else:
-        box.prop(scene, "ylos_io_search", text="", icon="VIEWZOOM")
+        # Default scope = the asset being worked on: its own earlier steps are what you import
+        # (modeling into lookdev, ...). "All assets" is for assembling a set / shot, and only
+        # then does a search box earn its place.
+        active = scene.ylos_current_asset
+        all_assets = scene.ylos_io_all_entities
         products = get_cached_products()
-        search = scene.ylos_io_search.lower()
-        rows = [p for p in products
-                if search in p["entity"].lower() or search in p["step"].lower()]
+        if all_assets:
+            box.prop(scene, "ylos_io_search", text="", icon="VIEWZOOM")
+            search = scene.ylos_io_search.lower()
+            rows = [p for p in products
+                    if search in p["entity"].lower() or search in p["step"].lower()]
+        else:
+            rows = [p for p in products if p["entity"] == active]
 
-        if not products:
+        if not all_assets and not active:
+            box.label(text="No active asset - pick one, or use All assets", icon="INFO")
+        elif not products:
             box.label(text="No published products for this family", icon="INFO")
         elif not rows:
-            box.label(text="No match", icon="INFO")
+            box.label(text=("No match" if all_assets
+                            else f"Nothing published yet for {active}"), icon="INFO")
         else:
             col = box.column(align=True)
             for p in rows[:_MAX_ROWS]:
@@ -70,11 +79,11 @@ def draw_io(layout, context):
 
     # --- Export Selection (raw) ---
     box3 = layout.box()
-    box3.label(text="Export Selection", icon="EXPORT")
+    box3.label(text="Export Selection (raw file)", icon="EXPORT")
     r2 = box3.row(align=True)
     for fmt, lbl in _RAW_FORMATS:
         op = r2.operator("ylos.raw_export", text=lbl)
         op.fmt = fmt
         op.filepath = ""
     box3.label(text="Raw files, outside pipeline versioning "
-                    "(use the State Manager to publish).", icon="INFO")
+                    "(to publish the asset, use Publish in the State Manager).", icon="INFO")

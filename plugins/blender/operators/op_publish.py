@@ -4,7 +4,9 @@
 
 import bpy
 import os
+import shutil
 import sys
+import tempfile
 from bpy.props import BoolProperty, EnumProperty
 from ..core.asset import get_latest_publish_version, list_publish_versions
 from ..core.project import is_step_valid_for_context
@@ -15,6 +17,7 @@ from ..core import thumbnails
 from ..core import entity_thumbs
 from ..core import asset as asset_core
 from ..core import usd_convention
+from ..core import publish_check
 from .op_update_imports import tagged_import_collections, set_cached_downstream_impact
 
 REPO_ROOT = os.path.normpath(os.path.join(os.path.realpath(__file__), "..", "..", "..", ".."))
@@ -216,6 +219,18 @@ def publish_entity_step(context, project_path, entity, step, *,
     target = cp.get_pipeline_target(project_path)
     ext = ".glb" if target == "web" else ".usdc"
 
+    # Pre-publish check, BEFORE a version is allocated: a scene that cannot re-import (no mesh,
+    # empty mesh, missing texture file, object named like the USD root prim) must not burn a
+    # version number nor leave a staging folder behind.
+    pre_issues = publish_check.pre_publish_check(
+        context, export_objects, entity, project_path, target)
+    blocked = publish_check.summarize(pre_issues)
+    if blocked:
+        for i in pre_issues:
+            print(f"[Ylos publish check] {i['severity']} {i['obj_name']}: {i['message']}")
+        return _fail(f"Publish blocked by the pre-publish check - {blocked}", method=method)
+    check_notes = [f"{i['obj_name']}: {i['message']}" for i in pre_issues]
+
     try:
         staging_dir, final_dir = cp.allocate_publish_version(
             project_path, entity, comment=comment, kind=step,
@@ -234,6 +249,20 @@ def publish_entity_step(context, project_path, entity, step, *,
     if not ok:
         return _fail(f"{target} export failed: {err} (staging preserved: {staging_dir})",
                      method=method)
+
+    # Re-import check: bring the artifact back into a throwaway collection and compare it with
+    # what left the scene (rule: create_project.validate_publish_roundtrip). A publish that does
+    # not come back as it went out is refused HERE, staging preserved for audit - the same
+    # refuse-don't-commit stance as the thumbnail and expected_artifacts gates.
+    round_trip = publish_check.verify_artifact(context, art_path, export_objects)
+    for i in round_trip["issues"]:
+        print(f"[Ylos publish check] {i['severity']} {i['obj_name']}: {i['message']}")
+    if not round_trip["ok"]:
+        return _fail(
+            f"Publish blocked: the artifact does not re-import correctly - "
+            f"{publish_check.summarize(round_trip['issues'])} (staging preserved: {staging_dir})",
+            method=method)
+    check_notes += [i["message"] for i in round_trip["issues"] if i["severity"] == "WARNING"]
 
     thumb_objects = objects or _fallback_objects(scene)
     thumb = render_publish_thumbnail(thumb_objects, str(staging_dir))
@@ -274,6 +303,10 @@ def publish_entity_step(context, project_path, entity, step, *,
         f"Published: {os.path.basename(pub_path)}  v{info['version']:03d}  [{method}] - "
         f"{n_renamed} datablocks renamed, {len(shared)} shared untouched (see console)"
     )
+    message += "  |  re-import check OK"
+    if check_notes:
+        note = f"{len(check_notes)} check warning(s): " + "; ".join(check_notes[:3])
+        warning = (warning + " | " if warning else "") + note
     if dependencies:
         message += f"  |  {len(dependencies)} dependency(ies) recorded"
     if outdated:
@@ -298,6 +331,103 @@ def publish_entity_step(context, project_path, entity, step, *,
     return {"ok": True, "version": info["version"], "message": message,
             "path": pub_path, "method": method, "warning": warning,
             "dependencies": dependencies, "outdated": outdated}
+
+
+_check_cache = {"results": []}
+
+
+def get_cached_publish_check():
+    """Last 'Check Publish' results: [{entity, step, ok, issues}]. draw() reads this, an explicit
+    action computes it (a re-import in draw() would be absurd)."""
+    return _check_cache["results"]
+
+
+def check_publish(context, project_path, entity, step, *, allow_full_scene=False):
+    """DRY RUN of publish_entity_step: same pre-check, same export, same re-import verdict - but the
+    export goes to a temp folder that is deleted, so no version is allocated and nothing is
+    written to the project. NEVER raises for a business case. Returns
+    {entity, step, ok, issues}."""
+    cp = _cp()
+    scene = context.scene
+    out = {"entity": entity, "step": step, "ok": False, "issues": []}
+
+    def _err(msg):
+        out["issues"].append(publish_check._issue("ERROR", entity or "(none)", msg))
+        return out
+
+    if not project_path or not entity:
+        return _err("No active project or entity.")
+    resolved = cp.resolve_entity(project_path, entity)
+    if resolved is None:
+        return _err(f"Entity '{entity}' not found under project.")
+    family = resolved["family"]
+    if not is_step_valid_for_context(step, family):
+        return _err(f"Step '{step}' is not valid for a {family}.")
+
+    objects, _method = get_asset_objects_for_publish(scene, entity, step)
+    if not objects and not allow_full_scene:
+        return _err(f"No objects resolved for '{entity}' (step '{step}'): expected a collection "
+                    f"named '{entity}' or objects named GEO_{entity}_*.")
+    export_objects = objects if objects else list(scene.objects)
+
+    target = cp.get_pipeline_target(project_path)
+    out["issues"] = publish_check.pre_publish_check(
+        context, export_objects, entity, project_path, target)
+    if any(i["severity"] == "ERROR" for i in out["issues"]):
+        return out
+
+    tmp = tempfile.mkdtemp(prefix="ylos_publish_check_")
+    try:
+        ext = ".glb" if target == "web" else ".usdc"
+        art = os.path.join(tmp, f"{entity}_{step}_check{ext}")
+        if target == "web":
+            ok, err = _glb_export(art, context, objects)
+        else:
+            ok, err = _usd_export(art, context, objects, entity, family)
+        if not ok:
+            out["issues"].append(publish_check._issue("ERROR", "export", f"{target} export failed: {err}"))
+            return out
+        verdict = publish_check.verify_artifact(context, art, export_objects)
+        out["issues"] += verdict["issues"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    out["ok"] = not any(i["severity"] == "ERROR" for i in out["issues"])
+    return out
+
+
+class YLOS_OT_CheckPublish(bpy.types.Operator):
+    bl_idname = "ylos.check_publish"
+    bl_label = "Check Publish"
+    bl_description = ("Dry run: export to a temporary folder, re-import it and compare - tells you "
+                      "whether the publish will come back correctly, without publishing anything")
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        scene = context.scene
+        project = scene.ylos_project_path
+        if not project:
+            self.report({"ERROR"}, "No active project.")
+            return {"CANCELLED"}
+
+        targets = [(s.entity, s.step, s.allow_full_scene)
+                   for s in scene.ylos_export_states if s.enabled]
+        if not targets and scene.ylos_current_asset:
+            targets = [(scene.ylos_current_asset, scene.ylos_current_step, False)]
+        if not targets:
+            self.report({"WARNING"}, "Nothing to check: no active asset.")
+            return {"CANCELLED"}
+
+        results = [check_publish(context, project, e, st, allow_full_scene=full)
+                   for e, st, full in targets]
+        _check_cache["results"] = results
+        n_err = sum(1 for r in results for i in r["issues"] if i["severity"] == "ERROR")
+        n_warn = sum(1 for r in results for i in r["issues"] if i["severity"] == "WARNING")
+        if n_err:
+            self.report({"ERROR"}, f"Publish check: {n_err} error(s), {n_warn} warning(s) - "
+                                   f"this would NOT publish.")
+        else:
+            self.report({"INFO"}, f"Publish check OK ({n_warn} warning(s)): safe to publish.")
+        return {"FINISHED"}
 
 
 class YLOS_OT_Publish(bpy.types.Operator):

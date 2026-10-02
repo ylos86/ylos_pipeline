@@ -4,6 +4,7 @@ import os
 from bpy.props import StringProperty
 from ..core.asset import list_wip_versions, _get_entity_root
 from ..core.thumbnails import load_thumb_icon, get_thumb_path
+from ..ui.browser import browser_window_open
 
 
 class YLOS_OT_OpenWipVersion(bpy.types.Operator):
@@ -18,7 +19,11 @@ class YLOS_OT_OpenWipVersion(bpy.types.Operator):
         if not self.version_path or not os.path.isfile(self.version_path):
             self.report({"ERROR"}, f"File not found: {self.version_path}")
             return {"CANCELLED"}
-        bpy.ops.wm.open_mainfile(filepath=self.version_path)
+        kwargs = {"filepath": self.version_path}
+        if browser_window_open():
+            # Keep the floating Project Browser alive across the file open.
+            kwargs["load_ui"] = False
+        bpy.ops.wm.open_mainfile(**kwargs)
         return {"FINISHED"}
 
 

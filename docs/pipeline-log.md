@@ -1365,3 +1365,105 @@ explicite et impact aval) et `test_vocab_sync` étendu (`STEP_STATUS_ITEMS`).
 
 **Aucune fonction ajoutée à `create_project.py`** : l'API 2.2 livrée ce matin suffisait telle
 quelle.
+
+## Lanceur double-clic `Ylos.app` (2026-09-30)
+
+**Demande** : lancer la pipeline sans Terminal, par une icône. **Constat avant d'agir** :
+`launch_ui.command` existait déjà (2026-08-15) et faisait « double-clic → serveur → navigateur ».
+Il ne réglait que la moitié du problème : le Terminal **est** le serveur (le fermer l'arrête ;
+les DCC lancés depuis le cockpit héritent de sa session et peuvent partir avec), icône générique,
+aucun moyen d'arrêter ou de redémarrer sans taper une commande. → pas un script de plus : le
+`.command` devient le **moteur unique**, `Ylos.app` est la coquille sans Terminal.
+
+**Architecture**
+- `launch_ui.command` : sans option = foreground (comportement historique) ; `--detach` (`nohup`,
+  `python3 -u`, log `~/.ylos/ui-server.log`, précédent gardé en `.1`, attend la réponse HTTP
+  ≤ 30 s puis ouvre le navigateur ; un crash au démarrage coupe l'attente et remonte la fin du
+  log) ; `--stop` (SIGTERM, SIGKILL après 5 s) ; `--status` → `stopped | running | stale | blocked`.
+- **« Est-ce Ylos ? » se décide sur le process**, pas sur « quelque chose répond sur le port » :
+  listener du port (`lsof`) dont la ligne de commande lance `ylos_ui.py`. L'ancienne version ouvrait
+  n'importe quel serveur HTTP déjà sur 8765, et `--stop` ne doit jamais tuer un inconnu
+  (`blocked` = port tenu par autre chose → message, rien n'est touché).
+- `stale` : `ylos_ui.py` ou `create_project.py` plus récents que le marqueur
+  `~/.ylos/ui-server.started` (touché à chaque démarrage). Un serveur détaché survit à tout et
+  n'exécute jamais le nouveau code — même famille de piège que `addon_disable/enable` côté Blender :
+  le fichier n'est pas ce qui tourne. Le double-clic le signale et propose *Restart* par défaut.
+- `Ylos.app` (bundle script, pas de binaire) : retrouve le repo (dossier qui contient l'app →
+  `~/.ylos/repo_path` → sélecteur de dossier, mémorisé), délègue au moteur, dialogue natif
+  `Resources/ask.applescript` (Open / Restart / Stop server ; erreurs avec fin du log + bouton
+  « Open log »). Dialogues indisponibles → action inoffensive par défaut (ouvrir).
+- **Une seule icône, celle du cockpit** : pas d'icône par DCC. Tout lancement Blender/Houdini passe
+  par le cockpit (`launch_context`, env par-session) ; une icône Blender directe contournerait
+  justement ça.
+- Icône (`tools/macos/make_app_icon.py`, Pillow, outil dev — l'`.icns` est committé) : un « Y » =
+  deux entrées (nœuds creux) qui fusionnent en une sortie (nœud plein), couleurs de `app.html`.
+  Deux styles : `fullbleed` (défaut, macOS 26) et `classic` (macOS ≤ 15). Raison : macOS 26 masque
+  lui-même les `.icns` hérités, mais seulement si les pixels de bord sont quasi opaques (seuil
+  alpha ≥ 253 rapporté par la communauté — Apple Developer Forums, thread 797971, pas de la doc
+  Apple) ; sinon l'icône est réduite dans un cadre gris. Un carré plein montre des coins vifs sur
+  macOS ≤ 15 → `--style classic`.
+
+**Tests** : `tests/test_launch_ui.py` (25) lance un vrai `ylos_ui.py` sur un port libre (`$HOME`
+dans un tmpdir, `open`/`osascript` remplacés par des stubs enregistreurs, `python3` figé sur
+l'interpréteur des tests → la matrice CI 3.9/3.11/3.13 fait tourner le serveur). Moteur :
+detach / réutilisation / stop propre, foreground non bloquant, port tenu par un tiers, `stale`,
+crash au démarrage, rotation du log. Coquille : branches du double-clic, repo retrouvé / demandé /
+introuvable, dialogues indisponibles. Plus des contrôles statiques du bundle (Info.plist, `.icns`,
+bits exécutables, bash 3.2). Saute proprement sans `lsof`/`curl`. Trois mutations vérifiées à la
+main (listener étranger pris pour Ylos ; `--stop` qui ne tue pas ; CANCEL ignoré) : les tests
+cassent. La deuxième n'était d'abord PAS rattrapée — le `kill -9` de repli masquait un SIGTERM
+cassé ; d'où l'assertion sur « Server stopped. » sans « (forced) ». Suite complète : 363 OK.
+
+**Non vérifié (pas de macOS GUI dans l'environnement de dev)** — à valider au premier double-clic :
+1. invite macOS d'accès au dossier Bureau / volumes externes (probable : l'app devient le
+   « responsable » TCC des process qu'elle lance, Blender compris, à la place de Terminal) ;
+2. les dialogues AppleScript réels et leur mise au premier plan ;
+3. le rendu de l'icône selon la version de macOS ;
+4. l'environnement : une app ne lit pas `~/.zshrc` — un `YLOS_BLENDER` posé là n'est pas vu
+   (défaut : `/Applications/Blender.app/Contents/MacOS/Blender`).
+
+### Retour terrain `Ylos.app` (2026-10-01) — « ça ne marche pas »
+
+Premier double-clic sur le Mac (macOS 27.0.1, arm64) : échec. Pas d'accès aux logs ni à l'écran depuis
+l'environnement de dev → d'abord de l'observabilité (`~/.ylos/launcher.log`), qui a livré la cause dès
+l'essai suivant.
+
+- **CAUSE CONFIRMÉE : TCC (confidentialité macOS).** `launcher.log` : `/bin/bash: …/launch_ui.command:
+  Operation not permitted` (rc 126) avec `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. Le repo est sous
+  `~/Desktop` (protégé ; les attributs `com.apple.fileprovider.fpfs` suggèrent en plus iCloud). Une app
+  faite d'un script est refusée **sans invite** : le process est `/bin/bash`, sans identité d'app, donc ni
+  invite ni entrée dans Réglages > Fichiers et dossiers — l'hypothèse écrite plus haut (« invite d'accès
+  au Bureau ») était fausse. Le wrapper lui-même passe (il est dans son propre bundle), `launch_ui.command`
+  (hors bundle) non. Depuis le Terminal ça marche : c'est Terminal qui détient la permission.
+- **Conséquence structurelle.** Le serveur relit `app.html` dans le repo à chaque requête (`ylos_ui.py` :
+  `Path(__file__).parent / "app.html"`) et lit les dossiers projet : il lui faut l'accès pendant toute sa
+  vie, pas seulement au démarrage, et l'attribution TCC d'un serveur détaché une fois l'app fermée n'est
+  pas garantie. **Règle : tant que le serveur est lancé par l'app, le repo — et les projets que le serveur
+  lit — ne doivent pas être sous Desktop / Documents / Downloads / iCloud Drive ni sur un volume externe ou
+  réseau.** Voies : (1) déplacer le repo (ex. `~/Developer/YlosPipeline`) et re-pointer le symlink addon
+  Blender, le lien Houdini et `YLOS_REPO` de `plugins/houdini/ylos.json` ; (2) une vraie app (applet ou
+  exécutable natif : identité TCC propre, invite normale, hôte du serveur), non construite — impossible à
+  tester depuis Linux ; (3) Accès complet au disque pour `/bin/bash` : déconseillé (ouvre le disque à tous
+  les scripts bash).
+- Le wrapper **explique** désormais ce refus (dialogue « macOS will not let Ylos read its own folder… »)
+  au lieu de « could not start ». Les dialogues AppleScript réels fonctionnent (3 s entre `FAIL` et `done`
+  dans le log = un clic).
+- **Durcissement indépendant de la cause : le serveur partageait le groupe de processus de son lanceur.**
+  `Ylos.app` est un job launchd dont le process principal est le wrapper ; à sa sortie launchd peut tuer ce
+  qui reste dans le groupe (supposé, NON vérifié sur Mac). Test rouge avant correctif : il joue launchd
+  (`killpg` du groupe après la sortie du wrapper) et le serveur meurt. Correctif : `--detach` lance le
+  serveur dans sa propre session (`os.setsid()` puis `execvp` — macOS n'a pas `setsid(1)` ; même PID, même
+  ligne de commande, donc `ylos_pids` / `--status` / `--stop` inchangés).
+- **Observabilité** (validée sur le terrain : c'est elle qui a livré la cause). Chaque double-clic écrit
+  dans `~/.ylos/launcher.log` : stderr du wrapper, macOS / architecture, `PATH`, `python3` trouvé (jamais
+  exécuté : sans les outils développeur il ouvre l'invite d'installation), outils développeur, repo, état
+  du serveur, choix de dialogue, sortie du moteur ; au-delà de 100 ko, rotation en `.1`. « Open log » ouvre
+  le log du serveur s'il existe, sinon celui du lanceur.
+- Tests : 32 dans `tests/test_launch_ui.py` (+7), suite complète 370 OK (1 skip). Mutations vérifiées :
+  stderr non redirigée, pas de rotation, serveur de nouveau dans le groupe → les tests cassent ; le test
+  TCC a été écrit rouge d'abord, avec la sortie réelle du log. shellcheck propre.
+
+**Toujours non vérifié** : le bash 3.2 réel (introuvable dans l'environnement : archive/API GitHub, miroirs
+GNU et Debian bloqués par la politique d'egress) ; le comportement TCC d'un serveur détaché une fois l'app
+fermée ; le rendu de l'icône sur macOS 27 (la règle « bord opaque » documentée plus haut vaut pour
+macOS 26).

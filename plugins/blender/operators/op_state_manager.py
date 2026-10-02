@@ -36,7 +36,7 @@ class YLOS_UL_ExportStates(bpy.types.UIList):
         row = layout.row(align=True)
         row.prop(item, "enabled", text="")
         label = item.entity or "(no entity)"
-        row.label(text=f"{label}  ·  {item.step}", icon="EXPORT")
+        row.label(text=item.step.capitalize(), icon="EXPORT")
         if item.last_version:
             tag = row.row()
             tag.alignment = "RIGHT"
@@ -45,8 +45,8 @@ class YLOS_UL_ExportStates(bpy.types.UIList):
 
 class YLOS_OT_StateAddExport(bpy.types.Operator):
     bl_idname = "ylos.state_add_export"
-    bl_label = "Add Export State"
-    bl_description = "Add an export state to the publish recipe (pre-filled with the current asset/step)"
+    bl_label = "Add Publish Step"
+    bl_description = "Add a step of the active asset to the publish recipe"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -80,14 +80,14 @@ class YLOS_OT_StateAddExport(bpy.types.Operator):
         state.step = step
         state.enabled = True
         scene.ylos_export_states_index = len(scene.ylos_export_states) - 1
-        self.report({"INFO"}, f"Added export state: {state.entity or '(no entity)'} / {state.step}")
+        self.report({"INFO"}, f"Added publish step: {state.entity or '(no entity)'} / {state.step}")
         return {"FINISHED"}
 
 
 class YLOS_OT_StateRemoveExport(bpy.types.Operator):
     bl_idname = "ylos.state_remove_export"
-    bl_label = "Remove Export State"
-    bl_description = "Remove the active export state"
+    bl_label = "Remove Publish Step"
+    bl_description = "Remove the selected publish step"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -173,7 +173,7 @@ class YLOS_OT_OpenStateManager(bpy.types.Operator):
     N-panel section (draw_state_manager, never duplicated)."""
     bl_idname = "ylos.open_state_manager"
     bl_label = "State Manager"
-    bl_description = "Open the Ylos State Manager (export states + imports)"
+    bl_description = "Open the Ylos State Manager (publish + imports)"
     bl_options = {"REGISTER"}
 
     def invoke(self, context, event):

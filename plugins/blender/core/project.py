@@ -360,6 +360,21 @@ def register_properties():
         ],
         default="M",
     )
+    # Project Browser window filter (floating window, ui/browser.py). On Scene so the panel
+    # hosted in that window can draw it - the popup variant keeps its own operator property.
+    bpy.types.Scene.ylos_browser_search = bpy.props.StringProperty(
+        name="Search",
+        description="Filter entities by name",
+        default="",
+        options={"TEXTEDIT_UPDATE"},
+    )
+    # Import Product scope: off = only the active asset's own products (the common case, and the
+    # only readable one on a project with 50 assets); on = every entity (assembling a set / shot).
+    bpy.types.Scene.ylos_io_all_entities = bpy.props.BoolProperty(
+        name="All assets",
+        description="List the published products of every asset of the project, not only the active one",
+        default=False,
+    )
     bpy.types.Scene.ylos_io_search = bpy.props.StringProperty(
         name="Search",
         description="Filter published products by entity or step name",
@@ -373,6 +388,7 @@ def unregister_properties():
         "ylos_project_path", "ylos_project_name", "ylos_prod_type",
         "ylos_current_asset", "ylos_current_step", "ylos_context_type",
         "ylos_asset_type", "ylos_wip_comment", "ylos_io_search", "ylos_preview_size",
+        "ylos_browser_search", "ylos_io_all_entities",
     ]
     for prop in props:
         if hasattr(bpy.types.Scene, prop):

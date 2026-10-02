@@ -7,7 +7,7 @@ bl_info = {
     "author": "Ylos Prod",
     "version": (0, 4, 0),
     "blender": (4, 2, 0),
-    "location": "3D Viewport Header > Ylos button / Sidebar > Ylos",
+    "location": "Top bar > Ylos menu / 3D Viewport Header > Ylos button",
     "description": "Production pipeline - State Manager, USD/GLB publish, WIP versioning, scene checker",
     "category": "Pipeline",
 }
@@ -36,12 +36,12 @@ def _purge_create_project_module():
 
 from . import core
 from .core import states
-from .ui import panel, panel_asset_list, menu
+from .ui import menu, browser
 from .operators import (
     op_new_project, op_new_asset, op_save_wip, op_create_scene, op_playblast, op_render,
     op_publish, op_open_context, op_open_wip, op_switch_context,
     op_import_product, op_update_imports, op_asset_list, op_scene_check, op_step_status,
-    op_state_manager, op_io, op_preview,
+    op_state_manager, op_io, op_preview, op_windows, op_open_entity,
 )
 
 _classes = (
@@ -56,6 +56,7 @@ _classes = (
     op_playblast.YLOS_OT_Playblast,
     op_render.YLOS_OT_Render,
     op_publish.YLOS_OT_Publish,
+    op_publish.YLOS_OT_CheckPublish,
     op_open_context.YLOS_OT_OpenContext,
     op_open_context.YLOS_OT_OpenFolder,
     op_open_context.YLOS_OT_ConvertLegacy,
@@ -71,6 +72,11 @@ _classes = (
     op_preview.YLOS_OT_CapturePreview,
     op_asset_list.YLOS_OT_AssetBrowser,
     op_asset_list.YLOS_OT_RefreshAssetList,
+    op_windows.YLOS_OT_OpenScenefile,
+    op_windows.YLOS_OT_OpenSceneCheck,
+    op_windows.YLOS_OT_BrowserWindow,
+    op_open_entity.YLOS_OT_OpenEntity,
+    browser.YLOS_PT_BrowserWindow,
     op_scene_check.YLOS_OT_RunSceneCheck,
     op_scene_check.YLOS_OT_AutoFix,
     op_scene_check.YLOS_OT_FixAll,
@@ -90,11 +96,6 @@ _classes = (
     menu.YLOS_OT_ReloadPipeline,
     menu.YLOS_OT_About,
     menu.YLOS_MT_TopbarMenu,
-    panel.YLOS_PT_Context,
-    panel_asset_list.YLOS_PT_AssetListPanel,
-    panel.YLOS_PT_Scenefile,
-    panel.YLOS_PT_StateManager,
-    panel.YLOS_PT_SceneCheck,
 )
 
 
@@ -105,12 +106,14 @@ def _draw_header_button(self, context):
     layout.separator()
 
     row = layout.row(align=True)
-    # Repurpose: the header button now opens the State Manager (window), replaces
-    # the old tabbed popup (op_popup.py) that was removed - same draw as the N-panel section.
-    row.operator("ylos.open_state_manager", text="Ylos", icon="PRESET")
-
+    # Context pill = Project Browser launcher (Prism model: no sidebar, windows instead).
     if scene.ylos_project_name and scene.ylos_current_asset:
-        row.label(text=f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}")
+        label = f"{scene.ylos_current_asset}  -  {scene.ylos_current_step}"
+    else:
+        label = "Ylos"
+    row.operator("ylos.browser_window", text=label, icon="VIEWZOOM")
+    row.operator("ylos.open_scenefile", text="", icon="FILE_BLEND")
+    row.operator("ylos.open_state_manager", text="", icon="PRESET")
 
 
 # ---------------------------------------------------------------------------------------
@@ -238,6 +241,11 @@ def register():
     # the PropertyGroup to be already registered.
     states.register_properties()
 
+    try:
+        browser.hide_native_panels()
+    except Exception as exc:    # noqa: BLE001 - cosmetic only
+        print(f"[Ylos] hide_native_panels skipped: {exc}")
+
     bpy.types.VIEW3D_HT_header.append(_draw_header_button)
     bpy.types.TOPBAR_MT_editor_menus.append(menu.draw_topbar_menu)
     _ui_hooks_installed = True
@@ -258,6 +266,11 @@ def unregister():
         # BEFORE unregistering the classes: remove the CollectionProperty before the
         # PropertyGroup it references.
         states.unregister_properties()
+
+    try:
+        browser.restore_native_panels()
+    except Exception as exc:    # noqa: BLE001
+        print(f"[Ylos] restore_native_panels skipped: {exc}")
 
     for cls in reversed(_registered_classes):
         _safe_unregister_class(cls)

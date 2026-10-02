@@ -81,6 +81,19 @@ class YLOS_OT_ReloadPipeline(bpy.types.Operator):
             )
             return {"CANCELLED"}
 
+        # Same class of crash, second source: the floating Project Browser hosts one of our
+        # panels (YLOS_PT_browser_window) in a live Properties editor. addon_disable unregisters
+        # that panel under a still-drawn region. A reload took the whole Blender session down
+        # with that window open (observed live, 2026-10-01) - refuse instead.
+        from .browser import browser_window_open
+        if browser_window_open():
+            self.report(
+                {"ERROR"},
+                "Reload refused: close the Project Browser window first (its panel would be "
+                "unregistered while displayed), then reload.",
+            )
+            return {"CANCELLED"}
+
         module_name = __package__.split(".")[0]
         try:
             bpy.ops.preferences.addon_disable(module=module_name)
@@ -131,16 +144,19 @@ class YLOS_MT_TopbarMenu(bpy.types.Menu):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("ylos.save_wip", text="Save Version", icon="FILE_TICK")
-        layout.operator("wm.save_as_mainfile", text="Save WIP As…", icon="FILE_TICK")
-        layout.separator()
-        layout.operator("ylos.open_project_browser", text="Open Project Browser", icon="URL")
-        layout.operator("ylos.open_context", text="Open Context…", icon="FILE_FOLDER")
-        layout.separator()
+        layout.operator("ylos.browser_window", text="Project Browser…", icon="VIEWZOOM")
+        layout.operator("ylos.asset_browser", text="Quick Switch…", icon="ZOOM_SELECTED")
+        layout.operator("ylos.open_scenefile", text="Scenefile…", icon="FILE_BLEND")
         layout.operator("ylos.open_state_manager", text="State Manager…", icon="PRESET")
         layout.operator("ylos.open_io", text="Import / Export…", icon="IMPORT")
+        layout.operator("ylos.open_scene_check", text="Scene Check…", icon="CHECKMARK")
+        layout.separator()
+        layout.operator("ylos.save_wip", text="Save Version", icon="FILE_TICK")
+        layout.operator("wm.save_as_mainfile", text="Save WIP As…", icon="FILE_TICK")
         layout.operator("ylos.publish", text="Quick Publish (current step)…", icon="EXPORT")
-        layout.operator("ylos.run_scene_check", text="Check Scene", icon="VIEWZOOM")
+        layout.separator()
+        layout.operator("ylos.open_project_browser", text="Open Web Cockpit", icon="URL")
+        layout.operator("ylos.open_context", text="Open Context…", icon="FILE_FOLDER")
         layout.operator("ylos.capture_preview", text="Capture Preview (viewport)",
                         icon="RESTRICT_RENDER_OFF")
         layout.separator()

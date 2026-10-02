@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-# State Manager - SINGLE DRAW LOGIC, mounted at TWO points without duplication:
-#   - N-panel section : YLOS_PT_StateManager.draw  (ui/panel.py)
-#   - popup window    : YLOS_OT_OpenStateManager.draw (operators/op_state_manager.py)
-# Duplicating this draw was precisely the flaw of the removed tabbed popup (op_popup.py).
+# State Manager - single draw logic, mounted as a popup window by
+# YLOS_OT_OpenStateManager.draw (operators/op_state_manager.py). The N-panel section that used
+# to mount it too is gone (Prism model: menu + windows, no sidebar).
 # No business logic here: only layout wiring existing operators.
 
 import bpy
@@ -10,6 +9,9 @@ import bpy
 from ..operators.op_update_imports import (
     tagged_import_collections, get_cached_update_results, get_cached_downstream_impact,
 )
+from ..operators.op_publish import get_cached_publish_check
+
+_ISSUE_ICONS = {"ERROR": "CANCEL", "WARNING": "ERROR"}
 
 
 def _has_project(scene):
@@ -27,7 +29,20 @@ def draw_state_manager(layout, context):
 
 
 def _draw_export_states(layout, scene):
-    layout.label(text="Export States", icon="EXPORT")
+    """The PUBLISH recipe of the asset being worked on. 'Publish', not 'Export': saving the scene
+    is the work file; publishing the asset is what makes it usable downstream (Houdini, other
+    scenes). The entity of a state is never edited here - it is the active asset."""
+    active = scene.ylos_current_asset
+    head = layout.row(align=True)
+    head.label(text="Publish", icon="EXPORT")
+    if active:
+        who = head.row()
+        who.alignment = "RIGHT"
+        who.label(text=active)
+
+    if not active:
+        layout.label(text="Pick an asset in the Project Browser first", icon="INFO")
+        return
 
     row = layout.row()
     row.template_list(
@@ -46,13 +61,20 @@ def _draw_export_states(layout, scene):
     down.direction = "DOWN"
 
     states = scene.ylos_export_states
+    if not len(states):
+        layout.label(text=f"No step to publish yet - add one for {active}", icon="INFO")
+
     idx = scene.ylos_export_states_index
     if 0 <= idx < len(states):
         state = states[idx]
         box = layout.box()
+        if state.entity and state.entity != active:
+            # A recipe saved with another asset open: say so, never publish it silently.
+            warn = box.row()
+            warn.alert = True
+            warn.label(text=f"Targets {state.entity}, not the active asset", icon="ERROR")
         box.use_property_split = True
         box.use_property_decorate = False
-        box.prop(state, "entity")
         box.prop(state, "step")
         box.prop(state, "allow_full_scene")
         box.prop(state, "comment")
@@ -61,12 +83,40 @@ def _draw_export_states(layout, scene):
             box.label(text=state.last_result, icon="INFO")
 
     layout.separator(factor=0.4)
-    pub = layout.row(align=True)
-    pub.scale_y = 1.4
-    pub.enabled = any(s.enabled for s in states)
-    pub.operator("ylos.publish_states", text="Publish", icon="EXPORT")
+    actions = layout.row(align=True)
+    actions.scale_y = 1.4
+    actions.enabled = any(s.enabled for s in states)
+    # Check first, Publish second: the dry run tells whether the artifact will come back.
+    actions.operator("ylos.check_publish", text="Check", icon="CHECKMARK")
+    actions.operator("ylos.publish_states", text="Publish", icon="EXPORT")
 
+    _draw_publish_check(layout)
     _draw_downstream_impact(layout)
+
+
+def _draw_publish_check(layout):
+    """Result of the last 'Check' (dry run: export to a temp folder + re-import + compare).
+    Read from the operator's cache - draw() never re-imports anything."""
+    results = get_cached_publish_check()
+    if not results:
+        return
+    layout.separator(factor=0.4)
+    box = layout.box().column(align=True)
+    for res in results:
+        errors = [i for i in res["issues"] if i["severity"] == "ERROR"]
+        head = box.row(align=True)
+        head.alert = bool(errors)
+        head.label(text=f"{res['entity']}  /  {res['step']}",
+                   icon="CANCEL" if errors else "CHECKMARK")
+        tag = head.row()
+        tag.alignment = "RIGHT"
+        tag.alert = bool(errors)
+        tag.label(text="would NOT publish" if errors else "safe to publish")
+        for issue in res["issues"]:
+            line = box.row(align=True)
+            line.alert = issue["severity"] == "ERROR"
+            line.label(text=f"{issue['obj_name']}: {issue['message']}",
+                       icon=_ISSUE_ICONS.get(issue["severity"], "DOT"))
 
 
 def _draw_downstream_impact(layout):

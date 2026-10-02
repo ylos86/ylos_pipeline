@@ -97,3 +97,77 @@ ce project Claude.
   pas un fourre-tout.
 - Recherche d'emploi et sujets non liés à la pipeline → un autre project.
 - Mettre à jour ce doc quand un chantier UI change de statut, pas à chaque message.
+
+## Mise à jour 2026-10-01 — Blender : N-panel supprimé, modèle Prism (menu + fenêtres)
+
+Retour d'usage de Sébastien : les autres assets étaient visibles dans l'espace de travail, alors
+que c'est de l'info de browser. Diagnostic code : 3 points d'entrée pour switcher d'asset
+(Switch, liste Assets, Browse), steps et `ylos_context_type` dessinés deux fois, 5 sections empilées.
+Hypothèse « densité » du tableau ci-dessus : **confirmée**.
+
+Décision : popups Blender (`invoke_popup`, pas de fenêtre persistante), N-panel supprimé.
+`ui/panel.py` et `ui/panel_asset_list.py` retirés ; remplacés par `ui/browser.py` (Project Browser
+grille de vignettes), `ui/scenefile.py`, `ui/scene_check.py`, `ui/common.py`. Menu top bar
+réordonné (Project Browser… / Scenefile… / State Manager… / Import-Export… / Scene Check…).
+Header 3D : pill `asset - step` = lanceur du Project Browser.
+
+**Non vérifié** : rendu visuel en live Blender 5.2 (pont MCP muet pendant la session) et
+`tools/blender/test_panel_draw_headless.py` adapté mais non exécuté. `ylos_asset_type` n'est plus
+éditable à la main (posé par New Asset / Create Scene) — à confirmer que ça ne manque pas.
+Ouvert : modèle de browser pur partagé avec Houdini (`ylos_browser_model.py`) non évalué.
+
+### Suite 2026-10-01 (retour d'usage sur le Project Browser)
+
+- **Sélectionner ≠ ouvrir.** Le clic sur le nom ne faisait que `ylos_current_asset = …` : « rien ne se
+  passe ». Ajout de `ylos.open_entity` (`operators/op_open_entity.py`) : icône Open sur chaque carte
+  (WIP le plus récent du step courant ou du 1er step déclaré) et sur chaque step de l'entité active.
+  Le fichier à ouvrir vient de `create_project.resolve_open_target` (même résolveur que le web) ;
+  seul le cas `.blend` WIP est ouvert tel quel, confirmation si le fichier courant est modifié. Sans
+  WIP : contexte basculé + message vers Scenefile > New Scene (pas d'import deviné).
+- **Fenêtre déplaçable.** Un popup Blender ne se déplace pas : `ylos.browser_window` ouvre une vraie
+  fenêtre (`wm.window_new`) dont l'area est un éditeur Properties (onglet Scene) ; le panel
+  `YLOS_PT_BrowserWindow` n'y apparaît que sur l'écran nommé `YLOS_ProjectBrowser`. Repli automatique
+  sur le popup (renommé « Quick Switch ») si la création échoue.
+- **Non vérifié en live (pont Blender muet)** : (1) l'onglet Scene de cette fenêtre risque d'afficher
+  les panels natifs de la scène sous le browser ; (2) `load_ui=False` à l'ouverture d'un fichier garde-t-il
+  la fenêtre ? ; (3) la fenêtre est sauvegardée dans le .blend. À trancher à l'usage.
+- **Open = choix de version** (2026-10-01, soir). `ylos.open_entity` ouvre un popup : gros bouton
+  « Open Latest — vNNN » puis grille des versions antérieures (vignette, date, commentaire, 12 max).
+  Pas de WIP → bascule de contexte + message. Fichier modifié → bandeau d'alerte (l'ouverture jette
+  le non-sauvegardé). Fenêtre browser : colonne d'onglets Properties et header masqués via
+  `show_region_navigation_bar` / `show_region_header` (gardés par `hasattr`, **non vérifiés en live** :
+  fermer et rouvrir la fenêtre pour les appliquer).
+- **Incident live 2026-10-01** : `ylos.reload_pipeline` lancé avec la fenêtre Project Browser ouverte
+  a coupé la connexion du MCP Blender (très probablement un crash : le panel hôte est dé-enregistré
+  pendant qu'il est dessiné — même famille que le crash des export states). Garde ajoutée : reload refusé
+  tant que la fenêtre est ouverte. Vérifié en live avant l'incident : `SpaceProperties` n'a PAS
+  `show_region_navigation_bar` en 5.2 ; la colonne d'onglets se ferme avec
+  `screen.region_toggle(region_type='NAVIGATION_BAR')` (29 px → 1 px, testé). Le code de
+  `ylos.browser_window` utilise désormais cet appel.
+- **Vérifié en live le 2026-10-01 (Blender 5.2, MCP)** : fenêtre Project Browser OK (grille de
+  vignettes, icône Open par carte, colonne d'onglets repliée par `region_toggle`, header masqué) ;
+  ouverture d'un WIP depuis le browser OK et **la fenêtre survit** (`load_ui=False`) ; popup de versions OK
+  (Open Latest v005 + grille). Dates du popup normalisées (`_fmt_date`, ex. « 16 Jul 16:07 ») — correctif
+  non revu en live.
+- **Deuxième crash au reload (même soirée), fenêtre browser FERMÉE** : l'hypothèse « panel hôte affiché »
+  ne suffit donc pas. `ylos.reload_pipeline` déclenché depuis le MCP a fermé Blender deux fois ; cause
+  non identifiée (pas de crash log lu). Tant que ce n'est pas élucidé : **redémarrer Blender pour charger
+  le code**, ne pas utiliser Reload Pipeline. Piste : lire `blender.crash.txt` (dossier temp) après le prochain cas.
+
+## 2026-10-01 — Publish scopé à l'asset actif + check pré-publish (re-import)
+- **Vocabulaire** : « Export » du State Manager devient **Publish**. La section est verrouillée sur l'asset actif
+  (plus de sélecteur d'entité) ; Import Product liste par défaut les seuls products de l'asset actif
+  (toggle « All assets » = `ylos_io_all_entities`, recherche visible seulement dans ce mode). Le bloc brut
+  « Export Selection (raw file) » reste, renvoyant vers Publish.
+- **Panneaux natifs Scene masqués** (wrap des `poll`, restaurés à l'unregister) — non revu visuellement
+  hors poll ; deux lignes dessinées en C subsistent.
+- **Check pré-publish** : `core/publish_check.py` (`pre_publish_check`, `fingerprint`, `reimport_fingerprint`,
+  `verify_artifact`) + règle pure `create_project.validate_publish_roundtrip` (tests stdlib
+  `tests/test_publish_roundtrip.py`). Avant `allocate_publish_version` : refus si mesh absent/vide,
+  texture manquante (ERROR) ; après export : ré-import dans une collection jetable, comparaison
+  fingerprint (meshes, tris, extents triés, UV, matériaux, noms) ; échec = rien commité, staging conservé.
+  `ylos.check_publish` = dry run (export en temp, aucune version allouée), résultats cachés pour l'UI.
+- **Tests** : `tools/blender/test_publish_roundtrip_headless.py` (GLB + USD, exporteur avec perte simulé,
+  30 checks) ; `test_panel_draw_headless.py` couvre check_publish + Import scopé. Suite stdlib : 380 OK.
+- **Limites** : ne vérifie pas shading/normales/rig ; la perte d'exporteur est simulée par monkeypatch.
+  `ylos.check_publish` lève une erreur bpy (RuntimeError) quand le dry run trouve des erreurs bloquantes (contrat voulu).

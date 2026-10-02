@@ -1,0 +1,161 @@
+#!/bin/bash
+# Ylos.app — double-click launcher for the Ylos Pipeline cockpit (macOS).
+#
+# No Terminal window. This script does three things only:
+#   1. find the repo (never a hard-coded path — the repo stays relocatable),
+#   2. delegate to launch_ui.command (--detach / --stop / --status): the launch logic lives
+#      THERE, once — this file never starts Python itself,
+#   3. talk to the user through native dialogs when a choice or an error needs one.
+#
+# Repo lookup, in order:
+#   a. the folder that contains this .app (normal case: Ylos.app sits at the repo root; a
+#      Finder alias or a Dock item resolves to the real bundle, so it works from there too),
+#   b. ~/.ylos/repo_path, remembered from an earlier launch (the .app was copied elsewhere),
+#   c. ask the user to pick the folder once, then remember it.
+#
+# The server then runs detached (log: ~/.ylos/ui-server.log). Double-click again while it
+# runs to re-open the cockpit, restart it (loads new code) or stop it.
+#
+# Every double-click also leaves a trace in ~/.ylos/launcher.log (environment, decisions, output
+# of the engine, stderr of this script): under the Finder there is no terminal, so without it a
+# failure would be silent.
+#
+# Kept bash 3.2-clean: that is the /bin/bash of macOS.
+
+YLOS_HOME="$HOME/.ylos"
+REPO_FILE="$YLOS_HOME/repo_path"
+WLOG="$YLOS_HOME/launcher.log"
+
+# --- 0. trace -----------------------------------------------------------------------------
+# No terminal under the Finder: whatever this script prints would vanish, and a launcher that
+# fails silently cannot be diagnosed. So its stderr (bash's own errors included) and a few facts
+# about the environment go to the log. Python is deliberately NOT run here (on a Mac without the
+# developer tools, `python3` opens an installer prompt): it is only looked up.
+mkdir -p "$YLOS_HOME" 2>/dev/null
+size=0
+if [ -f "$WLOG" ]; then size="$(wc -c < "$WLOG" | tr -d ' ')"; fi
+if [ "${size:-0}" -gt 100000 ]; then mv -f "$WLOG" "$WLOG.1" 2>/dev/null; fi   # keep it small
+if { : >> "$WLOG"; } 2>/dev/null; then exec 2>> "$WLOG"; fi
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" 2>/dev/null >> "$WLOG"; }
+log "---- double-click: $0"
+log "macOS $(sw_vers -productVersion 2>/dev/null || echo '?') $(uname -m) | PATH=$PATH"
+log "python3: $(command -v python3 || echo 'NOT FOUND') | developer tools: $(xcode-select -p 2>&1 | head -n 1)"
+
+# ask MESSAGE "Btn1,Btn2,.." DEFAULT [stop]  ->  prints the clicked button, CANCEL (Esc / closed)
+# or ERROR (dialog machinery unavailable). The dialog itself is Resources/ask.applescript; the
+# text travels as argv, never spliced into a script, so quotes and newlines cannot break it.
+ask() {
+    osascript "$(dirname "$0")/../Resources/ask.applescript" "$1" "$2" "$3" "${4:-note}"
+}
+
+is_repo() { [ -n "$1" ] && [ -f "$1/launch_ui.command" ] && [ -f "$1/ylos_ui.py" ]; }
+
+# --- 1. find the repo ---------------------------------------------------------------------
+REPO="$(cd -P "$(dirname "$0")/../../.." 2>/dev/null && pwd -P)"
+if ! is_repo "$REPO"; then
+    REPO="$(cat "$REPO_FILE" 2>/dev/null)"
+fi
+if ! is_repo "$REPO"; then
+    REPO="$(osascript -e 'POSIX path of (choose folder with prompt "Ylos: select the YlosPipeline folder (the one that contains ylos_ui.py)")')"
+    REPO="${REPO%/}"
+fi
+if ! is_repo "$REPO"; then
+    ask "Ylos cannot find the YlosPipeline folder (the one that contains ylos_ui.py).
+
+Keep Ylos.app inside that folder, or launch it again and select the folder." "OK" "OK" stop > /dev/null
+    exit 1
+fi
+mkdir -p "$YLOS_HOME" && printf '%s\n' "$REPO" > "$REPO_FILE"
+log "repo: $REPO"
+
+# --- 2. actions (all the real work is launch_ui.command's) ---------------------------------
+engine() { /bin/bash "$REPO/launch_ui.command" "$@"; }
+
+fail() {    # fail "what failed" "output of the failed step"
+    local shown choice target
+    log "FAIL: $1 -- $2"
+    case "$2" in
+        *"Operation not permitted"*)
+            # Not a crash: macOS privacy (TCC). Desktop, Documents, Downloads, iCloud Drive and
+            # external / network disks are closed to an app made of a script, and it is refused
+            # there without even being asked (no prompt, unlike a real app). Seen on macOS 27.
+            ask "macOS will not let Ylos read its own folder:
+
+$REPO
+
+Desktop, Documents, Downloads, iCloud Drive and external disks are protected, and an app made of a script is refused there without even being asked.
+
+Move the YlosPipeline folder somewhere unprotected, for example ~/Developer, then double-click Ylos again. Meanwhile launch_ui.command, in Terminal, still works.
+
+Details: ~/.ylos/launcher.log" "OK" "OK" stop > /dev/null
+            return 0
+            ;;
+    esac
+    shown="$(printf '%s\n' "$2" | tail -n 14 | cut -c1-200)"
+    choice="$(ask "$1
+
+$shown
+
+Logs: ~/.ylos/ui-server.log and ~/.ylos/launcher.log" "Open log,OK" "OK" stop)"
+    if [ "$choice" = "Open log" ]; then
+        target="$YLOS_HOME/ui-server.log"
+        [ -f "$target" ] || target="$WLOG"      # the server never got far enough to have a log
+        open -t "$target"
+    fi
+}
+
+start() {
+    local out rc
+    out="$(engine --detach 2>&1)"; rc=$?
+    log "engine --detach -> rc=$rc${out:+: $out}"
+    [ "$rc" -eq 0 ] || fail "Ylos could not start the server." "$out"
+}
+
+stop_server() {
+    local out rc
+    out="$(engine --stop 2>&1)"; rc=$?
+    log "engine --stop -> rc=$rc${out:+: $out}"
+    if [ "$rc" -eq 0 ]; then
+        ask "The Ylos server is stopped." "OK" "OK" > /dev/null
+    else
+        fail "Ylos could not stop the server." "$out"
+    fi
+}
+
+restart_server() {
+    local out rc
+    out="$(engine --stop 2>&1)"; rc=$?
+    log "engine --stop -> rc=$rc${out:+: $out}"
+    if [ "$rc" -eq 0 ]; then
+        start
+    else
+        fail "Ylos could not stop the server." "$out"
+    fi
+}
+
+# --- 3. what the double-click means -------------------------------------------------------
+state="$(engine --status)"
+log "state=${state:-<empty>}"
+case "$state" in
+    running|stale)
+        if [ "$state" = stale ]; then
+            choice="$(ask "The Ylos server is running, but ylos_ui.py or create_project.py changed since it started: it is still running the OLD code.
+
+Restart it to load the new code." "Stop server,Restart,Open" "Restart")"
+        else
+            choice="$(ask "The Ylos server is already running." "Stop server,Restart,Open" "Open")"
+        fi
+        log "dialog -> ${choice:-<none>}"
+        case "$choice" in
+            CANCEL)        ;;
+            "Stop server") stop_server ;;
+            Restart)       restart_server ;;
+            *)             start ;;      # "Open", or ERROR (no dialogs): the harmless default
+        esac
+        ;;
+    *)
+        start
+        ;;
+esac
+log "done"
+exit 0

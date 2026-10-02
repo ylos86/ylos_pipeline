@@ -64,6 +64,16 @@ ylos_ui.py            Serveur HTTP local + API REST (/api/*). Adaptateur mince �
 app.html              Web UI (Project Browser cockpit : grille → vue entité en drill-down, steps +
                       statut, galerie de versions A/B, scenefiles multi-DCC, products, dépendances).
                       Config via GET /api/config (jamais codée en dur).
+launch_ui.command     MOTEUR de lancement de l'UI (bash 3.2) : sans option = foreground (Terminal) ;
+                      --detach (arrière-plan, log ~/.ylos/ui-server.log) | --stop | --status
+                      (stopped / running / stale / blocked). « Est-ce Ylos ? » = process (listener du
+                      port dont la ligne de commande lance ylos_ui.py), jamais « quelque chose répond ».
+Ylos.app/             Coquille double-clic SANS Terminal : retrouve le repo, délègue à launch_ui.command,
+                      dialogue natif (Ouvrir / Redémarrer / Arrêter ; erreurs + fin du log). AUCUNE logique
+                      de lancement propre ; chaque double-clic laisse une trace dans ~/.ylos/launcher.log
+                      (sans Terminal, un échec silencieux est indiagnosticable). Icône :
+                      tools/macos/make_app_icon.py (Pillow, outil dev ; l'.icns est committé ;
+                      --style fullbleed macOS 26 / classic macOS ≤ 15).
 migrate_to_2.0.py     Migration legacy → convention TYPE_Nom_Variant (dispo si vrai projet legacy).
 README.md             Arborescence d'un projet CRÉÉ sur disque (source + cache) — ne pas la redupliquer.
 
@@ -79,8 +89,12 @@ plugins/blender/      Addon (symlink dans scripts/addons/ylos_pipeline, JAMAIS u
                         op_create_scene / op_playblast / op_render (specs orchestrateur),
                         op_step_status (ylos.set_step_status), op_new_asset/project, op_open_context,
                         op_import_product (famille via resolve_entity), op_update_imports, op_io…
-  ui/                   panel.py (N-panel unifié, compteurs d'en-tête), menu.py (top bar),
-                        state_manager.py, io_panel.py, panel_asset_list.py (statut par step).
+  ui/                   Modèle Prism : PAS de N-panel, menu top bar + fenêtres (popups). menu.py (top bar),
+                        browser.py (Project Browser : grille de vignettes, seul endroit qui liste les autres
+                        entités), scenefile.py (statut step, WIP, Save Version), scene_check.py, core/publish_check.py (check pré-publish + vérif re-import, règle dans create_project.validate_publish_roundtrip),
+                        state_manager.py, io_panel.py, common.py (carte de contexte partagée).
+                        Montage des fenêtres : operators/op_asset_list.py (ylos.asset_browser),
+                        op_windows.py (open_scenefile / open_scene_check), op_state_manager, op_io.
 plugins/houdini/      ylos_publish.hdanc (HDA, régénéré JAMAIS édité en GUI ; embarque son
                       PythonModule depuis tools/houdini/build_publish_hda.py), python/ylos_houdini.py
                       (bridge : WIP + sidecar, create_scene = réalisation de scene_starter_spec via
@@ -119,8 +133,13 @@ hython tools/houdini/build_publish_hda.py
 # PAS sous Resources/bin) :
 /Applications/Houdini/Houdini21.0.631/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
   -m py_compile plugins/houdini/python/*.py tools/houdini/*.py
-# Lancer l'UI web (Project Browser) :
-python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Finder)
+# Lancer l'UI web (Project Browser). Usage courant : double-clic sur Ylos.app (racine du repo, sans
+# Terminal ; re-double-clic = Ouvrir / Redémarrer / Arrêter). Même moteur en ligne de commande :
+./launch_ui.command --detach            # serveur en arrière-plan + navigateur (log ~/.ylos/ui-server.log)
+./launch_ui.command --status            # stopped | running | stale (code plus récent que le serveur) | blocked
+./launch_ui.command --stop
+./launch_ui.command                     # foreground : le Terminal EST le serveur (ou double-clic Finder)
+python3 ylos_ui.py --port 8765          # foreground brut, sans navigateur
 ```
 
 ## Contrats & conventions
@@ -188,6 +207,20 @@ python3 ylos_ui.py --port 8765          # ou ./launch_ui.command (double-clic Fi
 - **I/O & concurrence** : écritures atomiques (`_atomic_write_text/json`, tmp + `os.replace`)
   pour tout manifeste/root. `acquire_lock()` (fcntl.flock) = **seul** point de verrou — advisory,
   non réentrant (jamais imbriqué), POSIX-only, non fiable sur NFS/SMB (OK car stockage local).
+- **Cycle de vie du serveur UI** : détaché (`Ylos.app` / `--detach`) il survit à toute fenêtre et
+  **ne recharge jamais son code** (`create_project` est importé au démarrage). Après toute modif de
+  `ylos_ui.py` / `create_project.py`, `launch_ui.command --status` dit `stale` et *Redémarrer* est la
+  seule façon d'exécuter le nouveau code — premier réflexe quand un fix « ne prend pas » côté web.
+  `--detach` met le serveur dans **sa propre session** (`setsid`) : lancé par `Ylos.app`, le lanceur est
+  le process principal d'un job launchd, qui peut tuer ce qui reste dans son groupe de processus à sa
+  sortie (comportement supposé, non vérifié sur un Mac ; `tests/test_launch_ui.py` joue launchd). Le
+  double-clic qui « ne fait rien » se diagnostique dans `~/.ylos/launcher.log` (+ `ui-server.log`).
+- **Repo hors des dossiers protégés de macOS (TCC)** : `Ylos.app` est un script ; macOS lui refuse
+  (`Operation not permitted`, **sans invite**) tout fichier sous `~/Desktop`, `~/Documents`,
+  `~/Downloads`, iCloud Drive et les volumes externes / réseau — constaté sur macOS 27, repo sous
+  `~/Desktop`. Le serveur relit `app.html` à chaque requête : il lui faut l'accès pendant toute sa vie.
+  Repo et projets que le serveur lit : hors de ces zones (ex. `~/Developer`) ; sinon lancer via
+  `launch_ui.command` dans le Terminal (qui détient la permission). Diagnostic : `~/.ylos/launcher.log`.
 - **Langue** : le **français** est réservé à la **communication avec Sébastien** et à la
   **doc** (`docs/`, ce fichier). **Tout le reste est en anglais** : le code (identifiants,
   noms de fichiers, commentaires, docstrings) ET **toutes les chaînes vues par l'utilisateur**

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Headless Blender test: the sections of the unified N-panel (plugins/blender/ui/panel.py -
-Context/Assets/Scenefile/State Manager/Scene Check; State Manager via ui/state_manager.py)
-ACTUALLY
+"""Headless Blender test: the bodies of the Ylos windows (Project Browser ui/browser.py,
+Scenefile ui/scenefile.py, State Manager ui/state_manager.py, Scene Check ui/scene_check.py;
+there is no N-panel any more) ACTUALLY
 run their draw() without an exception, on a project/entity fixture, in the empty states (nothing
 published/saved) AND populated (real WIP + publish). Blender '--background' has no window -> no real bpy.types.UILayout
 available: draw() is called with a FAKE layout (duck-type, accepts any call/attribute)
@@ -54,21 +54,16 @@ class _FakeLayout:
         return lambda *a, **k: _FakeLayout()
 
 
-def _draw(panel_cls, context):
-    fake_self = types.SimpleNamespace(layout=_FakeLayout())
-    panel_cls.draw(fake_self, context)
-    # draw_header() runs on EVERY redraw, collapsed section included - a crash there is as
-    # fatal as one in draw(), and invisible until the panel exists on screen.
-    header = getattr(panel_cls, "draw_header", None)
-    if header is not None:
-        header(types.SimpleNamespace(layout=_FakeLayout()), context)
+def _draw(draw_fn, context):
+    """draw_fn(layout, context): the window-body functions are plain functions."""
+    draw_fn(_FakeLayout(), context)
 
 
 def main():
     import bpy
     import create_project as cp
     import blender as addon
-    from blender.ui import panel, panel_asset_list
+    from blender.ui import browser, scenefile, scene_check, state_manager
     from blender.core import thumbnails
 
     work = tempfile.mkdtemp(prefix="ylos_panel_draw_test_")
@@ -100,7 +95,7 @@ def main():
         # --- State 1: no project loaded (fresh bpy.context.scene, before assignment) ---
         empty_scene_ns = types.SimpleNamespace(scene=bpy.data.scenes.new("YLOS_empty_ctx"))
         try:
-            _draw(panel.YLOS_PT_Context, empty_scene_ns)
+            _draw(browser.draw_project_browser, empty_scene_ns)
         except Exception as e:
             _fail("YLOS_PT_Context.draw() raised (state: no project)", e)
         finally:
@@ -109,7 +104,7 @@ def main():
 
         # --- State 2: project loaded, no active asset ---
         try:
-            _draw(panel.YLOS_PT_Context, context)
+            _draw(browser.draw_project_browser, context)
         except Exception as e:
             _fail("YLOS_PT_Context.draw() raised (state: project without active asset)", e)
         print("ok  YLOS_PT_Context.draw() : state 'project, no active asset' without exception")
@@ -119,11 +114,11 @@ def main():
 
         # --- State 3: active asset, nothing saved/published (branches 'none yet' / 'no publish') ---
         try:
-            _draw(panel.YLOS_PT_Context, context)
-            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
-            _draw(panel.YLOS_PT_Scenefile, context)
-            _draw(panel.YLOS_PT_StateManager, context)  # subsumes Publish + Imports
-            _draw(panel.YLOS_PT_SceneCheck, context)
+            _draw(browser.draw_project_browser, context)
+            _draw(browser.draw_project_browser, context)
+            _draw(scenefile.draw_scenefile, context)
+            _draw(state_manager.draw_state_manager, context)  # subsumes Publish + Imports
+            _draw(scene_check.draw_scene_check, context)
         except Exception as e:
             _fail("draw() raised (state: active asset, nothing saved/published)", e)
         print("ok  sections draw() : state 'active asset, nothing saved/published' without exception")
@@ -148,11 +143,11 @@ def main():
         st.step = "modeling"
         scene.ylos_export_states_index = 0
         try:
-            _draw(panel.YLOS_PT_Context, context)
-            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
-            _draw(panel.YLOS_PT_Scenefile, context)
-            _draw(panel.YLOS_PT_StateManager, context)
-            _draw(panel.YLOS_PT_SceneCheck, context)
+            _draw(browser.draw_project_browser, context)
+            _draw(browser.draw_project_browser, context)
+            _draw(scenefile.draw_scenefile, context)
+            _draw(state_manager.draw_state_manager, context)
+            _draw(scene_check.draw_scene_check, context)
         except Exception as e:
             _fail("draw() raised (state: WIP + publish present)", e)
         print("ok  sections draw() : state 'WIP + publish + export state' without exception "
@@ -177,20 +172,41 @@ def main():
             _fail(f"ylos.check_updates returned {res} (expected FINISHED)")
 
         try:
-            _draw(panel.YLOS_PT_StateManager, context)
-            _draw(panel.YLOS_PT_Scenefile, context)          # 'Updates available' line
-            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
+            _draw(state_manager.draw_state_manager, context)
+            _draw(scenefile.draw_scenefile, context)          # 'Updates available' line
+            _draw(browser.draw_project_browser, context)
         except Exception as e:
             _fail("YLOS_PT_StateManager.draw() raised (tagged import + update available branch)", e)
         print("ok  draw() : tagged import + update available + downstream impact without exception")
+
+        # --- Publish check dry run + cached results + scoped Import panel ---
+        try:
+            # The operator reports ERROR (-> RuntimeError from bpy.ops) when the dry run
+            # finds blocking issues: that is its contract, results stay cached for the UI.
+            try:
+                bpy.ops.ylos.check_publish('EXEC_DEFAULT')
+            except RuntimeError as e:
+                print("   check_publish (expected blocking report):", str(e).strip()[:160])
+            from blender.operators.op_publish import get_cached_publish_check
+            if get_cached_publish_check() is None:
+                _fail("ylos.check_publish left no cached result for the UI")
+            from blender.ui import io_panel
+            _draw(state_manager.draw_state_manager, context)   # draws cached check results
+            for allm in (False, True):
+                context.scene.ylos_io_all_entities = allm
+                _draw(io_panel.draw_io, context)
+            context.scene.ylos_io_all_entities = False
+        except Exception as e:
+            _fail("draw() raised (publish check cache / io_panel scoping)", e)
+        print("ok  ylos.check_publish + cached check draw + Import scoped/all draw without exception")
 
         # --- State 6: an EXPLICIT step status (schema 2.2) is displayed by both panels ---
         res = bpy.ops.ylos.set_step_status('EXEC_DEFAULT', status="review")
         if res != {"FINISHED"}:
             _fail(f"ylos.set_step_status returned {res} (expected FINISHED)")
         try:
-            _draw(panel.YLOS_PT_Scenefile, context)
-            _draw(panel_asset_list.YLOS_PT_AssetListPanel, context)
+            _draw(scenefile.draw_scenefile, context)
+            _draw(browser.draw_project_browser, context)
         except Exception as e:
             _fail("draw() raised (state: explicit step status 'review')", e)
         print("ok  draw() : explicit step status branch without exception")
@@ -201,7 +217,7 @@ def main():
             _fail("addon.unregister() raised", e)
         print("ok  addon.unregister() without exception")
 
-        print("\nPASS: draw() of the Ylos panel sections (Context/Scenefile/State Manager/Scene Check) headless OK")
+        print("\nPASS: draw() of the Ylos windows (Project Browser/Scenefile/State Manager/Scene Check) headless OK")
         sys.exit(0)
     finally:
         shutil.rmtree(work, ignore_errors=True)

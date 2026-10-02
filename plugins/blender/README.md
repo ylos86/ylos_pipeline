@@ -35,7 +35,7 @@ Panneau : vue 3D > touche `N` > onglet **Ylos**. Menu **Ylos** dans la barre du 
 | `__init__.py` | `register()`/`unregister()`, purge de `create_project` dans `sys.modules`, **libération des identités jumelles** (voir plus bas) |
 | `core/` | `vocab.py` (**seul** home des items d'enum du vocabulaire pipeline), `usd_convention.py` (**seule** traduction de la convention USD en kwargs Blender), `asset.py`, `project.py`, `thumbnails.py`, `states.py`, `entity_thumbs.py`, `usd_composer.py`, `scene_checker.py` |
 | `operators/` | `op_publish` (cœur `publish_entity_step`), `op_create_scene` (Scene Builder), `op_step_status`, `op_import_product`, `op_update_imports`, `op_state_manager`, `op_save_wip`, `op_io`… |
-| `ui/` | `panel.py` (N-panel unifié), `panel_asset_list.py`, `state_manager.py`, `io_panel.py`, `menu.py` |
+| `ui/` | `browser.py` (Project Browser), `scenefile.py`, `scene_check.py`, `state_manager.py`, `io_panel.py`, `menu.py`, `common.py` |
 
 ## N-panel « Ylos » (vue 3D > `N`)
 

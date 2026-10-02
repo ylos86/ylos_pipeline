@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 import bpy
 from bpy.props import StringProperty
-from ..core.asset import list_project_entities, invalidate_entity_cache
+from ..core.asset import invalidate_entity_cache
 from ..core import entity_thumbs
+from ..ui.browser import draw_project_browser
 
 
 class YLOS_OT_AssetBrowser(bpy.types.Operator):
-    """Searchable popup listing all assets in the project."""
+    """Project Browser window: thumbnails grid of the project's entities (Prism model)."""
     bl_idname = "ylos.asset_browser"
-    bl_label = "Switch Asset"
-    bl_description = "Browse and switch to any asset in the project"
+    bl_label = "Project Browser"
+    bl_description = "Browse the project's entities, switch asset and step"
     bl_options = {"REGISTER"}
 
     search: StringProperty(
@@ -20,45 +21,15 @@ class YLOS_OT_AssetBrowser(bpy.types.Operator):
     )
 
     def invoke(self, context, event):
-        if not context.scene.ylos_project_path:
-            self.report({"ERROR"}, "No active project.")
-            return {"CANCELLED"}
+        # No 'No active project' error: the window itself offers New / Load Project.
         self.search = ""
-        return context.window_manager.invoke_popup(self, width=260)
+        return context.window_manager.invoke_popup(self, width=560)
 
     def draw(self, context):
-        scene  = context.scene
         layout = self.layout
-
-        row = layout.row(align=True)
-        row.prop(self, "search", text="", icon="VIEWZOOM")
-
-        layout.separator(factor=0.3)
-
-        ctx_type = scene.ylos_context_type.lower()
-        entities = list_project_entities(scene.ylos_project_path, ctx_type)
-
-        search   = self.search.lower()
-        filtered = [e for e in entities if search in e["name"].lower()]
-
-        if not filtered:
-            layout.label(text="No results", icon="INFO")
-            return
-
-        for entity in filtered:
-            is_active = (entity["name"] == scene.ylos_current_asset)
-            row = layout.row(align=True)
-
-            op = row.operator(
-                "ylos.switch_asset_confirm",
-                text=entity["name"],
-                icon="CHECKMARK" if is_active else entity["type_icon"],
-                depress=is_active,
-            )
-            op.new_asset = entity["name"]
-
-        layout.separator(factor=0.3)
-        layout.label(text=f"{len(filtered)} / {len(entities)} assets", icon="NONE")
+        if context.scene.ylos_project_path:
+            layout.prop(self, "search", text="", icon="VIEWZOOM")
+        draw_project_browser(layout, context, self.search)
 
     def execute(self, context):
         return {"FINISHED"}

@@ -1447,6 +1447,94 @@ def render_spec(entity_name, step, project_root=None, ext="exr"):
     }
 
 
+def _roundtrip_key(name):
+    """Name comparison key for the publish round-trip: exporters sanitize and suffix names
+    differently (USD: 'Cube.001' -> 'Cube_001'; glTF keeps '.001'), so compare on a normalized
+    form - non-identifier characters folded to '_', a trailing 3-digit collision suffix dropped."""
+    key = re.sub(r"[^A-Za-z0-9_]", "_", str(name))
+    return re.sub(r"[_.]\d{3}$", "", key).lower()
+
+
+def validate_publish_roundtrip(expected, actual, rel_tol=0.02):
+    """PURE check that a published artifact CAME BACK as it left (principle 5: the rule lives
+    here, DCC-agnostic - Blender and Houdini only produce the two fingerprints).
+
+    A fingerprint is a plain dict, built by the DCC from the objects it exports (`expected`)
+    and from what it re-imports from the artifact into a throwaway container (`actual`):
+      mesh_count     int        mesh objects
+      tri_count      int        total triangles. THE invariant: exporters triangulate (glTF) or
+                                keep polygons (USD) and split vertices on seams, so vertex and
+                                polygon counts legitimately differ - triangles do not.
+      extents        [x, y, z]  bounding-box size, SORTED ascending (orientation- and Y-up/Z-up-
+                                agnostic) in the same unit on both sides.
+      uv_mesh_count  int        meshes carrying at least one UV map
+      materials      [str]      material names in use
+      object_names   [str]      mesh object names
+    Returns {"ok", "errors", "warnings"}, each entry {"code", "message"}. ERRORS mean "this
+    publish will not re-import correctly" (refuse it); WARNINGS are drift worth reading (names
+    or materials renamed by the exporter). Never raises on a malformed fingerprint: a missing
+    key is itself reported as an error."""
+    errors, warnings = [], []
+
+    def err(code, msg):
+        errors.append({"code": code, "message": msg})
+
+    def warn(code, msg):
+        warnings.append({"code": code, "message": msg})
+
+    required = ("mesh_count", "tri_count", "extents", "uv_mesh_count", "materials", "object_names")
+    for label, fp in (("expected", expected), ("actual", actual)):
+        if not isinstance(fp, dict):
+            err("fingerprint", f"{label} fingerprint is not a dict")
+            return {"ok": False, "errors": errors, "warnings": warnings}
+        missing = [k for k in required if k not in fp]
+        if missing:
+            err("fingerprint", f"{label} fingerprint is missing: {', '.join(missing)}")
+    if errors:
+        return {"ok": False, "errors": errors, "warnings": warnings}
+
+    if actual["mesh_count"] == 0 and expected["mesh_count"] > 0:
+        err("empty_import", f"nothing came back: {expected['mesh_count']} mesh object(s) "
+                            f"exported, 0 re-imported")
+    elif actual["mesh_count"] != expected["mesh_count"]:
+        err("mesh_count", f"mesh objects: {expected['mesh_count']} exported, "
+                          f"{actual['mesh_count']} re-imported")
+
+    if actual["mesh_count"] and actual["tri_count"] != expected["tri_count"]:
+        err("tri_count", f"triangles: {expected['tri_count']} exported, "
+                         f"{actual['tri_count']} re-imported (geometry altered)")
+
+    exp_ext, act_ext = list(expected["extents"]), list(actual["extents"])
+    if len(exp_ext) != 3 or len(act_ext) != 3:
+        err("extents", "bounding-box extents must be 3 numbers")
+    elif max(exp_ext) <= 1e-9:
+        err("zero_size", "the exported geometry has zero size (empty or collapsed meshes)")
+    elif actual["mesh_count"]:
+        for axis, (e, a) in enumerate(zip(exp_ext, act_ext)):
+            if abs(a - e) > rel_tol * max(abs(e), 1e-3) + 1e-5:
+                err("extents", f"size differs on sorted axis {axis}: {e:.4f} exported, "
+                               f"{a:.4f} re-imported (scale or unit mismatch?)")
+                break
+
+    if actual["uv_mesh_count"] < expected["uv_mesh_count"]:
+        err("uv_lost", f"UV maps lost: {expected['uv_mesh_count']} mesh(es) had UVs, "
+                       f"{actual['uv_mesh_count']} after re-import")
+
+    exp_mats = {_roundtrip_key(m) for m in expected["materials"]}
+    act_mats = {_roundtrip_key(m) for m in actual["materials"]}
+    if exp_mats - act_mats:
+        warn("materials", "materials not found after re-import: "
+                          + ", ".join(sorted(exp_mats - act_mats)))
+
+    exp_names = {_roundtrip_key(n) for n in expected["object_names"]}
+    act_names = {_roundtrip_key(n) for n in actual["object_names"]}
+    if exp_names - act_names:
+        warn("names", "object names changed by the exporter: "
+                      + ", ".join(sorted(exp_names - act_names)[:6]))
+
+    return {"ok": not errors, "errors": errors, "warnings": warnings}
+
+
 # --------------------------------------------------------------------------------------
 # Creation - project
 # --------------------------------------------------------------------------------------
